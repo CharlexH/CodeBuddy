@@ -1,27 +1,46 @@
-# Code Buddy
+<p align="center">
+  <a href="./README.md">
+    <img alt="English" src="https://img.shields.io/badge/English-111111?style=for-the-badge" />
+  </a>
+  <a href="./README.zh-CN.md">
+    <img alt="简体中文" src="https://img.shields.io/badge/简体中文-EAEAEA?style=for-the-badge&labelColor=EAEAEA&color=111111" />
+  </a>
+</p>
 
-Code Buddy turns an M5Stack StickS3 into a Bluetooth approval device for Codex CLI on macOS. Flash the StickS3 once, install `code-buddy`, then keep using `codex` normally while approval prompts appear on the device.
+<p align="center">
+  <img src="screenshots/cover.png" alt="Code Buddy cover" width="100%" />
+</p>
 
-This project is ported from Anthropic's [claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy), then adapted for Codex CLI, the StickS3 hardware path, and the `code-buddy` macOS setup flow.
+<h1 align="center">Code Buddy</h1>
 
-> Building your own hardware client instead? See [firmware/REFERENCE.md](firmware/REFERENCE.md) for the BLE protocol and JSON payloads.
+<p align="center">
+  A StickS3 Codex companion adapted from
+  <a href="https://github.com/anthropics/claude-desktop-buddy">Claude Desktop Buddy</a>.
+</p>
 
-## What You Need
+<p align="center">
+  Flash the device once, run <code>code-buddy</code> once on macOS, then keep using <code>codex</code> normally while approvals and live session status move to dedicated hardware.
+</p>
 
-- A Mac
-- An M5Stack StickS3
-- Codex already installed on the Mac
+> Building your own hardware client? See [firmware/REFERENCE.md](firmware/REFERENCE.md) for the BLE protocol and JSON payloads.
 
-## Device Setup
+## What ships
 
-1. Download `code-buddy-sticks3-v{version}-full.bin` from GitHub Releases.
-2. Flash that merged image onto the StickS3.
+- A macOS bridge that pairs with the StickS3, syncs time, installs the native BLE helper, and manages the local `codex` shim.
+- A StickS3 firmware build with status, approval, settings, and offline screens.
+- A daily workflow designed to stay out of the way: run `code-buddy` once, then just use `codex`.
 
-Primary path:
+## Quick start
 
-- If this release publishes a web flasher page, use it and write the merged image at `0x0`.
+### 1. Flash the StickS3
 
-Fallback path:
+Download `code-buddy-sticks3-v{version}-full.bin` from GitHub Releases and flash it at `0x0`.
+
+Preferred path:
+
+- If a release includes a web flasher, use it and write the merged image at `0x0`.
+
+Fallback:
 
 ```bash
 esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.1-full.bin
@@ -33,38 +52,29 @@ Developer release build:
 ./scripts/build-firmware-release.sh
 ```
 
-## Mac Setup
-
-Install:
+### 2. Install on macOS
 
 ```bash
 brew install CharlexH/tap/code-buddy
-```
-
-First run:
-
-```bash
 code-buddy
 ```
 
-That setup flow will:
+On first run, Code Buddy will:
 
 - install the native Bluetooth helper
-- pair with a `Codex-*` StickS3 and prompt if multiple devices are found
+- pair with a `Codex-*` device
 - sync device time
 - install the launchd agent
 - install the local `codex` shim
 - add `~/.code-buddy/bin` to `~/.zprofile`
 
-## Daily Use
-
-After setup, open a new shell and use Codex normally:
+### 3. Use it normally
 
 ```bash
 codex
 ```
 
-Code Buddy will intercept the CLI session, keep the StickS3 linked, and show approval prompts on the device.
+Open a new shell after setup. From there, Code Buddy keeps the bridge alive and shows approval prompts on the StickS3 while you keep your normal CLI flow.
 
 ## Controls
 
@@ -80,7 +90,7 @@ Code Buddy will intercept the CLI session, keep the StickS3 linked, and show app
 
 The screen auto-powers off after 30 seconds of inactivity and stays on while an approval prompt is pending. Any button press wakes it.
 
-## The Seven States
+## Buddy states
 
 | State       | Trigger                     | Feel                        |
 | ----------- | --------------------------- | --------------------------- |
@@ -92,15 +102,14 @@ The screen auto-powers off after 30 seconds of inactivity and stays on while an 
 | `dizzy`     | you shook the stick         | spiral eyes, wobbling       |
 | `heart`     | approved in under 5s        | floating hearts             |
 
-## ASCII Pets
+<details>
+<summary><strong>Characters and custom packs</strong></summary>
 
-The firmware ships with eighteen ASCII pets. Each one has seven animations: `sleep`, `idle`, `busy`, `attention`, `celebrate`, `dizzy`, and `heart`.
+The firmware ships with eighteen ASCII pets. Each one includes seven animations: `sleep`, `idle`, `busy`, `attention`, `celebrate`, `dizzy`, and `heart`.
 
-Use `menu -> next pet` on the device to cycle through them. The selection is saved to device storage, so your pet stays selected after reboot.
+Use `menu -> next pet` on the device to cycle through them. The selection is saved in device storage.
 
-## GIF Pets
-
-If you want a custom GIF character instead of an ASCII buddy, the firmware also supports character packs. A pack is a folder with a `manifest.json` plus 96px-wide GIFs for the same seven states.
+If you want a custom GIF character, create a pack with a `manifest.json` and 96px-wide GIFs for the same seven states:
 
 ```json
 {
@@ -126,10 +135,11 @@ If you want a custom GIF character instead of an ASCII buddy, the firmware also 
 
 Notes:
 
-- `idle` can be a single GIF or an array of GIFs; arrays rotate at loop boundaries.
-- Keep GIFs at 96px width. Heights up to about 140px fit well on the StickS3 screen.
+- `idle` can be a single GIF or an array of GIFs.
+- Heights up to about 140px fit well on the StickS3 screen.
 - See [firmware/characters/bufo/](firmware/characters/bufo/) for a working example.
-- For asset prep and USB flashing, see [firmware/tools/prep_character.py](firmware/tools/prep_character.py) and [firmware/tools/flash_character.py](firmware/tools/flash_character.py).
+- Use [firmware/tools/prep_character.py](firmware/tools/prep_character.py) and [firmware/tools/flash_character.py](firmware/tools/flash_character.py) to prepare and flash assets.
+</details>
 
 ## Recovery
 
@@ -141,7 +151,8 @@ code-buddy uninstall
 
 `doctor` explains what is wrong, why it happened, and what to do next.
 
-## From Source
+<details>
+<summary><strong>Build from source</strong></summary>
 
 ```bash
 python3 -m venv .venv
@@ -149,7 +160,8 @@ python3 -m venv .venv
 .venv/bin/code-buddy
 ```
 
-## Verification
+Verification:
 
 - Host tests: `.venv/bin/pytest -q`
 - Firmware build: `cd firmware && pio run`
+</details>
