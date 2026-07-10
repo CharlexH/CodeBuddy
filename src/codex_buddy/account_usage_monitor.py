@@ -19,12 +19,14 @@ from .usage_limits import USAGE_LIMITS_FRESHNESS_SECONDS, UsageDisplay, UsageLim
 RATE_LIMIT_REFRESH_SECONDS = 5 * 60
 RECONNECT_BACKOFF_INITIAL_SECONDS = 1.0
 RECONNECT_BACKOFF_MAX_SECONDS = 30.0
+_EXPIRY_GRACE_SECONDS = 0.001
 
 UsageCallback = Callable[[Optional[UsageDisplay]], Optional[Awaitable[None]]]
 AppServerStart = Callable[[str, str, int], object]
 ReadyWaiter = Callable[[int], Awaitable[None]]
 WebSocketConnect = Callable[[str], Any]
 ProcessTerminator = Callable[[object], None]
+ExpirySleep = Callable[[float], Awaitable[None]]
 
 
 class AccountUsageMonitor:
@@ -42,6 +44,7 @@ class AccountUsageMonitor:
         websocket_connect: Optional[WebSocketConnect] = None,
         terminate_process: Optional[ProcessTerminator] = None,
         now: Callable[[], float] = time.time,
+        expiry_sleep: Optional[ExpirySleep] = None,
     ) -> None:
         if not codex_path:
             raise ValueError("A resolved Codex executable path is required")
@@ -56,10 +59,12 @@ class AccountUsageMonitor:
         self._websocket_connect = websocket_connect or websockets.connect
         self._terminate_process = terminate_process or _terminate_process_group
         self._now = now
+        self._expiry_sleep = expiry_sleep or asyncio.sleep
         self._port = _free_port()
         self._websocket_url = f"ws://127.0.0.1:{self._port}"
         self._process: Optional[object] = None
         self._task: Optional[asyncio.Task[None]] = None
+        self._expiry_task: Optional[asyncio.Task[None]] = None
         self._stopping = False
         self._limits = UsageLimits(primary=None, secondary=None, observed_at=None)
         self._request_id = 0
@@ -85,6 +90,7 @@ class AccountUsageMonitor:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await self._stop_expiry_task()
         self._stop_process()
 
     def _start_app_server(self, codex_path: str, codex_launch_path: str, port: int) -> object:
@@ -190,9 +196,43 @@ class AccountUsageMonitor:
         await self._publish_display()
 
     async def _publish_display(self) -> None:
-        result = self.on_usage(self._limits.display_pair(now=self._now()))
+        display = self._limits.display_pair(now=self._now())
+        self._schedule_expiry(display)
+        await self._notify_usage(display)
+
+    async def _notify_usage(self, display: Optional[UsageDisplay]) -> None:
+        result = self.on_usage(display)
         if inspect.isawaitable(result):
             await result
+
+    def _schedule_expiry(self, display: Optional[UsageDisplay]) -> None:
+        task = self._expiry_task
+        if task is not None:
+            task.cancel()
+        self._expiry_task = None
+        observed_at = self._limits.observed_at
+        if display is None or observed_at is None:
+            return
+        delay = max(0.0, observed_at + USAGE_LIMITS_FRESHNESS_SECONDS - self._now())
+        self._expiry_task = asyncio.create_task(
+            self._expire_display_after(observed_at, delay + _EXPIRY_GRACE_SECONDS),
+            name="code-buddy-account-usage-expiry",
+        )
+
+    async def _expire_display_after(self, observed_at: float, delay: float) -> None:
+        await self._expiry_sleep(delay)
+        if self._stopping or self._limits.observed_at != observed_at:
+            return
+        if self._limits.display_pair(now=self._now()) is None:
+            await self._notify_usage(None)
+
+    async def _stop_expiry_task(self) -> None:
+        task = self._expiry_task
+        self._expiry_task = None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     @staticmethod
     def _decode_message(raw: object) -> Optional[Mapping[str, object]]:

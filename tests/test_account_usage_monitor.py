@@ -66,6 +66,20 @@ class _FakeWebSocket:
         await self.incoming.put(message)
 
 
+class _FakeClock:
+    def __init__(self, now_value: float) -> None:
+        self.now_value = now_value
+        self.sleep_delays: list[float] = []
+        self.release_sleep = asyncio.Event()
+
+    def now(self) -> float:
+        return self.now_value
+
+    async def sleep(self, delay: float) -> None:
+        self.sleep_delays.append(delay)
+        await self.release_sleep.wait()
+
+
 def test_monitor_module_has_no_runtime_union_annotation_that_breaks_python_39_imports():
     source = Path(inspect.getfile(account_usage_monitor)).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -83,6 +97,42 @@ def test_monitor_rejects_a_refresh_interval_that_would_outlive_a_display_snapsho
             on_usage=lambda _: None,
             refresh_interval_seconds=USAGE_LIMITS_FRESHNESS_SECONDS + 1,
         )
+
+
+def test_monitor_withdraws_display_after_freshness_expires_while_reconnecting():
+    process = _FakeProcess()
+    socket = _FakeWebSocket()
+    clock = _FakeClock(now_value=100.0)
+    seen: list[object] = []
+
+    async def ready(_: int) -> None:
+        return None
+
+    async def exercise() -> None:
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=seen.append,
+            app_server_start=lambda *_: process,
+            wait_until_ready=ready,
+            websocket_connect=lambda _: socket,
+            terminate_process=lambda _: None,
+            now=clock.now,
+            expiry_sleep=clock.sleep,
+        )
+        await socket.deliver({"id": 1, "result": {}})
+        await socket.deliver({"id": 2, "result": _rate_limits(28, 9)})
+        await socket.deliver(ConnectionError("transport closed"))
+
+        await monitor.start()
+        await _wait_for(lambda: seen == [UsageDisplay(five_hour_remaining=72, seven_day_remaining=91)])
+        await _wait_for(lambda: len(clock.sleep_delays) == 1)
+
+        clock.now_value += USAGE_LIMITS_FRESHNESS_SECONDS + 1
+        clock.release_sleep.set()
+        await _wait_for(lambda: seen[-1:] == [None])
+        await monitor.stop()
+
+    asyncio.run(exercise())
 
 
 def test_monitor_reads_rate_limits_merges_sparse_updates_and_exposes_only_display_values():
