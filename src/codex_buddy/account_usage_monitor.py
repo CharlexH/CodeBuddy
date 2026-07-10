@@ -74,13 +74,16 @@ class AccountUsageMonitor:
         if self._task is not None:
             return
         self._stopping = False
+        await self._start_owned_app_server()
+        self._task = asyncio.create_task(self._run(), name="code-buddy-account-usage")
+
+    async def _start_owned_app_server(self) -> None:
         self._process = self._app_server_start(self.codex_path, self.codex_launch_path, self._port)
         try:
             await self._wait_until_ready(self._port)
-        except Exception:
+        except BaseException:
             self._stop_process()
             raise
-        self._task = asyncio.create_task(self._run(), name="code-buddy-account-usage")
 
     async def stop(self) -> None:
         self._stopping = True
@@ -108,10 +111,23 @@ class AccountUsageMonitor:
             self._terminate_process(self._process)
             self._process = None
 
+    def _process_has_exited(self) -> bool:
+        if self._process is None:
+            return True
+        poll = getattr(self._process, "poll", None)
+        return callable(poll) and poll() is not None
+
+    async def _ensure_owned_app_server_is_running(self) -> None:
+        if not self._process_has_exited():
+            return
+        self._stop_process()
+        await self._start_owned_app_server()
+
     async def _run(self) -> None:
         backoff = RECONNECT_BACKOFF_INITIAL_SECONDS
         while not self._stopping:
             try:
+                await self._ensure_owned_app_server_is_running()
                 async with self._websocket_connect(self._websocket_url) as websocket:
                     await self._initialize(websocket)
                     backoff = RECONNECT_BACKOFF_INITIAL_SECONDS

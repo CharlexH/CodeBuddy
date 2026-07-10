@@ -39,6 +39,10 @@ async def _wait_for(predicate, *, timeout: float = 1.0) -> None:
 class _FakeProcess:
     def __init__(self) -> None:
         self.terminated = False
+        self.exit_code = None
+
+    def poll(self):
+        return self.exit_code
 
 
 class _FakeWebSocket:
@@ -117,6 +121,87 @@ def test_monitor_rejects_a_refresh_interval_that_would_outlive_a_display_snapsho
             on_usage=lambda _: None,
             refresh_interval_seconds=USAGE_LIMITS_FRESHNESS_SECONDS + 1,
         )
+
+
+def test_monitor_cancellation_during_readiness_wait_terminates_its_owned_app_server():
+    process = _FakeProcess()
+    terminated: list[_FakeProcess] = []
+
+    async def exercise() -> None:
+        readiness_started = asyncio.Event()
+
+        async def wait_until_ready(_: int) -> None:
+            readiness_started.set()
+            await asyncio.Future()
+
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=lambda _: None,
+            app_server_start=lambda *_: process,
+            wait_until_ready=wait_until_ready,
+            terminate_process=terminated.append,
+        )
+        start_task = asyncio.create_task(monitor.start())
+        await readiness_started.wait()
+        start_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await start_task
+
+    asyncio.run(exercise())
+
+    assert terminated == [process]
+
+
+def test_monitor_restarts_its_owned_app_server_after_process_exit_before_reconnecting(monkeypatch):
+    first_process = _FakeProcess()
+    second_process = _FakeProcess()
+    launches: list[_FakeProcess] = []
+    ready_ports: list[int] = []
+    terminated: list[_FakeProcess] = []
+    connection_attempts: list[object] = []
+    original_sleep = asyncio.sleep
+
+    async def no_wait_retry(_: float) -> None:
+        await original_sleep(0)
+
+    monkeypatch.setattr(account_usage_monitor.asyncio, "sleep", no_wait_retry)
+
+    def launch(*_) -> _FakeProcess:
+        process = [first_process, second_process][len(launches)]
+        launches.append(process)
+        return process
+
+    async def exercise() -> None:
+        socket = _FakeWebSocket(asyncio.Queue())
+
+        async def wait_until_ready(port: int) -> None:
+            ready_ports.append(port)
+
+        def connect(_: str):
+            connection_attempts.append(None)
+            if len(connection_attempts) == 1:
+                first_process.exit_code = 1
+                raise ConnectionError("transport closed")
+            return socket
+
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=lambda _: None,
+            app_server_start=launch,
+            wait_until_ready=wait_until_ready,
+            websocket_connect=connect,
+            terminate_process=terminated.append,
+        )
+        await monitor.start()
+
+        await _wait_for(lambda: len(launches) == 2)
+        await monitor.stop()
+
+    asyncio.run(exercise())
+
+    assert ready_ports[0] == ready_ports[1]
+    assert len(connection_attempts) == 2
+    assert terminated == [first_process, second_process]
 
 
 def test_monitor_withdraws_display_after_freshness_expires_while_reconnecting():
