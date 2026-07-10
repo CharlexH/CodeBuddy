@@ -42,9 +42,9 @@ class _FakeProcess:
 
 
 class _FakeWebSocket:
-    def __init__(self) -> None:
+    def __init__(self, incoming) -> None:
         self.sent: list[dict[str, object]] = []
-        self.incoming: asyncio.Queue[object] = asyncio.Queue()
+        self.incoming = incoming
         self.closed = False
 
     async def __aenter__(self):
@@ -67,10 +67,10 @@ class _FakeWebSocket:
 
 
 class _FakeClock:
-    def __init__(self, now_value: float) -> None:
+    def __init__(self, now_value: float, release_sleep) -> None:
         self.now_value = now_value
         self.sleep_delays: list[float] = []
-        self.release_sleep = asyncio.Event()
+        self.release_sleep = release_sleep
 
     def now(self) -> float:
         return self.now_value
@@ -78,6 +78,26 @@ class _FakeClock:
     async def sleep(self, delay: float) -> None:
         self.sleep_delays.append(delay)
         await self.release_sleep.wait()
+
+
+def test_fake_async_primitives_are_not_created_by_sync_test_helpers():
+    source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    helper_classes = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name in {"_FakeWebSocket", "_FakeClock"}
+    }
+
+    for helper in helper_classes.values():
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "asyncio"
+            and node.func.attr in {"Event", "Queue"}
+            for node in ast.walk(helper)
+        )
 
 
 def test_monitor_module_has_no_runtime_union_annotation_that_breaks_python_39_imports():
@@ -101,14 +121,15 @@ def test_monitor_rejects_a_refresh_interval_that_would_outlive_a_display_snapsho
 
 def test_monitor_withdraws_display_after_freshness_expires_while_reconnecting():
     process = _FakeProcess()
-    socket = _FakeWebSocket()
-    clock = _FakeClock(now_value=100.0)
     seen: list[object] = []
 
-    async def ready(_: int) -> None:
-        return None
-
     async def exercise() -> None:
+        socket = _FakeWebSocket(asyncio.Queue())
+        clock = _FakeClock(now_value=100.0, release_sleep=asyncio.Event())
+
+        async def ready(_: int) -> None:
+            return None
+
         monitor = AccountUsageMonitor(
             codex_path="/usr/local/bin/codex-real",
             on_usage=seen.append,
@@ -137,7 +158,6 @@ def test_monitor_withdraws_display_after_freshness_expires_while_reconnecting():
 
 def test_monitor_reads_rate_limits_merges_sparse_updates_and_exposes_only_display_values():
     process = _FakeProcess()
-    socket = _FakeWebSocket()
     launches: list[tuple[str, str, int, str]] = []
     terminated: list[_FakeProcess] = []
     seen: list[object] = []
@@ -146,14 +166,16 @@ def test_monitor_reads_rate_limits_merges_sparse_updates_and_exposes_only_displa
         launches.append((codex_path, codex_launch_path, port, f"ws://127.0.0.1:{port}"))
         return process
 
-    async def wait_until_ready(port: int) -> None:
-        assert port == launches[0][2]
-
-    def connect(url: str):
-        assert url == launches[0][3]
-        return socket
-
     async def exercise() -> None:
+        socket = _FakeWebSocket(asyncio.Queue())
+
+        async def wait_until_ready(port: int) -> None:
+            assert port == launches[0][2]
+
+        def connect(url: str):
+            assert url == launches[0][3]
+            return socket
+
         monitor = AccountUsageMonitor(
             codex_path="/usr/local/bin/codex-real",
             codex_launch_path="/opt/homebrew/bin",
@@ -188,16 +210,16 @@ def test_monitor_reads_rate_limits_merges_sparse_updates_and_exposes_only_displa
         assert seen[-1] == UsageDisplay(five_hour_remaining=60, seven_day_remaining=91)
 
         await monitor.stop()
+        return socket.closed
 
-    asyncio.run(exercise())
+    socket_closed = asyncio.run(exercise())
 
     assert terminated == [process]
-    assert socket.closed is True
+    assert socket_closed is True
 
 
 def test_monitor_cleanup_cancels_a_waiting_receive_loop_and_never_uses_auth_arguments():
     process = _FakeProcess()
-    socket = _FakeWebSocket()
     launch_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     terminated: list[_FakeProcess] = []
 
@@ -209,6 +231,7 @@ def test_monitor_cleanup_cancels_a_waiting_receive_loop_and_never_uses_auth_argu
         return None
 
     async def exercise() -> None:
+        socket = _FakeWebSocket(asyncio.Queue())
         monitor = AccountUsageMonitor(
             codex_path="/private/var/code-buddy/bin/codex-real",
             on_usage=lambda _: None,
@@ -221,8 +244,9 @@ def test_monitor_cleanup_cancels_a_waiting_receive_loop_and_never_uses_auth_argu
         await monitor.start()
         await _wait_for(lambda: len(socket.sent) >= 2)
         await monitor.stop()
+        return socket.closed
 
-    asyncio.run(exercise())
+    socket_closed = asyncio.run(exercise())
 
     launch_args, launch_kwargs = launch_calls[0]
     assert launch_args[0] == "/private/var/code-buddy/bin/codex-real"
@@ -230,4 +254,4 @@ def test_monitor_cleanup_cancels_a_waiting_receive_loop_and_never_uses_auth_argu
     assert "token" not in " ".join(map(str, launch_args)).lower()
     assert launch_kwargs == {}
     assert terminated == [process]
-    assert socket.closed is True
+    assert socket_closed is True
