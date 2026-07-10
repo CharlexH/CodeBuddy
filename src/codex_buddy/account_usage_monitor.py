@@ -20,7 +20,7 @@ RATE_LIMIT_REFRESH_SECONDS = 5 * 60
 RECONNECT_BACKOFF_INITIAL_SECONDS = 1.0
 RECONNECT_BACKOFF_MAX_SECONDS = 30.0
 
-UsageCallback = Callable[[Optional[UsageDisplay]], Awaitable[None] | None]
+UsageCallback = Callable[[Optional[UsageDisplay]], Optional[Awaitable[None]]]
 AppServerStart = Callable[[str, str, int], object]
 ReadyWaiter = Callable[[int], Awaitable[None]]
 WebSocketConnect = Callable[[str], Any]

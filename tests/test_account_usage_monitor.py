@@ -1,8 +1,12 @@
 import asyncio
+import ast
+import inspect
 import json
+from pathlib import Path
 
 import pytest
 
+from codex_buddy import account_usage_monitor
 from codex_buddy.account_usage_monitor import AccountUsageMonitor
 from codex_buddy.usage_limits import USAGE_LIMITS_FRESHNESS_SECONDS, UsageDisplay
 
@@ -60,6 +64,16 @@ class _FakeWebSocket:
 
     async def deliver(self, message: dict[str, object]) -> None:
         await self.incoming.put(message)
+
+
+def test_monitor_module_has_no_runtime_union_annotation_that_breaks_python_39_imports():
+    source = Path(inspect.getfile(account_usage_monitor)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    assert not any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr)
+        for node in ast.walk(tree)
+    )
 
 
 def test_monitor_rejects_a_refresh_interval_that_would_outlive_a_display_snapshot():
