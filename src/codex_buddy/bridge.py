@@ -84,6 +84,39 @@ def _terminate_process_group(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
 
 
+def start_loopback_app_server(
+    *,
+    codex_path: str,
+    codex_launch_path: str,
+    port: int,
+) -> subprocess.Popen:
+    return subprocess.Popen(
+        [
+            codex_path,
+            "app-server",
+            "--listen",
+            f"ws://127.0.0.1:{port}",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=_codex_process_env(codex_path, codex_launch_path),
+        start_new_session=True,
+    )
+
+
+async def wait_for_loopback_app_server_ready(port: int, *, timeout_seconds: float = 10.0) -> None:
+    deadline = time.time() + timeout_seconds
+    ready_url = f"http://127.0.0.1:{port}/readyz"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(ready_url, timeout=0.5) as response:
+                if response.status == 200:
+                    return
+        except Exception:
+            await asyncio.sleep(0.2)
+    raise RuntimeError("Timed out waiting for codex app-server to become ready")
+
+
 @dataclass(frozen=True)
 class RunConfig:
     workdir: Path
@@ -135,32 +168,18 @@ class BridgeController:
             self._persist_snapshot(self.reducer.snapshot(), buddy_connected=False)
 
     async def _start_upstream(self) -> None:
-        command = [
-            self.config.codex_path,
-            "app-server",
-            "--listen",
-            self.upstream_url,
-        ]
-        self._upstream_proc = subprocess.Popen(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=self._codex_env,
-            start_new_session=True,
+        self._upstream_proc = start_loopback_app_server(
+            codex_path=self.config.codex_path,
+            codex_launch_path=self.config.codex_launch_path,
+            port=self.upstream_port,
         )
-        deadline = time.time() + 10
-        ready_url = f"http://127.0.0.1:{self.upstream_port}/readyz"
-        while time.time() < deadline:
-            try:
-                with urllib.request.urlopen(ready_url, timeout=0.5) as response:
-                    if response.status == 200:
-                        return
-            except Exception:
-                await asyncio.sleep(0.2)
-        if self._upstream_proc is not None:
-            _terminate_process_group(self._upstream_proc)
-            self._upstream_proc = None
-        raise RuntimeError("Timed out waiting for codex app-server to become ready")
+        try:
+            await wait_for_loopback_app_server_ready(self.upstream_port)
+        except Exception:
+            if self._upstream_proc is not None:
+                _terminate_process_group(self._upstream_proc)
+                self._upstream_proc = None
+            raise
 
     async def _run_codex(self) -> int:
         command = [
@@ -280,32 +299,18 @@ class ManagedSessionBridge:
         await self.proxy.respond_to_device_approval(request_id, decision)
 
     async def _start_upstream(self) -> None:
-        command = [
-            self.codex_path,
-            "app-server",
-            "--listen",
-            self.upstream_url,
-        ]
-        self._upstream_proc = subprocess.Popen(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=self._codex_env,
-            start_new_session=True,
+        self._upstream_proc = start_loopback_app_server(
+            codex_path=self.codex_path,
+            codex_launch_path=self.codex_launch_path,
+            port=self.upstream_port,
         )
-        deadline = time.time() + 10
-        ready_url = f"http://127.0.0.1:{self.upstream_port}/readyz"
-        while time.time() < deadline:
-            try:
-                with urllib.request.urlopen(ready_url, timeout=0.5) as response:
-                    if response.status == 200:
-                        return
-            except Exception:
-                await asyncio.sleep(0.2)
-        if self._upstream_proc is not None:
-            _terminate_process_group(self._upstream_proc)
-            self._upstream_proc = None
-        raise RuntimeError("Timed out waiting for codex app-server to become ready")
+        try:
+            await wait_for_loopback_app_server_ready(self.upstream_port)
+        except Exception:
+            if self._upstream_proc is not None:
+                _terminate_process_group(self._upstream_proc)
+                self._upstream_proc = None
+            raise
 
     async def _handle_close(self) -> None:
         if self.on_close is not None:

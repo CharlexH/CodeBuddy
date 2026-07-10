@@ -3,6 +3,33 @@ import asyncio
 from codex_buddy import bridge
 
 
+def test_shared_app_server_launcher_uses_real_binary_and_carefully_merged_environment(monkeypatch):
+    popen_calls = []
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append((command, kwargs))
+        return object()
+
+    monkeypatch.setattr(bridge.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    bridge.start_loopback_app_server(
+        codex_path="/usr/local/bin/codex-real",
+        codex_launch_path="/custom/node/bin:/usr/bin",
+        port=43123,
+    )
+
+    command, kwargs = popen_calls[0]
+    assert command == ["/usr/local/bin/codex-real", "app-server", "--listen", "ws://127.0.0.1:43123"]
+    assert kwargs["env"]["CODE_BUDDY_SHIM_ACTIVE"] == "1"
+    assert kwargs["env"]["PATH"].split(bridge.os.pathsep)[:3] == [
+        "/usr/local/bin",
+        "/custom/node/bin",
+        "/usr/bin",
+    ]
+    assert kwargs["start_new_session"] is True
+
+
 def test_managed_session_bridge_starts_app_server_with_real_codex_path(monkeypatch):
     commands = []
 
