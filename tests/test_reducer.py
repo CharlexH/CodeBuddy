@@ -180,3 +180,20 @@ def test_snapshot_usage_is_optional_and_keeps_the_compact_ble_shape():
         "five_hour_remaining": 72,
         "seven_day_remaining": 91,
     }
+
+
+def test_snapshot_emits_an_explicit_usage_clear_after_a_known_limit_expires():
+    expired_snapshot = BuddySnapshot(
+        total=1,
+        running=1,
+        waiting=0,
+        msg="Codex is working",
+        entries=["Checking the change"],
+        tokens=120,
+        tokens_today=45,
+        prompt=None,
+        usage=None,
+        usage_is_known=True,
+    )
+
+    assert expired_snapshot.as_ble_payload()["usage"] is None

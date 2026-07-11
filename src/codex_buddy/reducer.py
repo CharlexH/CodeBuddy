@@ -34,6 +34,7 @@ class BuddySnapshot:
     tokens_today: int
     prompt: Optional[dict[str, str]]
     usage: Optional[UsageDisplay] = None
+    usage_is_known: bool = False
 
     def as_ble_payload(self) -> dict:
         payload = {
@@ -52,6 +53,8 @@ class BuddySnapshot:
                 "five_hour_remaining": self.usage.five_hour_remaining,
                 "seven_day_remaining": self.usage.seven_day_remaining,
             }
+        elif self.usage_is_known:
+            payload["usage"] = None
 
         if _ble_json_size(payload) <= _BLE_PAYLOAD_MAX_BYTES:
             return payload

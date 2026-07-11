@@ -268,6 +268,7 @@ def test_agent_publishes_account_usage_from_the_configured_monitor(tmp_path):
             assert created
             await asyncio.wait_for(created[0].started.wait(), timeout=1.0)
             await created[0].publish(UsageDisplay(five_hour_remaining=72, seven_day_remaining=91))
+            await created[0].publish(None)
             status = agent.status_payload()
             persisted = BridgeStateStore(state_path).load()
         finally:
@@ -280,15 +281,10 @@ def test_agent_publishes_account_usage_from_the_configured_monitor(tmp_path):
     assert monitor.codex_path == "/usr/local/bin/codex"
     assert monitor.codex_launch_path == "/usr/local/bin:/usr/bin:/bin"
     assert monitor.stopped is True
-    assert ble.sent_payloads[-1]["usage"] == {
+    assert ble.sent_payloads[-2]["usage"] == {
         "five_hour_remaining": 72,
         "seven_day_remaining": 91,
     }
-    assert status["snapshot"]["usage"] == {
-        "five_hour_remaining": 72,
-        "seven_day_remaining": 91,
-    }
-    assert persisted.snapshot["usage"] == {
-        "five_hour_remaining": 72,
-        "seven_day_remaining": 91,
-    }
+    assert ble.sent_payloads[-1]["usage"] is None
+    assert status["snapshot"]["usage"] is None
+    assert persisted.snapshot["usage"] is None

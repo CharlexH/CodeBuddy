@@ -189,6 +189,7 @@ class BuddyAgent:
         self._account_usage_monitor_factory = account_usage_monitor_factory or AccountUsageMonitor
         self._account_usage_monitor: Optional[AccountUsageMonitor] = None
         self._usage: Optional[UsageDisplay] = None
+        self._usage_is_known = False
         self._managed_sessions: dict[str, ManagedSessionBridge] = {}
         self._managed_runtime: dict[str, ManagedSessionRuntime] = {}
         self._request_to_control: dict[str, str] = {}
@@ -380,6 +381,7 @@ class BuddyAgent:
 
     async def _handle_account_usage(self, usage: Optional[UsageDisplay]) -> None:
         self._usage = usage
+        self._usage_is_known = True
         await self._publish_state()
 
     async def _handle_managed_event(self, control_id: str, event: object) -> None:
@@ -434,7 +436,11 @@ class BuddyAgent:
         self._persist(snapshot, agent_running=True)
 
     def _snapshot(self):
-        return replace(self.catalog.snapshot(now=self.clock()), usage=self._usage)
+        return replace(
+            self.catalog.snapshot(now=self.clock()),
+            usage=self._usage,
+            usage_is_known=self._usage_is_known,
+        )
 
     def _persist(self, snapshot: Any, *, agent_running: bool) -> None:
         current = self.store.load()
