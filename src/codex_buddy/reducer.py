@@ -7,6 +7,7 @@ from typing import Deque, Dict, Optional
 
 from .events import ApprovalRequest, AgentOutput, TokenUsage, TurnState
 from .text_width import clip_text_by_width
+from .usage_limits import UsageDisplay
 
 _SUMMARY_LIMIT = 44
 _ENTRY_LIMIT = 160
@@ -32,6 +33,7 @@ class BuddySnapshot:
     tokens: int
     tokens_today: int
     prompt: Optional[dict[str, str]]
+    usage: Optional[UsageDisplay] = None
 
     def as_ble_payload(self) -> dict:
         payload = {
@@ -45,6 +47,11 @@ class BuddySnapshot:
         }
         if self.prompt is not None:
             payload["prompt"] = dict(self.prompt)
+        if self.usage is not None:
+            payload["usage"] = {
+                "five_hour_remaining": self.usage.five_hour_remaining,
+                "seven_day_remaining": self.usage.seven_day_remaining,
+            }
 
         if _ble_json_size(payload) <= _BLE_PAYLOAD_MAX_BYTES:
             return payload

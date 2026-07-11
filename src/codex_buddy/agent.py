@@ -7,13 +7,14 @@ import subprocess
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Deque, Optional
 
 from .ble_transport import BleBuddyTransport
 from .bridge import ManagedSessionBridge
 from .catalog import SessionCatalog, SessionPrompt, SessionRecord
+from .account_usage_monitor import AccountUsageMonitor
 from .events import ApprovalRequest, AgentOutput, TokenUsage, TurnState
 from .proxy import ApprovalRequestResolved
 from .runtime import logs_dir as runtime_logs_dir
@@ -21,6 +22,7 @@ from .runtime import socket_path as runtime_socket_path
 from .runtime import state_path as runtime_state_path
 from .state_store import BridgeStateStore, PersistedState
 from .text_width import clip_text_by_width
+from .usage_limits import UsageDisplay
 
 _SUMMARY_LIMIT = 44
 _ENTRY_LIMIT = 160
@@ -169,6 +171,7 @@ class BuddyAgent:
         watcher: Optional[Any] = None,
         ble_factory: Optional[Callable[..., BleBuddyTransport]] = None,
         managed_session_factory: Optional[Callable[..., ManagedSessionBridge]] = None,
+        account_usage_monitor_factory: Optional[Callable[..., AccountUsageMonitor]] = None,
     ) -> None:
         self.state_path = state_path
         self.socket_path = socket_path or default_socket_path(state_path)
@@ -183,6 +186,9 @@ class BuddyAgent:
         )
         self._ble_factory = ble_factory or BleBuddyTransport
         self._managed_session_factory = managed_session_factory or ManagedSessionBridge
+        self._account_usage_monitor_factory = account_usage_monitor_factory or AccountUsageMonitor
+        self._account_usage_monitor: Optional[AccountUsageMonitor] = None
+        self._usage: Optional[UsageDisplay] = None
         self._managed_sessions: dict[str, ManagedSessionBridge] = {}
         self._managed_runtime: dict[str, ManagedSessionRuntime] = {}
         self._request_to_control: dict[str, str] = {}
@@ -200,6 +206,7 @@ class BuddyAgent:
             self.socket_path.unlink()
 
         self._server = await asyncio.start_unix_server(self._handle_client, path=str(self.socket_path))
+        await self._start_account_usage_monitor()
         self._tasks = [
             asyncio.create_task(self._readonly_loop()),
             asyncio.create_task(self._ble_loop()),
@@ -227,6 +234,11 @@ class BuddyAgent:
         self._managed_sessions.clear()
         self._managed_runtime.clear()
         self._request_to_control.clear()
+        monitor = self._account_usage_monitor
+        self._account_usage_monitor = None
+        if monitor is not None:
+            with contextlib.suppress(Exception):
+                await monitor.stop()
         if self._ble is not None:
             with contextlib.suppress(Exception):
                 await self._ble.disconnect()
@@ -234,7 +246,7 @@ class BuddyAgent:
         self._ble_connected = False
         if self.socket_path.exists():
             self.socket_path.unlink()
-        snapshot = self.catalog.snapshot(now=self.clock())
+        snapshot = self._snapshot()
         self._persist(snapshot, agent_running=False)
 
     async def launch(self, workdir: Path) -> dict[str, object]:
@@ -261,7 +273,7 @@ class BuddyAgent:
 
     def status_payload(self) -> dict[str, object]:
         current = self.store.load()
-        snapshot = self.catalog.snapshot(now=self.clock())
+        snapshot = self._snapshot()
         return {
             "agent_running": True,
             "buddy_connected": self._ble_connected,
@@ -349,6 +361,27 @@ class BuddyAgent:
             await asyncio.sleep(self.keepalive_interval)
             await self._publish_state(force=True)
 
+    async def _start_account_usage_monitor(self) -> None:
+        current = self.store.load()
+        if not current.real_codex_path:
+            return
+        monitor = self._account_usage_monitor_factory(
+            codex_path=current.real_codex_path,
+            codex_launch_path=current.codex_launch_path,
+            on_usage=self._handle_account_usage,
+        )
+        self._account_usage_monitor = monitor
+        try:
+            await monitor.start()
+        except Exception:
+            self._account_usage_monitor = None
+            with contextlib.suppress(Exception):
+                await monitor.stop()
+
+    async def _handle_account_usage(self, usage: Optional[UsageDisplay]) -> None:
+        self._usage = usage
+        await self._publish_state()
+
     async def _handle_managed_event(self, control_id: str, event: object) -> None:
         runtime = self._managed_runtime[control_id]
         previous_session_id = runtime.session_id
@@ -387,7 +420,7 @@ class BuddyAgent:
         await bridge.respond_to_device_approval(request_id, decision)
 
     async def _publish_state(self, *, force: bool = False) -> None:
-        snapshot = self.catalog.snapshot(now=self.clock())
+        snapshot = self._snapshot()
         payload = snapshot.as_ble_payload()
         if force or payload != self._last_payload:
             self._last_payload = payload
@@ -399,6 +432,9 @@ class BuddyAgent:
                     with contextlib.suppress(Exception):
                         await self._ble.disconnect()
         self._persist(snapshot, agent_running=True)
+
+    def _snapshot(self):
+        return replace(self.catalog.snapshot(now=self.clock()), usage=self._usage)
 
     def _persist(self, snapshot: Any, *, agent_running: bool) -> None:
         current = self.store.load()

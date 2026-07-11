@@ -1,6 +1,9 @@
-from codex_buddy.events import ApprovalRequest, AgentOutput, TokenUsage, TurnState
-from codex_buddy.reducer import BuddyStateReducer
+from dataclasses import replace
 import json
+
+from codex_buddy.events import ApprovalRequest, AgentOutput, TokenUsage, TurnState
+from codex_buddy.reducer import BuddySnapshot, BuddyStateReducer
+from codex_buddy.usage_limits import UsageDisplay
 
 
 def test_turn_lifecycle_and_entries_are_projected_into_snapshot():
@@ -123,7 +126,10 @@ def test_ble_payload_uses_utf8_json_and_stays_within_device_budget_for_cjk_entri
         )
     )
 
-    snapshot = reducer.snapshot()
+    snapshot = replace(
+        reducer.snapshot(),
+        usage=UsageDisplay(five_hour_remaining=72, seven_day_remaining=91),
+    )
     payload = snapshot.as_ble_payload()
 
     utf8_line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -133,3 +139,44 @@ def test_ble_payload_uses_utf8_json_and_stays_within_device_budget_for_cjk_entri
     assert len(utf8_line) + 1 <= 900
     assert len(escaped_line) + 1 > 1024
     assert payload["entries"]
+    assert payload["usage"] == {"five_hour_remaining": 72, "seven_day_remaining": 91}
+
+
+def test_snapshot_usage_is_optional_and_keeps_the_compact_ble_shape():
+    legacy_snapshot = BuddySnapshot(
+        total=1,
+        running=1,
+        waiting=0,
+        msg="Codex is working",
+        entries=["Checking the change"],
+        tokens=120,
+        tokens_today=45,
+        prompt=None,
+    )
+
+    assert legacy_snapshot.as_ble_payload() == {
+        "total": 1,
+        "running": 1,
+        "waiting": 0,
+        "msg": "Codex is working",
+        "entries": ["Checking the change"],
+        "tokens": 120,
+        "tokens_today": 45,
+    }
+
+    snapshot_with_usage = BuddySnapshot(
+        total=1,
+        running=1,
+        waiting=0,
+        msg="Codex is working",
+        entries=["Checking the change"],
+        tokens=120,
+        tokens_today=45,
+        prompt=None,
+        usage=UsageDisplay(five_hour_remaining=72, seven_day_remaining=91),
+    )
+
+    assert snapshot_with_usage.as_ble_payload()["usage"] == {
+        "five_hour_remaining": 72,
+        "seven_day_remaining": 91,
+    }

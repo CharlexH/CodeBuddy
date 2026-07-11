@@ -6,6 +6,7 @@ from codex_buddy.catalog import SessionPrompt
 from codex_buddy.events import ApprovalRequest, TurnState
 from codex_buddy.proxy import ApprovalRequestResolved
 from codex_buddy.state_store import BridgeStateStore, PersistedState
+from codex_buddy.usage_limits import UsageDisplay
 
 
 class _FakeBridge:
@@ -27,6 +28,37 @@ class _FakeBridge:
 
     async def respond_to_device_approval(self, request_id: str, decision: str) -> None:
         self.approvals.append((request_id, decision))
+
+
+class _CapturingBle:
+    def __init__(self, device_id="device-1") -> None:
+        self.device_id = device_id
+        self.sent_payloads = []
+        self.disconnected = False
+
+    async def send_snapshot(self, snapshot) -> None:
+        self.sent_payloads.append(snapshot.as_ble_payload())
+
+    async def disconnect(self) -> None:
+        self.disconnected = True
+
+
+class _FakeAccountUsageMonitor:
+    def __init__(self, *, codex_path, codex_launch_path, on_usage) -> None:
+        self.codex_path = codex_path
+        self.codex_launch_path = codex_launch_path
+        self.on_usage = on_usage
+        self.started = asyncio.Event()
+        self.stopped = False
+
+    async def start(self) -> None:
+        self.started.set()
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+    async def publish(self, usage) -> None:
+        await self.on_usage(usage)
 
 
 def test_agent_launch_registers_managed_session_and_routes_device_approval(tmp_path):
@@ -192,3 +224,71 @@ def test_agent_ble_loop_recreates_transport_after_connect_failure(tmp_path):
     assert _FlakyBle.created[0].disconnect_calls == 1
     assert agent._ble_connected is True
     assert agent._ble is _FlakyBle.created[-1]
+
+
+def test_agent_publishes_account_usage_from_the_configured_monitor(tmp_path):
+    state_path = tmp_path / "state.json"
+    BridgeStateStore(state_path).save(
+        PersistedState(
+            paired_device_id="device-1",
+            paired_device_name="Codex-4DAD",
+            real_codex_path="/usr/local/bin/codex",
+            codex_launch_path="/usr/local/bin:/usr/bin:/bin",
+        )
+    )
+    created = []
+
+    def monitor_factory(*, codex_path, codex_launch_path, on_usage):
+        monitor = _FakeAccountUsageMonitor(
+            codex_path=codex_path,
+            codex_launch_path=codex_launch_path,
+            on_usage=on_usage,
+        )
+        created.append(monitor)
+        return monitor
+
+    async def exercise():
+        agent = BuddyAgent(
+            state_path,
+            socket_path=Path(f"/tmp/code-buddy-{id(state_path)}.sock"),
+            watcher=None,
+            keepalive_interval=60.0,
+            reconnect_interval=60.0,
+            account_usage_monitor_factory=monitor_factory,
+        )
+        ble = _CapturingBle()
+        agent._ble = ble
+        agent._ble_connected = True
+        task = asyncio.create_task(agent.run())
+        try:
+            for _ in range(100):
+                if created:
+                    break
+                await asyncio.sleep(0.01)
+            assert created
+            await asyncio.wait_for(created[0].started.wait(), timeout=1.0)
+            await created[0].publish(UsageDisplay(five_hour_remaining=72, seven_day_remaining=91))
+            status = agent.status_payload()
+            persisted = BridgeStateStore(state_path).load()
+        finally:
+            agent._stopped.set()
+            await task
+        return created[0], ble, status, persisted
+
+    monitor, ble, status, persisted = asyncio.run(exercise())
+
+    assert monitor.codex_path == "/usr/local/bin/codex"
+    assert monitor.codex_launch_path == "/usr/local/bin:/usr/bin:/bin"
+    assert monitor.stopped is True
+    assert ble.sent_payloads[-1]["usage"] == {
+        "five_hour_remaining": 72,
+        "seven_day_remaining": 91,
+    }
+    assert status["snapshot"]["usage"] == {
+        "five_hour_remaining": 72,
+        "seven_day_remaining": 91,
+    }
+    assert persisted.snapshot["usage"] == {
+        "five_hour_remaining": 72,
+        "seven_day_remaining": 91,
+    }
