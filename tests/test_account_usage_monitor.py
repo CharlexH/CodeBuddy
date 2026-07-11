@@ -1,8 +1,12 @@
 import asyncio
 import ast
+import contextlib
 import inspect
 import json
+import subprocess
+import sys
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -150,6 +154,51 @@ def test_monitor_cancellation_during_readiness_wait_terminates_its_owned_app_ser
     asyncio.run(exercise())
 
     assert terminated == [process]
+
+
+def test_monitor_cancellation_during_readiness_wait_stops_its_start_new_session_child():
+    async def exercise() -> int:
+        readiness_started = asyncio.Event()
+        process: Optional[subprocess.Popen] = None
+
+        def launch(*_) -> subprocess.Popen:
+            nonlocal process
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                start_new_session=True,
+            )
+            return process
+
+        async def wait_until_ready(_: int) -> None:
+            readiness_started.set()
+            await asyncio.Future()
+
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=lambda _: None,
+            app_server_start=launch,
+            wait_until_ready=wait_until_ready,
+        )
+        start_task = asyncio.create_task(monitor.start())
+        try:
+            await readiness_started.wait()
+            assert process is not None
+            assert process.poll() is None
+            start_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await start_task
+            await _wait_for(lambda: process.poll() is not None)
+            return process.returncode
+        finally:
+            if not start_task.done():
+                start_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await start_task
+            if process is not None and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=1)
+
+    assert asyncio.run(exercise()) is not None
 
 
 def test_monitor_restarts_its_owned_app_server_after_process_exit_before_reconnecting(monkeypatch):
