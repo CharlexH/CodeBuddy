@@ -2,21 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <ArduinoJson.h>
 #include "usage_meter_logic.h"
-#include "usage_meter_json.h"
 
 static void expect_true(bool condition, const char* message) {
   if (!condition) {
     fprintf(stderr, "%s\n", message);
     exit(1);
   }
-}
-
-static void applyUsageJson(const char* payload, UsageMeterState* usage) {
-  JsonDocument doc;
-  expect_true(!deserializeJson(doc, payload), "usage test JSON should deserialize");
-  usageMeterApplyJson(doc["usage"], usage);
 }
 
 static void expectMeterRect(
@@ -108,29 +100,28 @@ int main() {
     "invalid usage should not move the approval footer"
   );
 
-  UsageMeterState parsedUsage = {};
-  applyUsageJson("{\"usage\":{\"five_hour_remaining\":72,\"seven_day_remaining\":91}}", &parsedUsage);
-  expect_true(parsedUsage.hasUsageLimits, "integer JSON object should enable the meter");
+  UsageMeterRenderState landscapeState = {};
+  UsageMeterRenderDecision firstVisible = usageMeterRenderTransition(&landscapeState, true);
+  expect_true(firstVisible.draw && !firstVisible.clear,
+              "a newly visible meter should draw without clearing its background");
 
-  applyUsageJson("{}", &parsedUsage);
-  expect_true(parsedUsage.hasUsageLimits, "missing usage JSON member should preserve the live meter");
-  expect_true(parsedUsage.fiveHourRemaining == 72, "missing usage JSON member should keep five-hour value");
-  expect_true(parsedUsage.sevenDayRemaining == 91, "missing usage JSON member should keep weekly value");
+  UsageMeterRenderDecision stillVisible = usageMeterRenderTransition(&landscapeState, true);
+  expect_true(stillVisible.draw && !stillVisible.clear,
+              "a visible meter should keep drawing without clearing its background");
 
-  applyUsageJson("{\"usage\":null}", &parsedUsage);
-  expect_true(!parsedUsage.hasUsageLimits, "null usage JSON member should clear the meter");
+  UsageMeterRenderDecision hidden = usageMeterRenderTransition(&landscapeState, false);
+  expect_true(!hidden.draw && hidden.clear,
+              "a meter that becomes unavailable should clear its previous strip once");
 
-  applyUsageJson("{\"usage\":{\"five_hour_remaining\":72,\"seven_day_remaining\":91}}", &parsedUsage);
-  applyUsageJson("{\"usage\":\"not-an-object\"}", &parsedUsage);
-  expect_true(!parsedUsage.hasUsageLimits, "string usage JSON member should clear the meter");
+  UsageMeterRenderDecision stillHidden = usageMeterRenderTransition(&landscapeState, false);
+  expect_true(!stillHidden.draw && !stillHidden.clear,
+              "an already-cleared meter should not repeatedly erase the landscape surface");
 
-  applyUsageJson("{\"usage\":{\"five_hour_remaining\":72,\"seven_day_remaining\":91}}", &parsedUsage);
-  applyUsageJson("{\"usage\":{\"five_hour_remaining\":72.5,\"seven_day_remaining\":91}}", &parsedUsage);
-  expect_true(!parsedUsage.hasUsageLimits, "fractional usage JSON value should clear the meter");
-
-  applyUsageJson("{\"usage\":{\"five_hour_remaining\":72,\"seven_day_remaining\":91}}", &parsedUsage);
-  applyUsageJson("{\"usage\":[72,91]}", &parsedUsage);
-  expect_true(!parsedUsage.hasUsageLimits, "array usage JSON member should clear the meter");
+  usageMeterRenderTransition(&landscapeState, true);
+  usageMeterRenderReset(&landscapeState);
+  UsageMeterRenderDecision hiddenAfterLandscapeReset = usageMeterRenderTransition(&landscapeState, false);
+  expect_true(!hiddenAfterLandscapeReset.draw && !hiddenAfterLandscapeReset.clear,
+              "a fresh direct landscape surface should not clear a meter from an earlier surface");
 
   return 0;
 }

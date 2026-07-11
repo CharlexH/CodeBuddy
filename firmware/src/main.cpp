@@ -44,6 +44,8 @@ const char* stateNames[] = { "sleep", "idle", "busy", "attention", "celebrate", 
 TamaState    tama;
 PersonaState baseState   = P_SLEEP;
 PersonaState activeState = P_SLEEP;
+UsageMeterRenderState clockUsageMeterRenderState = {};
+UsageMeterRenderState runtimeUsageMeterRenderState = {};
 uint32_t     oneShotUntil = 0;
 uint32_t     lastShakeCheck = 0;
 float        accelBaseline = 1.0f;
@@ -157,19 +159,27 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)"\n", 1);
 }
 
-template <typename Canvas>
-static void drawUsageMeter(Canvas& canvas, uint16_t width, uint16_t height) {
+static UsageMeterRenderPlan usageMeterPlanForDisplay(uint16_t width, uint16_t height) {
+  if (!tama.connected) return {};
   UsageMeterState usage = {
     tama.hasUsageLimits,
     tama.fiveHourRemaining,
     tama.sevenDayRemaining,
   };
-  if (usageMeterFooterInset(tama.connected, usage) == 0) return;
-  UsageMeterRenderPlan plan = usageMeterRenderPlan(usage, width, height);
+  return usageMeterRenderPlan(usage, width, height);
+}
+
+template <typename Canvas>
+static void paintUsageMeter(Canvas& canvas, const UsageMeterRenderPlan& plan) {
   for (uint8_t i = 0; i < plan.count; ++i) {
     const UsageMeterRect& rect = plan.rects[i];
     if (rect.width > 0) canvas.fillRect(rect.x, rect.y, rect.width, rect.height, rect.color);
   }
+}
+
+template <typename Canvas>
+static void drawUsageMeter(Canvas& canvas, uint16_t width, uint16_t height) {
+  paintUsageMeter(canvas, usageMeterPlanForDisplay(width, height));
 }
 
 static uint8_t usageMeterBottomInset() {
@@ -514,7 +524,20 @@ static void drawClock() {
   M5.Lcd.setRotation(clockOrient);
   static uint8_t lastSec = 0xFF;
   bool repaint = paintedOrient != clockOrient;
-  if (repaint) { M5.Lcd.fillScreen(p.bg); paintedOrient = clockOrient; lastSec = 0xFF; }
+  if (repaint) {
+    M5.Lcd.fillScreen(p.bg);
+    paintedOrient = clockOrient;
+    lastSec = 0xFF;
+    usageMeterRenderReset(&clockUsageMeterRenderState);
+  }
+  UsageMeterRenderPlan meterPlan = usageMeterPlanForDisplay(240, 135);
+  UsageMeterRenderDecision meterRender = usageMeterRenderTransition(
+    &clockUsageMeterRenderState,
+    meterPlan.count > 0
+  );
+  if (meterRender.clear) {
+    M5.Lcd.fillRect(0, 135 - USAGE_METER_HEIGHT, 240, USAGE_METER_HEIGHT, p.bg);
+  }
 
   // Seconds tick at 1Hz; redrawing 3 strings at 60fps is 180 SPI ops/sec
   // for nothing. Gate on the second changing (or full repaint).
@@ -554,7 +577,7 @@ static void drawClock() {
       characterRenderTo(&M5.Lcd, 57, 45);
     }
   }
-  drawUsageMeter(M5.Lcd, 240, 135);
+  if (meterRender.draw) paintUsageMeter(M5.Lcd, meterPlan);
   M5.Lcd.setRotation(0);
 }
 
@@ -1232,6 +1255,15 @@ static void drawRuntimeLandscape(bool inPrompt) {
   if (decision.repaint) {
     M5.Lcd.fillScreen(p.bg);
     paintedRuntimeOrient = runtimeOrient;
+    usageMeterRenderReset(&runtimeUsageMeterRenderState);
+  }
+  UsageMeterRenderPlan meterPlan = usageMeterPlanForDisplay(240, 135);
+  UsageMeterRenderDecision meterRender = usageMeterRenderTransition(
+    &runtimeUsageMeterRenderState,
+    meterPlan.count > 0
+  );
+  if (meterRender.clear) {
+    M5.Lcd.fillRect(0, 135 - USAGE_METER_HEIGHT, 240, USAGE_METER_HEIGHT, p.bg);
   }
 
   if (clearPrompt) M5.Lcd.fillRect(0, 47, 240, 48, p.bg);
@@ -1251,7 +1283,7 @@ static void drawRuntimeLandscape(bool inPrompt) {
     else M5.Lcd.fillRect(0, 90, 240, 45, p.bg);
   }
   runtimeLandscapePromptVisible = inPrompt;
-  drawUsageMeter(M5.Lcd, 240, 135);
+  if (meterRender.draw) paintUsageMeter(M5.Lcd, meterPlan);
   M5.Lcd.setRotation(0);
 }
 
@@ -1551,6 +1583,9 @@ void loop() {
   static bool wasClocking = false;
   static bool wasLandscape = false;
   if (clocking != wasClocking || landscapeClock != wasLandscape) {
+    if (!landscapeClock || landscapeClock != wasLandscape) {
+      usageMeterRenderReset(&clockUsageMeterRenderState);
+    }
     if (clocking && !landscapeClock) characterSetPeek(true);
     else applyDisplayMode();
     characterInvalidate();
@@ -1564,6 +1599,7 @@ void loop() {
     // Direct LCD rendering must leave the display in its native portrait
     // rotation before the sprite path resumes.
     M5.Lcd.setRotation(0);
+    usageMeterRenderReset(&runtimeUsageMeterRenderState);
     if (landscapeRuntime) {
       characterSetPeek(true);
       buddySetPeek(true);

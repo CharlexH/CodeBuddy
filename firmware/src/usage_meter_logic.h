@@ -27,6 +27,15 @@ struct UsageMeterRenderPlan {
   UsageMeterRect rects[4];
 };
 
+struct UsageMeterRenderState {
+  bool visible;
+};
+
+struct UsageMeterRenderDecision {
+  bool draw;
+  bool clear;
+};
+
 inline bool usageMeterValidPair(int fiveHourRemaining, int sevenDayRemaining) {
   return fiveHourRemaining >= 0 && fiveHourRemaining <= 100 &&
          sevenDayRemaining >= 0 && sevenDayRemaining <= 100;
@@ -69,6 +78,19 @@ inline uint8_t usageMeterFooterInset(bool connected, const UsageMeterState& stat
       usageMeterValidPair(state.fiveHourRemaining, state.sevenDayRemaining)
     ? USAGE_METER_HEIGHT
     : 0;
+}
+
+inline UsageMeterRenderDecision usageMeterRenderTransition(
+  UsageMeterRenderState* state,
+  bool visible
+) {
+  const bool wasVisible = state != nullptr && state->visible;
+  if (state != nullptr) state->visible = visible;
+  return {visible, wasVisible && !visible};
+}
+
+inline void usageMeterRenderReset(UsageMeterRenderState* state) {
+  if (state != nullptr) state->visible = false;
 }
 
 inline UsageMeterRenderPlan usageMeterRenderPlan(
