@@ -183,7 +183,46 @@ git add firmware/src/usage_meter_logic.h firmware/src/data.h firmware/tests/usag
 git commit -m "feat: accept usage meter BLE data"
 ```
 
-### Task 5: Render the combined flush meter in portrait and landscape
+### Task 5: Restore automatic runtime landscape while Codex is active
+
+**Files:**
+- Create: `firmware/src/screen_orient_logic.h`
+- Create: `firmware/tests/screen_orient_logic_test.cpp`
+- Modify: `firmware/src/main.cpp:445-943,1421-1525`
+
+**Step 1: Write the failing eligibility test**
+
+Add a pure test specifying that only the normal display mode may switch to landscape while a Codex turn is running, waiting for approval, or has an approval prompt. Menus, settings, reset, info/pet screens, and idle home remain portrait.
+
+**Step 2: Run the test to verify it fails**
+
+Run: `cd firmware && g++ -std=c++17 -Isrc tests/screen_orient_logic_test.cpp -o /tmp/screen-orient-test && /tmp/screen-orient-test`
+
+Expected: FAIL because the runtime orientation gate does not exist.
+
+**Step 3: Implement the minimal landscape path**
+
+Use the existing StickS3 IMU debounce and `settings().clockRot` policy, but widen its invocation only for the eligible normal runtime state. Add direct-to-LCD landscape rendering for the character/pet plus HUD and approval content; never rotate the legacy 135x240 sprite globally. Reset portrait state when leaving the landscape surface so the normal renderer does not inherit stale rotation.
+
+**Step 4: Run the test and firmware build**
+
+Run:
+
+```bash
+cd firmware && g++ -std=c++17 -Isrc tests/screen_orient_logic_test.cpp -o /tmp/screen-orient-test && /tmp/screen-orient-test
+pio run
+```
+
+Expected: the eligibility test exits 0 and the StickS3 build succeeds.
+
+**Step 5: Commit**
+
+```bash
+git add firmware/src/screen_orient_logic.h firmware/tests/screen_orient_logic_test.cpp firmware/src/main.cpp
+git commit -m "fix: rotate active Codex runtime landscape"
+```
+
+### Task 6: Render the combined flush meter in portrait and landscape
 
 **Files:**
 - Modify: `firmware/src/main.cpp:445-943,1506-1525`
@@ -221,7 +260,7 @@ git add firmware/src/main.cpp firmware/tests/usage_meter_logic_test.cpp
 git commit -m "feat: draw combined Codex usage meter"
 ```
 
-### Task 6: Full verification and documentation
+### Task 7: Full verification and documentation
 
 **Files:**
 - Modify: `README.md` (only if existing user-facing setup/runtime documentation needs a one-sentence usage-meter note)
