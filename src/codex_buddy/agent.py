@@ -189,7 +189,9 @@ class BuddyAgent:
         self._account_usage_monitor_factory = account_usage_monitor_factory or AccountUsageMonitor
         self._account_usage_monitor: Optional[AccountUsageMonitor] = None
         self._usage: Optional[UsageDisplay] = None
-        self._usage_is_known = False
+        # A newly started agent must clear a meter rendered by an older
+        # process even if its first account-rate-limit read cannot complete.
+        self._usage_is_known = True
         self._managed_sessions: dict[str, ManagedSessionBridge] = {}
         self._managed_runtime: dict[str, ManagedSessionRuntime] = {}
         self._request_to_control: dict[str, str] = {}

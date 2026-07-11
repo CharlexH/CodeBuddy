@@ -61,6 +61,16 @@ class _FakeAccountUsageMonitor:
         await self.on_usage(usage)
 
 
+def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(tmp_path):
+    agent = BuddyAgent(
+        tmp_path / "state.json",
+        socket_path=tmp_path / "agent.sock",
+        watcher=None,
+    )
+
+    assert agent._snapshot().as_ble_payload()["usage"] is None
+
+
 def test_agent_launch_registers_managed_session_and_routes_device_approval(tmp_path):
     created = []
 
