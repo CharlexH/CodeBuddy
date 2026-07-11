@@ -67,6 +67,7 @@ class AccountUsageMonitor:
         self._websocket_url = f"ws://127.0.0.1:{self._port}"
         self._process: Optional[object] = None
         self._start_task: Optional[asyncio.Task[None]] = None
+        self._start_waiter_counts: dict[asyncio.Task[None], int] = {}
         self._task: Optional[asyncio.Task[None]] = None
         self._expiry_task: Optional[asyncio.Task[None]] = None
         self._lifecycle_lock = asyncio.Lock()
@@ -92,7 +93,31 @@ class AccountUsageMonitor:
                 self._stopping = False
                 start_task = asyncio.create_task(self._start_monitor(), name="code-buddy-account-usage-start")
                 self._start_task = start_task
-        await start_task
+            self._start_waiter_counts[start_task] = self._start_waiter_counts.get(start_task, 0) + 1
+        cancelled = False
+        try:
+            await asyncio.shield(start_task)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        finally:
+            async with self._lifecycle_lock:
+                remaining_waiters = self._start_waiter_counts[start_task] - 1
+                if remaining_waiters:
+                    self._start_waiter_counts[start_task] = remaining_waiters
+                else:
+                    del self._start_waiter_counts[start_task]
+                should_cancel_start = (
+                    cancelled
+                    and remaining_waiters == 0
+                    and self._start_task is start_task
+                    and not start_task.done()
+                )
+                if should_cancel_start:
+                    start_task.cancel()
+            if should_cancel_start:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await start_task
 
     async def _start_monitor(self) -> None:
         try:

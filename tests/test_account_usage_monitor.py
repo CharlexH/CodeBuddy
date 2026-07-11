@@ -195,6 +195,57 @@ def test_monitor_concurrent_starts_share_one_readiness_gate_and_cleanup_one_proc
     assert terminated == launches
 
 
+def test_monitor_cancelling_one_concurrent_start_does_not_cancel_the_shared_startup():
+    launches: list[_FakeProcess] = []
+    terminated: list[_FakeProcess] = []
+
+    def launch(*_) -> _FakeProcess:
+        process = _FakeProcess()
+        launches.append(process)
+        return process
+
+    async def exercise() -> None:
+        readiness_started = asyncio.Event()
+        release_readiness = asyncio.Event()
+        socket = _FakeWebSocket(asyncio.Queue())
+
+        async def wait_until_ready(_: int) -> None:
+            readiness_started.set()
+            await release_readiness.wait()
+
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=lambda _: None,
+            app_server_start=launch,
+            wait_until_ready=wait_until_ready,
+            websocket_connect=lambda _: socket,
+            terminate_process=terminated.append,
+        )
+        cancelled_start = asyncio.create_task(monitor.start())
+        await readiness_started.wait()
+        completing_start = asyncio.create_task(monitor.start())
+        await asyncio.sleep(0)
+
+        cancelled_start.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_start
+
+        assert not completing_start.done()
+        assert terminated == []
+
+        release_readiness.set()
+        await completing_start
+        assert monitor._task is not None
+        assert not monitor._task.done()
+
+        await monitor.stop()
+
+    asyncio.run(exercise())
+
+    assert len(launches) == 1
+    assert terminated == launches
+
+
 def test_monitor_stop_prevents_a_previously_scheduled_start_from_launching():
     launches: list[_FakeProcess] = []
     terminated: list[_FakeProcess] = []
