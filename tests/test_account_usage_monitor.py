@@ -156,6 +156,129 @@ def test_monitor_cancellation_during_readiness_wait_terminates_its_owned_app_ser
     assert terminated == [process]
 
 
+def test_monitor_concurrent_starts_share_one_readiness_gate_and_cleanup_one_process():
+    launches: list[_FakeProcess] = []
+    terminated: list[_FakeProcess] = []
+
+    def launch(*_) -> _FakeProcess:
+        process = _FakeProcess()
+        launches.append(process)
+        return process
+
+    async def exercise() -> None:
+        readiness_started = asyncio.Event()
+        release_readiness = asyncio.Event()
+
+        async def wait_until_ready(_: int) -> None:
+            readiness_started.set()
+            await release_readiness.wait()
+
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=lambda _: None,
+            app_server_start=launch,
+            wait_until_ready=wait_until_ready,
+            terminate_process=terminated.append,
+        )
+        first_start = asyncio.create_task(monitor.start())
+        await readiness_started.wait()
+        second_start = asyncio.create_task(monitor.start())
+        await asyncio.sleep(0)
+
+        release_readiness.set()
+        await asyncio.gather(first_start, second_start)
+        await monitor.stop()
+
+    asyncio.run(exercise())
+
+    assert len(launches) == 1
+    assert terminated == launches
+
+
+def test_monitor_stop_prevents_a_previously_scheduled_start_from_launching():
+    launches: list[_FakeProcess] = []
+    terminated: list[_FakeProcess] = []
+
+    def launch(*_) -> _FakeProcess:
+        process = _FakeProcess()
+        launches.append(process)
+        return process
+
+    async def exercise() -> None:
+        async def wait_until_ready(_: int) -> None:
+            return None
+
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=lambda _: None,
+            app_server_start=launch,
+            wait_until_ready=wait_until_ready,
+            terminate_process=terminated.append,
+        )
+        pending_start = asyncio.create_task(monitor.start())
+
+        await monitor.stop()
+        await pending_start
+
+    asyncio.run(exercise())
+
+    assert launches == []
+    assert terminated == []
+
+
+def test_monitor_start_waits_for_an_in_progress_stop_to_finish_cleanup():
+    launches: list[_FakeProcess] = []
+    terminated: list[_FakeProcess] = []
+
+    def launch(*_) -> _FakeProcess:
+        process = _FakeProcess()
+        launches.append(process)
+        return process
+
+    async def exercise() -> None:
+        expiry_cancelled = asyncio.Event()
+        release_expiry = asyncio.Event()
+
+        async def wait_until_ready(_: int) -> None:
+            return None
+
+        async def expiry() -> None:
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                expiry_cancelled.set()
+                await release_expiry.wait()
+                raise
+
+        socket = _FakeWebSocket(asyncio.Queue())
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=lambda _: None,
+            app_server_start=launch,
+            wait_until_ready=wait_until_ready,
+            websocket_connect=lambda _: socket,
+            terminate_process=terminated.append,
+        )
+        await monitor.start()
+        monitor._expiry_task = asyncio.create_task(expiry())
+        await asyncio.sleep(0)
+
+        stop_task = asyncio.create_task(monitor.stop())
+        await expiry_cancelled.wait()
+        restart_task = asyncio.create_task(monitor.start())
+        await asyncio.sleep(0)
+
+        release_expiry.set()
+        await stop_task
+        await restart_task
+        await monitor.stop()
+
+    asyncio.run(exercise())
+
+    assert len(launches) == 2
+    assert terminated == launches
+
+
 def test_monitor_cancellation_during_readiness_wait_stops_its_start_new_session_child():
     async def exercise() -> int:
         readiness_started = asyncio.Event()

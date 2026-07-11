@@ -63,19 +63,39 @@ class AccountUsageMonitor:
         self._port = _free_port()
         self._websocket_url = f"ws://127.0.0.1:{self._port}"
         self._process: Optional[object] = None
+        self._start_task: Optional[asyncio.Task[None]] = None
         self._task: Optional[asyncio.Task[None]] = None
         self._expiry_task: Optional[asyncio.Task[None]] = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._lifecycle_generation = 0
         self._stopping = False
         self._limits = UsageLimits(primary=None, secondary=None, observed_at=None)
         self._request_id = 0
         self._read_request_ids: set[int] = set()
 
-    async def start(self) -> None:
-        if self._task is not None:
-            return
-        self._stopping = False
-        await self._start_owned_app_server()
-        self._task = asyncio.create_task(self._run(), name="code-buddy-account-usage")
+    def start(self) -> Awaitable[None]:
+        lifecycle_generation = self._lifecycle_generation
+        return self._start_for_lifecycle(lifecycle_generation)
+
+    async def _start_for_lifecycle(self, lifecycle_generation: int) -> None:
+        async with self._lifecycle_lock:
+            if lifecycle_generation != self._lifecycle_generation:
+                return
+            if self._task is not None:
+                return
+            start_task = self._start_task
+            if start_task is None:
+                self._stopping = False
+                start_task = asyncio.create_task(self._start_monitor(), name="code-buddy-account-usage-start")
+                self._start_task = start_task
+        await start_task
+
+    async def _start_monitor(self) -> None:
+        try:
+            await self._start_owned_app_server()
+            self._task = asyncio.create_task(self._run(), name="code-buddy-account-usage")
+        finally:
+            self._start_task = None
 
     async def _start_owned_app_server(self) -> None:
         self._process = self._app_server_start(self.codex_path, self.codex_launch_path, self._port)
@@ -86,15 +106,22 @@ class AccountUsageMonitor:
             raise
 
     async def stop(self) -> None:
-        self._stopping = True
-        task = self._task
-        self._task = None
-        if task is not None:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        await self._stop_expiry_task()
-        self._stop_process()
+        async with self._lifecycle_lock:
+            self._lifecycle_generation += 1
+            self._stopping = True
+            start_task = self._start_task
+            if start_task is not None:
+                start_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await start_task
+            task = self._task
+            self._task = None
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            await self._stop_expiry_task()
+            self._stop_process()
 
     def _start_app_server(self, codex_path: str, codex_launch_path: str, port: int) -> object:
         return start_loopback_app_server(
