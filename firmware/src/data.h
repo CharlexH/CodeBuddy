@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include "ble_bridge.h"
 #include "utf8_text_logic.h"
+#include "usage_meter_logic.h"
 #include "xfer.h"
 
 struct TamaState {
@@ -11,6 +12,9 @@ struct TamaState {
   uint8_t  sessionsWaiting;
   bool     recentlyCompleted;
   uint32_t tokensToday;
+  bool     hasUsageLimits;
+  uint8_t  fiveHourRemaining;
+  uint8_t  sevenDayRemaining;
   uint32_t lastUpdated;
   char     msg[128];
   bool     connected;
@@ -110,6 +114,36 @@ static void _applyJson(const char* line, TamaState* out) {
   uint32_t bridgeTokens = doc["tokens"] | 0;
   if (doc["tokens"].is<uint32_t>()) statsOnBridgeTokens(bridgeTokens);
   out->tokensToday = doc["tokens_today"] | out->tokensToday;
+
+  JsonVariantConst usageVariant = doc["usage"];
+  const bool usageObjectPresent = !usageVariant.isUnbound();
+  JsonObjectConst usage = usageVariant.as<JsonObjectConst>();
+  const bool usageObjectHasIntegerPair =
+    usageObjectPresent && !usage.isNull() &&
+    usage["five_hour_remaining"].is<int>() &&
+    usage["seven_day_remaining"].is<int>();
+  const int fiveHourRemaining = usageObjectHasIntegerPair
+    ? usage["five_hour_remaining"].as<int>()
+    : 0;
+  const int sevenDayRemaining = usageObjectHasIntegerPair
+    ? usage["seven_day_remaining"].as<int>()
+    : 0;
+  UsageMeterState usageState = {
+    out->hasUsageLimits,
+    out->fiveHourRemaining,
+    out->sevenDayRemaining,
+  };
+  usageMeterApply(
+    &usageState,
+    usageObjectPresent,
+    usageObjectHasIntegerPair,
+    fiveHourRemaining,
+    sevenDayRemaining
+  );
+  out->hasUsageLimits = usageState.hasUsageLimits;
+  out->fiveHourRemaining = usageState.fiveHourRemaining;
+  out->sevenDayRemaining = usageState.sevenDayRemaining;
+
   const char* m = doc["msg"];
   if (m) utf8CopyTruncate(out->msg, m);
   JsonArray la = doc["entries"];
