@@ -5,6 +5,7 @@
 #include "about_info.h"
 #include "clock_display_logic.h"
 #include "clock_orient_logic.h"
+#include "screen_orient_logic.h"
 #include "clock_time_logic.h"
 #include "data.h"
 #include "persona_logic.h"
@@ -385,6 +386,10 @@ static uint8_t clockOrient   = 0;
 static int8_t  orientFrames  = 0;
 static int8_t  clockSwapFrames = 0;
 static uint8_t paintedOrient = 0;
+static uint8_t runtimeOrient = 0;
+static int8_t  runtimeOrientFrames = 0;
+static int8_t  runtimeSwapFrames = 0;
+static uint8_t paintedRuntimeOrient = 0;
 static bool    _clockHostTimeValid = false;
 static int64_t _clockHostLocalEpoch = 0;
 static uint32_t _clockHostSyncMs = 0;
@@ -433,6 +438,20 @@ static void clockUpdateOrient() {
     &clockOrient,
     &orientFrames,
     &clockSwapFrames,
+    ax,
+    ay,
+    az,
+    settings().clockRot
+  );
+}
+
+static void runtimeUpdateOrient() {
+  float ax, ay, az;
+  M5.Imu.getAccelData(&ax, &ay, &az);
+  clockOrientUpdateForStickS3(
+    &runtimeOrient,
+    &runtimeOrientFrames,
+    &runtimeSwapFrames,
     ax,
     ay,
     az,
@@ -1006,6 +1025,131 @@ void drawHUD() {
   }
 }
 
+static void drawLandscapeApproval(const Palette& p) {
+  const int LW = 240, LH = 135, AREA = 88;
+  M5.Lcd.fillRect(0, LH - AREA, LW, AREA, p.bg);
+  M5.Lcd.drawFastHLine(0, LH - AREA, LW, p.textDim);
+
+  useDefaultTextFont(M5.Lcd);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(p.textDim, p.bg);
+  M5.Lcd.setCursor(4, LH - AREA + 4);
+  uint32_t waited = (millis() - promptArrivedMs) / 1000;
+  if (waited >= 10) M5.Lcd.setTextColor(HOT, p.bg);
+  M5.Lcd.printf("approve? %lus", (unsigned long)waited);
+
+  char toolLine[48];
+  clipDisplayText(toolLine, tama.promptTool, utf8ContainsNonAscii(tama.promptTool) ? 24 : 32);
+  useUtf8FontForText(M5.Lcd, toolLine, &fonts::efontCN_14);
+  M5.Lcd.setTextColor(p.text, p.bg);
+  M5.Lcd.setCursor(4, LH - AREA + 18);
+  M5.Lcd.print(toolLine);
+  useDefaultTextFont(M5.Lcd);
+
+  char hintLines[8][48] = {};
+  uint8_t hintRows = utf8WrapInto(tama.promptHint, hintLines, 8, 36, false);
+  uint8_t hintBack = (hintRows > 2) ? (hintRows - 2) : 0;
+  uint8_t hintOffset = utf8AutoScrollOffset(hintBack, millis() - promptArrivedMs);
+  M5.Lcd.setTextColor(p.textDim, p.bg);
+  for (uint8_t i = 0; i < 2 && (hintOffset + i) < hintRows; ++i) {
+    useUtf8FontForText(M5.Lcd, hintLines[hintOffset + i], &fonts::efontCN_12);
+    M5.Lcd.setCursor(4, LH - AREA + 34 + i * 12);
+    M5.Lcd.print(hintLines[hintOffset + i]);
+  }
+  useDefaultTextFont(M5.Lcd);
+
+  if (responseSent) {
+    M5.Lcd.setTextColor(p.textDim, p.bg);
+    M5.Lcd.setCursor(4, LH - 12);
+    M5.Lcd.print("sent...");
+  } else {
+    M5.Lcd.setTextColor(GREEN, p.bg);
+    M5.Lcd.setCursor(4, LH - 12);
+    M5.Lcd.print("A: approve");
+    M5.Lcd.setTextColor(HOT, p.bg);
+    M5.Lcd.setCursor(LW - 52, LH - 12);
+    M5.Lcd.print("B: deny");
+  }
+}
+
+static void drawLandscapeHUD(const Palette& p) {
+  const int LW = 240, LH = 135;
+  const int SHOW = 3, LINE_HEIGHT = 12, WIDTH = 36;
+  const int AREA = SHOW * LINE_HEIGHT + 4;
+  M5.Lcd.fillRect(0, LH - AREA, LW, AREA, p.bg);
+  M5.Lcd.setTextSize(1);
+
+  if (tama.lineGen != lastLineGen) {
+    msgScroll = 0;
+    lastLineGen = tama.lineGen;
+    hudScrollStartedMs = millis();
+    wake();
+  }
+
+  if (tama.nLines == 0) {
+    char msgLine[48];
+    clipDisplayText(msgLine, tama.msg, WIDTH);
+    M5.Lcd.setTextColor(p.text, p.bg);
+    useUtf8FontForText(M5.Lcd, msgLine, &fonts::efontCN_12);
+    M5.Lcd.setCursor(4, LH - LINE_HEIGHT - 2);
+    M5.Lcd.print(msgLine);
+    useDefaultTextFont(M5.Lcd);
+    return;
+  }
+
+  static char disp[32][48];
+  static uint8_t srcOf[32];
+  uint8_t nDisp = 0;
+  for (uint8_t i = 0; i < tama.nLines && nDisp < 32; ++i) {
+    uint8_t got = utf8WrapInto(tama.lines[i], &disp[nDisp], 32 - nDisp, WIDTH);
+    for (uint8_t j = 0; j < got; ++j) srcOf[nDisp + j] = i;
+    nDisp += got;
+  }
+
+  uint8_t maxBack = (nDisp > SHOW) ? (nDisp - SHOW) : 0;
+  msgScroll = utf8AutoScrollOffset(maxBack, millis() - hudScrollStartedMs);
+  int end = (int)nDisp - msgScroll;
+  int start = end - SHOW;
+  if (start < 0) start = 0;
+  uint8_t newest = tama.nLines - 1;
+  for (int i = 0; start + i < end; ++i) {
+    uint8_t row = start + i;
+    bool fresh = (srcOf[row] == newest) && (msgScroll == 0);
+    M5.Lcd.setTextColor(fresh ? p.text : p.textDim, p.bg);
+    useUtf8FontForText(M5.Lcd, disp[row], &fonts::efontCN_12);
+    M5.Lcd.setCursor(4, LH - AREA + 2 + i * LINE_HEIGHT);
+    M5.Lcd.print(disp[row]);
+  }
+  useDefaultTextFont(M5.Lcd);
+  if (msgScroll > 0) {
+    M5.Lcd.setTextColor(p.body, p.bg);
+    M5.Lcd.setCursor(LW - 18, LH - LINE_HEIGHT - 2);
+    M5.Lcd.printf("-%u", msgScroll);
+  }
+}
+
+static void drawRuntimeLandscape(bool inPrompt) {
+  const Palette& p = characterPalette();
+  M5.Lcd.setRotation(runtimeOrient);
+  bool repaint = paintedRuntimeOrient != runtimeOrient;
+  if (repaint) {
+    M5.Lcd.fillScreen(p.bg);
+    paintedRuntimeOrient = runtimeOrient;
+  }
+
+  if (buddyMode) {
+    M5.Lcd.fillRect(0, 0, 115, 90, p.bg);
+    buddyRenderTo(&M5.Lcd, activeState);
+  } else {
+    characterSetState(activeState);
+    characterRenderTo(&M5.Lcd, 57, 45);
+  }
+
+  if (inPrompt) drawLandscapeApproval(p);
+  else if (settings().hud) drawLandscapeHUD(p);
+  M5.Lcd.setRotation(0);
+}
+
 void setup() {
   auto cfg = M5.config();
   cfg.output_power = true;
@@ -1277,6 +1421,27 @@ void loop() {
   else { clockOrient = 0; orientFrames = 0; clockSwapFrames = 0; paintedOrient = 0; }
   bool landscapeClock = clocking && clockOrient != 0;
 
+  // Codex activity gets the same StickS3 auto-orientation policy as the
+  // charging clock, but only on the normal home surface. The portrait sprite
+  // remains unrotated; a landscape runtime uses the direct LCD path below.
+  bool runtimeOrienting = screenOrientRuntimeEligible(
+    displayMode == DISP_NORMAL,
+    menuOpen,
+    settingsOpen,
+    resetOpen,
+    tama.sessionsRunning > 0,
+    tama.sessionsWaiting > 0,
+    inPrompt
+  );
+  if (runtimeOrienting) runtimeUpdateOrient();
+  else {
+    runtimeOrient = 0;
+    runtimeOrientFrames = 0;
+    runtimeSwapFrames = 0;
+    paintedRuntimeOrient = 0;
+  }
+  bool landscapeRuntime = runtimeOrienting && runtimeOrient != 0;
+
   static bool wasClocking = false;
   static bool wasLandscape = false;
   if (clocking != wasClocking || landscapeClock != wasLandscape) {
@@ -1286,6 +1451,22 @@ void loop() {
     if (buddyMode) buddyInvalidate();
     wasClocking = clocking;
     wasLandscape = landscapeClock;
+  }
+
+  static bool wasLandscapeRuntime = false;
+  if (landscapeRuntime != wasLandscapeRuntime) {
+    // Direct LCD rendering must leave the display in its native portrait
+    // rotation before the sprite path resumes.
+    M5.Lcd.setRotation(0);
+    if (landscapeRuntime) {
+      characterSetPeek(true);
+      buddySetPeek(true);
+    } else {
+      applyDisplayMode();
+    }
+    characterInvalidate();
+    if (buddyMode) buddyInvalidate();
+    wasLandscapeRuntime = landscapeRuntime;
   }
   if (clocking) {
     uint8_t dow = clockDow();
@@ -1307,9 +1488,9 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
-  if (napping || screenOff || landscapeClock) {
-    // skip sprite render — face-down, powered off, or landscape clock
-    // (which draws direct-to-LCD below)
+  if (napping || screenOff || landscapeClock || landscapeRuntime) {
+    // skip sprite render — face-down, powered off, or a direct-to-LCD
+    // landscape surface below.
   } else if (buddyMode) {
     buddyTick(activeState);
   } else if (characterLoaded()) {
@@ -1337,7 +1518,9 @@ void loop() {
       spr.print("no character loaded");
     }
   }
-  if (inPrompt) {
+  if (landscapeRuntime && !napping && !screenOff) {
+    drawRuntimeLandscape(inPrompt);
+  } else if (inPrompt) {
     drawApproval();
     spr.pushSprite(0, 0);
   } else if (landscapeClock) {
