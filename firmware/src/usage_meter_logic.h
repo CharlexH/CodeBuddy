@@ -29,6 +29,8 @@ struct UsageMeterRenderPlan {
 
 struct UsageMeterRenderState {
   bool visible;
+  uint8_t fiveHourRemaining;
+  uint8_t sevenDayRemaining;
 };
 
 struct UsageMeterRenderDecision {
@@ -87,15 +89,34 @@ inline uint8_t usageMeterFooterInset(bool connected, const UsageMeterState& stat
 
 inline UsageMeterRenderDecision usageMeterRenderTransition(
   UsageMeterRenderState* state,
-  bool visible
+  bool visible,
+  uint8_t fiveHourRemaining = 0,
+  uint8_t sevenDayRemaining = 0,
+  bool forceDraw = false
 ) {
-  const bool wasVisible = state != nullptr && state->visible;
-  if (state != nullptr) state->visible = visible;
-  return {visible, wasVisible && !visible};
+  if (state == nullptr) return {visible, false};
+  const bool wasVisible = state->visible;
+  if (!visible) {
+    state->visible = false;
+    state->fiveHourRemaining = 0;
+    state->sevenDayRemaining = 0;
+    return {false, wasVisible};
+  }
+
+  const bool valuesChanged = !wasVisible ||
+    state->fiveHourRemaining != fiveHourRemaining ||
+    state->sevenDayRemaining != sevenDayRemaining;
+  state->visible = true;
+  state->fiveHourRemaining = fiveHourRemaining;
+  state->sevenDayRemaining = sevenDayRemaining;
+  return {forceDraw || valuesChanged, false};
 }
 
 inline void usageMeterRenderReset(UsageMeterRenderState* state) {
-  if (state != nullptr) state->visible = false;
+  if (state == nullptr) return;
+  state->visible = false;
+  state->fiveHourRemaining = 0;
+  state->sevenDayRemaining = 0;
 }
 
 inline UsageMeterRenderPlan usageMeterRenderPlan(
@@ -137,10 +158,20 @@ inline UsageMeterRenderFrame usageMeterPrepareFrame(
   bool connected,
   const UsageMeterState& usage,
   uint16_t fullWidth,
-  uint16_t fullHeight
+  uint16_t fullHeight,
+  bool forceDraw = false
 ) {
   UsageMeterRenderPlan plan = connected
     ? usageMeterRenderPlan(usage, fullWidth, fullHeight)
     : UsageMeterRenderPlan{};
-  return {plan, usageMeterRenderTransition(renderState, plan.count > 0)};
+  return {
+    plan,
+    usageMeterRenderTransition(
+      renderState,
+      plan.count > 0,
+      usage.fiveHourRemaining,
+      usage.sevenDayRemaining,
+      forceDraw
+    ),
+  };
 }

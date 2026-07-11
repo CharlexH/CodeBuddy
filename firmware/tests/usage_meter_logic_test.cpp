@@ -129,8 +129,15 @@ int main() {
               "a newly visible meter should draw without clearing its background");
 
   UsageMeterRenderDecision stillVisible = usageMeterRenderTransition(&landscapeState, true);
-  expect_true(stillVisible.draw && !stillVisible.clear,
-              "a visible meter should keep drawing without clearing its background");
+  expect_true(!stillVisible.draw && !stillVisible.clear,
+              "an unchanged visible direct meter should not redraw every frame");
+
+  UsageMeterState changedMeterUsage = {true, 71, 91};
+  UsageMeterRenderFrame changedVisible = usageMeterPrepareFrame(
+    &landscapeState, true, changedMeterUsage, 240, 135
+  );
+  expect_true(changedVisible.decision.draw && !changedVisible.decision.clear,
+              "a changed direct meter limit should redraw the strip");
 
   UsageMeterRenderDecision hidden = usageMeterRenderTransition(&landscapeState, false);
   expect_true(!hidden.draw && hidden.clear,

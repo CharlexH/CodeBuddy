@@ -163,14 +163,15 @@ static void sendCmd(const char* json) {
 static UsageMeterRenderFrame usageMeterFrameForDisplay(
   UsageMeterRenderState* renderState,
   uint16_t width,
-  uint16_t height
+  uint16_t height,
+  bool forceDraw = false
 ) {
   UsageMeterState usage = {
     tama.hasUsageLimits,
     tama.fiveHourRemaining,
     tama.sevenDayRemaining,
   };
-  return usageMeterPrepareFrame(renderState, tama.connected, usage, width, height);
+  return usageMeterPrepareFrame(renderState, tama.connected, usage, width, height, forceDraw);
 }
 
 template <typename Canvas>
@@ -535,7 +536,7 @@ static void drawClock() {
     usageMeterRenderReset(&clockUsageMeterRenderState);
   }
   UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
-    &clockUsageMeterRenderState, 240, 135
+    &clockUsageMeterRenderState, 240, 135, repaint
   );
   if (meterFrame.decision.clear) {
     clearUsageMeter(M5.Lcd, 240, 135, p.bg);
@@ -865,7 +866,7 @@ static void drawApproval() {
 static void drawValidationScreen(bool inPrompt) {
   const Palette& p = characterPalette();
   UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
-    &portraitUsageMeterRenderState, W, H
+    &portraitUsageMeterRenderState, W, H, true
   );
   if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
   spr.fillSprite(p.bg);
@@ -1264,7 +1265,7 @@ static void drawRuntimeLandscape(bool inPrompt) {
     usageMeterRenderReset(&runtimeUsageMeterRenderState);
   }
   UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
-    &runtimeUsageMeterRenderState, 240, 135
+    &runtimeUsageMeterRenderState, 240, 135, decision.repaint || decision.overlay
   );
   if (meterFrame.decision.clear) {
     clearUsageMeter(M5.Lcd, 240, 135, p.bg);
@@ -1328,7 +1329,7 @@ void setup() {
   {
     const Palette& p = characterPalette();
     UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
-      &portraitUsageMeterRenderState, W, H
+      &portraitUsageMeterRenderState, W, H, true
     );
     if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
     spr.fillSprite(p.bg);
@@ -1676,7 +1677,7 @@ void loop() {
   } else if (inPrompt) {
     const Palette& p = characterPalette();
     UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
-      &portraitUsageMeterRenderState, W, H
+      &portraitUsageMeterRenderState, W, H, true
     );
     if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
     drawApproval();
@@ -1687,7 +1688,7 @@ void loop() {
   } else if (!napping && !screenOff) {
     const Palette& p = characterPalette();
     UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
-      &portraitUsageMeterRenderState, W, H
+      &portraitUsageMeterRenderState, W, H, true
     );
     if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
     if (blePasskey()) drawPasskey();
