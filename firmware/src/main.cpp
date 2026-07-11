@@ -156,6 +156,30 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)json, n);
   bleWrite((const uint8_t*)"\n", 1);
 }
+
+template <typename Canvas>
+static void drawUsageMeter(Canvas& canvas, uint16_t width, uint16_t height) {
+  UsageMeterState usage = {
+    tama.hasUsageLimits,
+    tama.fiveHourRemaining,
+    tama.sevenDayRemaining,
+  };
+  if (usageMeterFooterInset(tama.connected, usage) == 0) return;
+  UsageMeterRenderPlan plan = usageMeterRenderPlan(usage, width, height);
+  for (uint8_t i = 0; i < plan.count; ++i) {
+    const UsageMeterRect& rect = plan.rects[i];
+    if (rect.width > 0) canvas.fillRect(rect.x, rect.y, rect.width, rect.height, rect.color);
+  }
+}
+
+static uint8_t usageMeterBottomInset() {
+  UsageMeterState usage = {
+    tama.hasUsageLimits,
+    tama.fiveHourRemaining,
+    tama.sevenDayRemaining,
+  };
+  return usageMeterFooterInset(tama.connected, usage);
+}
 const uint8_t INFO_PAGES = 6;
 const uint8_t INFO_PG_BUTTONS = 1;
 const uint8_t INFO_PG_CREDITS = 5;
@@ -530,6 +554,7 @@ static void drawClock() {
       characterRenderTo(&M5.Lcd, 57, 45);
     }
   }
+  drawUsageMeter(M5.Lcd, 240, 135);
   M5.Lcd.setRotation(0);
 }
 
@@ -756,6 +781,7 @@ void drawInfo() {
 static void drawApproval() {
   const Palette& p = characterPalette();
   const int AREA = 84;
+  const int FOOTER_Y = H - 12 - usageMeterBottomInset();
   spr.fillRect(0, H - AREA, W, AREA, p.bg);
   spr.drawFastHLine(0, H - AREA, W, p.textDim);
 
@@ -799,14 +825,14 @@ static void drawApproval() {
 
   if (responseSent) {
     spr.setTextColor(p.textDim, p.bg);
-    spr.setCursor(4, H - 12);
+    spr.setCursor(4, FOOTER_Y);
     spr.print("sent...");
   } else {
     spr.setTextColor(GREEN, p.bg);
-    spr.setCursor(4, H - 12);
+    spr.setCursor(4, FOOTER_Y);
     spr.print("A: approve");
     spr.setTextColor(HOT, p.bg);
-    spr.setCursor(W - 48, H - 12);
+    spr.setCursor(W - 48, FOOTER_Y);
     spr.print("B: deny");
   }
 }
@@ -848,6 +874,7 @@ static void drawValidationScreen(bool inPrompt) {
     spr.print("host link only mode");
   }
 
+  drawUsageMeter(spr, W, H);
   spr.pushSprite(0, 0);
 }
 
@@ -1083,6 +1110,7 @@ static uint8_t runtimePromptScrollOffset(uint32_t now) {
 
 static void drawLandscapeApproval(const Palette& p, uint8_t hintOffset) {
   const int LW = 240, LH = 135, AREA = 88;
+  const int FOOTER_Y = LH - 12 - usageMeterBottomInset();
   M5.Lcd.fillRect(0, LH - AREA, LW, AREA, p.bg);
   M5.Lcd.drawFastHLine(0, LH - AREA, LW, p.textDim);
 
@@ -1114,14 +1142,14 @@ static void drawLandscapeApproval(const Palette& p, uint8_t hintOffset) {
 
   if (responseSent) {
     M5.Lcd.setTextColor(p.textDim, p.bg);
-    M5.Lcd.setCursor(4, LH - 12);
+    M5.Lcd.setCursor(4, FOOTER_Y);
     M5.Lcd.print("sent...");
   } else {
     M5.Lcd.setTextColor(GREEN, p.bg);
-    M5.Lcd.setCursor(4, LH - 12);
+    M5.Lcd.setCursor(4, FOOTER_Y);
     M5.Lcd.print("A: approve");
     M5.Lcd.setTextColor(HOT, p.bg);
-    M5.Lcd.setCursor(LW - 52, LH - 12);
+    M5.Lcd.setCursor(LW - 52, FOOTER_Y);
     M5.Lcd.print("B: deny");
   }
 }
@@ -1223,6 +1251,7 @@ static void drawRuntimeLandscape(bool inPrompt) {
     else M5.Lcd.fillRect(0, 90, 240, 45, p.bg);
   }
   runtimeLandscapePromptVisible = inPrompt;
+  drawUsageMeter(M5.Lcd, 240, 135);
   M5.Lcd.setRotation(0);
 }
 
@@ -1278,6 +1307,7 @@ void setup() {
       spr.drawString("a buddy appears", W/2, H/2 + 12);
     }
     spr.setTextDatum(TL_DATUM); spr.setTextSize(1);
+    drawUsageMeter(spr, W, H);
     spr.pushSprite(0, 0);
     delay(1800);
   }
@@ -1601,6 +1631,7 @@ void loop() {
     drawRuntimeLandscape(inPrompt);
   } else if (inPrompt) {
     drawApproval();
+    drawUsageMeter(spr, W, H);
     spr.pushSprite(0, 0);
   } else if (landscapeClock) {
     drawClock();
@@ -1613,6 +1644,7 @@ void loop() {
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
+    drawUsageMeter(spr, W, H);
     spr.pushSprite(0, 0);
   }
 
