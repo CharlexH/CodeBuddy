@@ -13,6 +13,13 @@ inline bool usageMeterValidPair(int fiveHourRemaining, int sevenDayRemaining) {
          sevenDayRemaining >= 0 && sevenDayRemaining <= 100;
 }
 
+inline void usageMeterClear(UsageMeterState* state) {
+  if (state == nullptr) return;
+  state->hasUsageLimits = false;
+  state->fiveHourRemaining = 0;
+  state->sevenDayRemaining = 0;
+}
+
 inline void usageMeterApply(
   UsageMeterState* state,
   bool usageObjectPresent,
@@ -23,9 +30,7 @@ inline void usageMeterApply(
   if (state == nullptr || !usageObjectPresent) return;
 
   if (!usageObjectHasIntegerPair || !usageMeterValidPair(fiveHourRemaining, sevenDayRemaining)) {
-    state->hasUsageLimits = false;
-    state->fiveHourRemaining = 0;
-    state->sevenDayRemaining = 0;
+    usageMeterClear(state);
     return;
   }
 

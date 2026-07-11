@@ -3,7 +3,7 @@
 #include <ArduinoJson.h>
 #include "ble_bridge.h"
 #include "utf8_text_logic.h"
-#include "usage_meter_logic.h"
+#include "usage_meter_json.h"
 #include "xfer.h"
 
 struct TamaState {
@@ -115,31 +115,12 @@ static void _applyJson(const char* line, TamaState* out) {
   if (doc["tokens"].is<uint32_t>()) statsOnBridgeTokens(bridgeTokens);
   out->tokensToday = doc["tokens_today"] | out->tokensToday;
 
-  JsonVariantConst usageVariant = doc["usage"];
-  const bool usageObjectPresent = !usageVariant.isUnbound();
-  JsonObjectConst usage = usageVariant.as<JsonObjectConst>();
-  const bool usageObjectHasIntegerPair =
-    usageObjectPresent && !usage.isNull() &&
-    usage["five_hour_remaining"].is<int>() &&
-    usage["seven_day_remaining"].is<int>();
-  const int fiveHourRemaining = usageObjectHasIntegerPair
-    ? usage["five_hour_remaining"].as<int>()
-    : 0;
-  const int sevenDayRemaining = usageObjectHasIntegerPair
-    ? usage["seven_day_remaining"].as<int>()
-    : 0;
   UsageMeterState usageState = {
     out->hasUsageLimits,
     out->fiveHourRemaining,
     out->sevenDayRemaining,
   };
-  usageMeterApply(
-    &usageState,
-    usageObjectPresent,
-    usageObjectHasIntegerPair,
-    fiveHourRemaining,
-    sevenDayRemaining
-  );
+  usageMeterApplyJson(doc["usage"], &usageState);
   out->hasUsageLimits = usageState.hasUsageLimits;
   out->fiveHourRemaining = usageState.fiveHourRemaining;
   out->sevenDayRemaining = usageState.sevenDayRemaining;
@@ -233,6 +214,15 @@ inline void dataPoll(TamaState* out) {
   if (!out->connected) {
     out->sessionsTotal=0; out->sessionsRunning=0; out->sessionsWaiting=0;
     out->recentlyCompleted=false; out->lastUpdated=now;
+    UsageMeterState usageState = {
+      out->hasUsageLimits,
+      out->fiveHourRemaining,
+      out->sevenDayRemaining,
+    };
+    usageMeterClear(&usageState);
+    out->hasUsageLimits = usageState.hasUsageLimits;
+    out->fiveHourRemaining = usageState.fiveHourRemaining;
+    out->sevenDayRemaining = usageState.sevenDayRemaining;
     utf8CopyTruncate(out->msg, "No Codex connected");
   }
 }
