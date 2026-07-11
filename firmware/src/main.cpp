@@ -46,6 +46,7 @@ PersonaState baseState   = P_SLEEP;
 PersonaState activeState = P_SLEEP;
 UsageMeterRenderState clockUsageMeterRenderState = {};
 UsageMeterRenderState runtimeUsageMeterRenderState = {};
+UsageMeterRenderState portraitUsageMeterRenderState = {};
 uint32_t     oneShotUntil = 0;
 uint32_t     lastShakeCheck = 0;
 float        accelBaseline = 1.0f;
@@ -159,14 +160,17 @@ static void sendCmd(const char* json) {
   bleWrite((const uint8_t*)"\n", 1);
 }
 
-static UsageMeterRenderPlan usageMeterPlanForDisplay(uint16_t width, uint16_t height) {
-  if (!tama.connected) return {};
+static UsageMeterRenderFrame usageMeterFrameForDisplay(
+  UsageMeterRenderState* renderState,
+  uint16_t width,
+  uint16_t height
+) {
   UsageMeterState usage = {
     tama.hasUsageLimits,
     tama.fiveHourRemaining,
     tama.sevenDayRemaining,
   };
-  return usageMeterRenderPlan(usage, width, height);
+  return usageMeterPrepareFrame(renderState, tama.connected, usage, width, height);
 }
 
 template <typename Canvas>
@@ -178,8 +182,8 @@ static void paintUsageMeter(Canvas& canvas, const UsageMeterRenderPlan& plan) {
 }
 
 template <typename Canvas>
-static void drawUsageMeter(Canvas& canvas, uint16_t width, uint16_t height) {
-  paintUsageMeter(canvas, usageMeterPlanForDisplay(width, height));
+static void clearUsageMeter(Canvas& canvas, uint16_t width, uint16_t height, uint16_t color) {
+  canvas.fillRect(0, height - USAGE_METER_HEIGHT, width, USAGE_METER_HEIGHT, color);
 }
 
 static uint8_t usageMeterBottomInset() {
@@ -530,13 +534,11 @@ static void drawClock() {
     lastSec = 0xFF;
     usageMeterRenderReset(&clockUsageMeterRenderState);
   }
-  UsageMeterRenderPlan meterPlan = usageMeterPlanForDisplay(240, 135);
-  UsageMeterRenderDecision meterRender = usageMeterRenderTransition(
-    &clockUsageMeterRenderState,
-    meterPlan.count > 0
+  UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
+    &clockUsageMeterRenderState, 240, 135
   );
-  if (meterRender.clear) {
-    M5.Lcd.fillRect(0, 135 - USAGE_METER_HEIGHT, 240, USAGE_METER_HEIGHT, p.bg);
+  if (meterFrame.decision.clear) {
+    clearUsageMeter(M5.Lcd, 240, 135, p.bg);
   }
 
   // Seconds tick at 1Hz; redrawing 3 strings at 60fps is 180 SPI ops/sec
@@ -577,7 +579,7 @@ static void drawClock() {
       characterRenderTo(&M5.Lcd, 57, 45);
     }
   }
-  if (meterRender.draw) paintUsageMeter(M5.Lcd, meterPlan);
+  if (meterFrame.decision.draw) paintUsageMeter(M5.Lcd, meterFrame.plan);
   M5.Lcd.setRotation(0);
 }
 
@@ -862,6 +864,10 @@ static void drawApproval() {
 
 static void drawValidationScreen(bool inPrompt) {
   const Palette& p = characterPalette();
+  UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
+    &portraitUsageMeterRenderState, W, H
+  );
+  if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
   spr.fillSprite(p.bg);
   spr.setTextSize(1);
   spr.setTextColor(p.text, p.bg);
@@ -897,7 +903,7 @@ static void drawValidationScreen(bool inPrompt) {
     spr.print("host link only mode");
   }
 
-  drawUsageMeter(spr, W, H);
+  if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
   spr.pushSprite(0, 0);
 }
 
@@ -1257,13 +1263,11 @@ static void drawRuntimeLandscape(bool inPrompt) {
     paintedRuntimeOrient = runtimeOrient;
     usageMeterRenderReset(&runtimeUsageMeterRenderState);
   }
-  UsageMeterRenderPlan meterPlan = usageMeterPlanForDisplay(240, 135);
-  UsageMeterRenderDecision meterRender = usageMeterRenderTransition(
-    &runtimeUsageMeterRenderState,
-    meterPlan.count > 0
+  UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
+    &runtimeUsageMeterRenderState, 240, 135
   );
-  if (meterRender.clear) {
-    M5.Lcd.fillRect(0, 135 - USAGE_METER_HEIGHT, 240, USAGE_METER_HEIGHT, p.bg);
+  if (meterFrame.decision.clear) {
+    clearUsageMeter(M5.Lcd, 240, 135, p.bg);
   }
 
   if (clearPrompt) M5.Lcd.fillRect(0, 47, 240, 48, p.bg);
@@ -1283,7 +1287,7 @@ static void drawRuntimeLandscape(bool inPrompt) {
     else M5.Lcd.fillRect(0, 90, 240, 45, p.bg);
   }
   runtimeLandscapePromptVisible = inPrompt;
-  if (meterRender.draw) paintUsageMeter(M5.Lcd, meterPlan);
+  if (meterFrame.decision.draw) paintUsageMeter(M5.Lcd, meterFrame.plan);
   M5.Lcd.setRotation(0);
 }
 
@@ -1323,6 +1327,10 @@ void setup() {
 
   {
     const Palette& p = characterPalette();
+    UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
+      &portraitUsageMeterRenderState, W, H
+    );
+    if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
     spr.fillSprite(p.bg);
     spr.setTextDatum(MC_DATUM);
     spr.setTextSize(2);
@@ -1339,7 +1347,7 @@ void setup() {
       spr.drawString("a buddy appears", W/2, H/2 + 12);
     }
     spr.setTextDatum(TL_DATUM); spr.setTextSize(1);
-    drawUsageMeter(spr, W, H);
+    if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
     spr.pushSprite(0, 0);
     delay(1800);
   }
@@ -1666,12 +1674,22 @@ void loop() {
   if (landscapeRuntime && !napping && !screenOff) {
     drawRuntimeLandscape(inPrompt);
   } else if (inPrompt) {
+    const Palette& p = characterPalette();
+    UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
+      &portraitUsageMeterRenderState, W, H
+    );
+    if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
     drawApproval();
-    drawUsageMeter(spr, W, H);
+    if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
     spr.pushSprite(0, 0);
   } else if (landscapeClock) {
     drawClock();
   } else if (!napping && !screenOff) {
+    const Palette& p = characterPalette();
+    UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
+      &portraitUsageMeterRenderState, W, H
+    );
+    if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
     if (blePasskey()) drawPasskey();
     else if (clocking) drawClock();
     else if (displayMode == DISP_INFO) drawInfo();
@@ -1680,7 +1698,7 @@ void loop() {
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
-    drawUsageMeter(spr, W, H);
+    if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
     spr.pushSprite(0, 0);
   }
 

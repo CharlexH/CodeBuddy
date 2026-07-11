@@ -36,6 +36,11 @@ struct UsageMeterRenderDecision {
   bool clear;
 };
 
+struct UsageMeterRenderFrame {
+  UsageMeterRenderPlan plan;
+  UsageMeterRenderDecision decision;
+};
+
 inline bool usageMeterValidPair(int fiveHourRemaining, int sevenDayRemaining) {
   return fiveHourRemaining >= 0 && fiveHourRemaining <= 100 &&
          sevenDayRemaining >= 0 && sevenDayRemaining <= 100;
@@ -125,4 +130,17 @@ inline UsageMeterRenderPlan usageMeterRenderPlan(
     USAGE_METER_SEVEN_DAY,
   };
   return plan;
+}
+
+inline UsageMeterRenderFrame usageMeterPrepareFrame(
+  UsageMeterRenderState* renderState,
+  bool connected,
+  const UsageMeterState& usage,
+  uint16_t fullWidth,
+  uint16_t fullHeight
+) {
+  UsageMeterRenderPlan plan = connected
+    ? usageMeterRenderPlan(usage, fullWidth, fullHeight)
+    : UsageMeterRenderPlan{};
+  return {plan, usageMeterRenderTransition(renderState, plan.count > 0)};
 }

@@ -100,6 +100,29 @@ int main() {
     "invalid usage should not move the approval footer"
   );
 
+  UsageMeterRenderState portraitState = {};
+  UsageMeterRenderFrame portraitVisible = usageMeterPrepareFrame(
+    &portraitState, true, meterUsage, 135, 240
+  );
+  expect_true(portraitVisible.decision.draw && !portraitVisible.decision.clear,
+              "a visible portrait meter should paint without first clearing the sprite");
+  expect_true(portraitVisible.plan.count == 4,
+              "a visible portrait meter should retain its full six-pixel plan");
+
+  UsageMeterRenderFrame portraitHidden = usageMeterPrepareFrame(
+    &portraitState, true, noMeterUsage, 135, 240
+  );
+  expect_true(!portraitHidden.decision.draw && portraitHidden.decision.clear,
+              "a hidden portrait meter should clear the stale strip before other sprite content");
+  expect_true(portraitHidden.plan.count == 0,
+              "a hidden portrait meter should not repaint any meter rectangles");
+
+  UsageMeterRenderFrame portraitStillHidden = usageMeterPrepareFrame(
+    &portraitState, true, noMeterUsage, 135, 240
+  );
+  expect_true(!portraitStillHidden.decision.draw && !portraitStillHidden.decision.clear,
+              "a hidden portrait meter should not repeatedly clear the sprite");
+
   UsageMeterRenderState landscapeState = {};
   UsageMeterRenderDecision firstVisible = usageMeterRenderTransition(&landscapeState, true);
   expect_true(firstVisible.draw && !firstVisible.clear,
