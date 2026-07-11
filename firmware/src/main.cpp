@@ -390,6 +390,11 @@ static uint8_t runtimeOrient = 0;
 static int8_t  runtimeOrientFrames = 0;
 static int8_t  runtimeSwapFrames = 0;
 static uint8_t paintedRuntimeOrient = 0;
+static RuntimeLandscapeRenderState runtimeLandscapeRenderState = {};
+static bool    runtimeHudPrepared = false;
+static uint32_t runtimeHudContentRevision = 0;
+static uint8_t runtimeHudMaxBack = 0;
+static bool    runtimeLandscapePromptVisible = false;
 static bool    _clockHostTimeValid = false;
 static int64_t _clockHostLocalEpoch = 0;
 static uint32_t _clockHostSyncMs = 0;
@@ -1025,7 +1030,58 @@ void drawHUD() {
   }
 }
 
-static void drawLandscapeApproval(const Palette& p) {
+static uint32_t runtimeLandscapeHashText(uint32_t hash, const char* text) {
+  if (!text) return hash ^ 0xFFU;
+  for (const unsigned char* p = (const unsigned char*)text; *p; ++p) {
+    hash = (hash ^ *p) * 16777619UL;
+  }
+  return (hash ^ 0xFFU) * 16777619UL;
+}
+
+static uint32_t runtimeHudRevision() {
+  uint32_t hash = 2166136261UL ^ tama.lineGen;
+  hash = (hash ^ tama.nLines) * 16777619UL;
+  hash = runtimeLandscapeHashText(hash, tama.msg);
+  for (uint8_t i = 0; i < tama.nLines; ++i) {
+    hash = runtimeLandscapeHashText(hash, tama.lines[i]);
+  }
+  return hash;
+}
+
+static uint8_t runtimeHudScrollOffset(uint32_t now, uint32_t revision) {
+  if (!runtimeHudPrepared || runtimeHudContentRevision != revision) {
+    char disp[32][48] = {};
+    uint8_t nDisp = 0;
+    for (uint8_t i = 0; i < tama.nLines && nDisp < 32; ++i) {
+      nDisp += utf8WrapInto(tama.lines[i], &disp[nDisp], 32 - nDisp, 36);
+    }
+    runtimeHudMaxBack = (nDisp > 3) ? (nDisp - 3) : 0;
+    runtimeHudContentRevision = revision;
+    runtimeHudPrepared = true;
+    msgScroll = 0;
+    lastLineGen = tama.lineGen;
+    hudScrollStartedMs = now;
+    wake();
+  }
+  return utf8AutoScrollOffset(runtimeHudMaxBack, now - hudScrollStartedMs);
+}
+
+static uint32_t runtimePromptRevision() {
+  uint32_t hash = 2166136261UL;
+  hash = runtimeLandscapeHashText(hash, tama.promptId);
+  hash = runtimeLandscapeHashText(hash, tama.promptTool);
+  hash = runtimeLandscapeHashText(hash, tama.promptHint);
+  return responseSent ? (hash ^ 0xA5A5A5A5UL) : hash;
+}
+
+static uint8_t runtimePromptScrollOffset(uint32_t now) {
+  char hintLines[8][48] = {};
+  uint8_t hintRows = utf8WrapInto(tama.promptHint, hintLines, 8, 36, false);
+  uint8_t hintBack = (hintRows > 2) ? (hintRows - 2) : 0;
+  return utf8AutoScrollOffset(hintBack, now - promptArrivedMs);
+}
+
+static void drawLandscapeApproval(const Palette& p, uint8_t hintOffset) {
   const int LW = 240, LH = 135, AREA = 88;
   M5.Lcd.fillRect(0, LH - AREA, LW, AREA, p.bg);
   M5.Lcd.drawFastHLine(0, LH - AREA, LW, p.textDim);
@@ -1048,8 +1104,6 @@ static void drawLandscapeApproval(const Palette& p) {
 
   char hintLines[8][48] = {};
   uint8_t hintRows = utf8WrapInto(tama.promptHint, hintLines, 8, 36, false);
-  uint8_t hintBack = (hintRows > 2) ? (hintRows - 2) : 0;
-  uint8_t hintOffset = utf8AutoScrollOffset(hintBack, millis() - promptArrivedMs);
   M5.Lcd.setTextColor(p.textDim, p.bg);
   for (uint8_t i = 0; i < 2 && (hintOffset + i) < hintRows; ++i) {
     useUtf8FontForText(M5.Lcd, hintLines[hintOffset + i], &fonts::efontCN_12);
@@ -1072,19 +1126,12 @@ static void drawLandscapeApproval(const Palette& p) {
   }
 }
 
-static void drawLandscapeHUD(const Palette& p) {
+static void drawLandscapeHUD(const Palette& p, uint8_t scrollOffset) {
   const int LW = 240, LH = 135;
   const int SHOW = 3, LINE_HEIGHT = 12, WIDTH = 36;
   const int AREA = SHOW * LINE_HEIGHT + 4;
   M5.Lcd.fillRect(0, LH - AREA, LW, AREA, p.bg);
   M5.Lcd.setTextSize(1);
-
-  if (tama.lineGen != lastLineGen) {
-    msgScroll = 0;
-    lastLineGen = tama.lineGen;
-    hudScrollStartedMs = millis();
-    wake();
-  }
 
   if (tama.nLines == 0) {
     char msgLine[48];
@@ -1106,8 +1153,7 @@ static void drawLandscapeHUD(const Palette& p) {
     nDisp += got;
   }
 
-  uint8_t maxBack = (nDisp > SHOW) ? (nDisp - SHOW) : 0;
-  msgScroll = utf8AutoScrollOffset(maxBack, millis() - hudScrollStartedMs);
+  msgScroll = scrollOffset;
   int end = (int)nDisp - msgScroll;
   int start = end - SHOW;
   if (start < 0) start = 0;
@@ -1130,23 +1176,53 @@ static void drawLandscapeHUD(const Palette& p) {
 
 static void drawRuntimeLandscape(bool inPrompt) {
   const Palette& p = characterPalette();
+  uint32_t now = millis();
   M5.Lcd.setRotation(runtimeOrient);
   bool repaint = paintedRuntimeOrient != runtimeOrient;
-  if (repaint) {
+  bool overlayVisible = inPrompt || settings().hud;
+  uint32_t overlayContentRevision = 0;
+  uint32_t overlayTimeRevision = 0;
+  uint8_t overlayScrollOffset = 0;
+  if (inPrompt) {
+    overlayContentRevision = runtimePromptRevision();
+    overlayTimeRevision = (now - promptArrivedMs) / 1000;
+    overlayScrollOffset = runtimePromptScrollOffset(now);
+  } else if (settings().hud) {
+    overlayContentRevision = runtimeHudRevision();
+    overlayScrollOffset = runtimeHudScrollOffset(now, overlayContentRevision);
+  }
+  RuntimeLandscapeRenderDecision decision = runtimeLandscapeSchedule(
+    &runtimeLandscapeRenderState,
+    now,
+    repaint,
+    overlayVisible,
+    overlayContentRevision,
+    overlayTimeRevision,
+    overlayScrollOffset
+  );
+  bool clearPrompt = runtimeLandscapePromptVisible && !inPrompt;
+  if (decision.repaint) {
     M5.Lcd.fillScreen(p.bg);
     paintedRuntimeOrient = runtimeOrient;
   }
 
-  if (buddyMode) {
+  if (clearPrompt) M5.Lcd.fillRect(0, 47, 240, 48, p.bg);
+
+  bool renderPet = decision.pet && (!inPrompt || decision.repaint || clearPrompt);
+  if (renderPet && buddyMode) {
     M5.Lcd.fillRect(0, 0, 115, 90, p.bg);
     buddyRenderTo(&M5.Lcd, activeState);
-  } else {
+  } else if (renderPet) {
     characterSetState(activeState);
     characterRenderTo(&M5.Lcd, 57, 45);
   }
 
-  if (inPrompt) drawLandscapeApproval(p);
-  else if (settings().hud) drawLandscapeHUD(p);
+  if (decision.overlay) {
+    if (inPrompt) drawLandscapeApproval(p, overlayScrollOffset);
+    else if (settings().hud) drawLandscapeHUD(p, overlayScrollOffset);
+    else M5.Lcd.fillRect(0, 90, 240, 45, p.bg);
+  }
+  runtimeLandscapePromptVisible = inPrompt;
   M5.Lcd.setRotation(0);
 }
 
@@ -1463,6 +1539,9 @@ void loop() {
       buddySetPeek(true);
     } else {
       applyDisplayMode();
+      runtimeLandscapeRenderState = {};
+      runtimeHudPrepared = false;
+      runtimeLandscapePromptVisible = false;
     }
     characterInvalidate();
     if (buddyMode) buddyInvalidate();
