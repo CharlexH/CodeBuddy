@@ -551,6 +551,7 @@ static void drawSharedClockFaceTo(
   const Palette& p = characterPalette();
   const SharedClockFaceLayout layout = sharedClockFaceLayout(landscape);
   const bool fieldsValid = clockSharedFieldsValid(
+    dataRtcValid() || _clockHostTimeValid,
     _clkTm.Hours,
     _clkTm.Minutes,
     _clkTm.Seconds,

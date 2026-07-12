@@ -56,11 +56,13 @@ int main() {
   clockFormatSharedDateLine(buf, sizeof(buf), true, false, 6, 4, 20);
   expect_str_eq(buf, "--- --- --", "an invalid shared-face date should use a fixed-width placeholder");
 
-  expect_true(clockSharedFieldsValid(23, 59, 59, 6, 12, 31),
-              "guarded host or RTC fields should be accepted when every clock field is valid");
-  expect_true(!clockSharedFieldsValid(23, 59, 60, 6, 12, 31),
+  expect_true(clockSharedFieldsValid(true, 23, 59, 59, 6, 12, 31),
+              "trusted host-synced fields should be accepted when every clock field is valid");
+  expect_true(!clockSharedFieldsValid(false, 23, 59, 59, 6, 12, 31),
+              "numerically valid but never-synced RTC fields must remain untrusted");
+  expect_true(!clockSharedFieldsValid(true, 23, 59, 60, 6, 12, 31),
               "invalid seconds should invalidate the complete shared clock value");
-  expect_true(!clockSharedFieldsValid(23, 59, 59, 7, 12, 31),
+  expect_true(!clockSharedFieldsValid(true, 23, 59, 59, 7, 12, 31),
               "invalid weekdays should invalidate the retained shared date");
 
   SharedClockFaceCache standby = {};

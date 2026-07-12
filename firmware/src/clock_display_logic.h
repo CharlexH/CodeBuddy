@@ -57,6 +57,7 @@ inline void clockFormatWeekDateLine(char* out, size_t size, int weekday, int mon
 }
 
 inline bool clockSharedFieldsValid(
+  bool timeTrusted,
   int hours,
   int minutes,
   int seconds,
@@ -64,7 +65,8 @@ inline bool clockSharedFieldsValid(
   int month,
   int date
 ) {
-  return clockValueInRange(hours, 0, 23) &&
+  return timeTrusted &&
+    clockValueInRange(hours, 0, 23) &&
     clockValueInRange(minutes, 0, 59) &&
     clockValueInRange(seconds, 0, 59) &&
     clockValueInRange(weekday, 0, 6) &&
