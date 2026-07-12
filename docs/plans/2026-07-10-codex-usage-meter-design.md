@@ -2,7 +2,7 @@
 
 ## Goal
 
-Show the current Codex 5-hour and 7-day remaining allowances as one flush, bottom-edge meter on StickS3, without exposing account credentials to the device.
+Show the current Codex 5-hour and 7-day remaining allowances as two clearly separated bottom bars on StickS3, without exposing account credentials to the device.
 
 ## Data source
 
@@ -35,12 +35,14 @@ BLE snapshots gain an optional compact object:
 
 The firmware treats the object as atomic: it renders nothing unless both values are integers in `0..100`. Older hosts simply omit it, and older firmware ignores it.
 
-The meter is six physical pixels high, begins at `x=0`, ends at the rightmost pixel, and is drawn at `y=screen-height-6`. It is visually one bar made of two touching three-pixel lanes with no border or gap:
+Each bar is six physical pixels high. Both bars are inset two pixels from the left and right edges, separated vertically by two pixels, and the lower bar is inset two pixels from the physical bottom. The complete reserved footprint is therefore sixteen pixels high:
 
-- upper lane: bright green from the left through the 5-hour remaining percent; its unfilled portion is near-black grey-green;
-- lower lane: deep green from the left through the 7-day remaining percent; its unfilled portion is the same near-black grey-green.
+- upper bar: `x=2`, `y=screen-height-16`, `width=screen-width-4`, `height=6`; bright green from the left through the 5-hour remaining percent, with a near-black grey-green unfilled portion;
+- two-pixel background gap;
+- lower bar: `x=2`, `y=screen-height-8`, `width=screen-width-4`, `height=6`; deep green from the left through the 7-day remaining percent, with the same near-black grey-green unfilled portion;
+- two-pixel background margin below the lower bar.
 
-The lanes share the same base and edges, so they are a single combined meter rather than two separated controls. It is painted last on portrait sprites and on direct landscape LCD paths, including the normal HUD, approval card, clock, menus, and settings, so it remains flush at the physical bottom without changing the existing layout or touch/button targets.
+The two bars remain independent because the 5-hour and 7-day percentages are separate rolling windows. The full sixteen-pixel footprint is reserved above approval footer text and cleared as one region when usage becomes unavailable. It is painted last on portrait sprites and on direct landscape LCD paths, including the normal HUD, approval card, clock, menus, and settings, without changing button targets.
 
 ## Failure behavior
 
