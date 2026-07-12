@@ -50,6 +50,8 @@ PersonaState activeState = P_SLEEP;
 UsageMeterRenderState clockUsageMeterRenderState = {};
 UsageMeterRenderState runtimeUsageMeterRenderState = {};
 UsageMeterRenderState portraitUsageMeterRenderState = {};
+SharedClockFaceCache standbyClockFaceCache = {};
+SharedClockFaceCache runtimeClockFaceCache = {};
 uint32_t     oneShotUntil = 0;
 uint32_t     lastShakeCheck = 0;
 float        accelBaseline = 1.0f;
@@ -454,19 +456,23 @@ void drawMenu() {
 static uint8_t clockOrient   = 0;
 static int8_t  orientFrames  = 0;
 static int8_t  clockSwapFrames = 0;
-static uint8_t paintedOrient = 0;
 static uint8_t runtimeOrient = 0;
 static int8_t  runtimeOrientFrames = 0;
 static int8_t  runtimeSwapFrames = 0;
 static uint8_t paintedRuntimeOrient = 0;
 static RuntimeLandscapeRenderState runtimeLandscapeRenderState = {};
 static bool    runtimeLandscapePromptVisible = false;
+static bool    previousStandbyClockFace = false;
+static bool    previousLandscapeClockFace = false;
+static bool    previousRuntimeSharedFace = false;
+static bool    previousLandscapeRuntime = false;
+static bool    previousPromptVisible = false;
 static bool    _clockHostTimeValid = false;
 static int64_t _clockHostLocalEpoch = 0;
 static uint32_t _clockHostSyncMs = 0;
 // RTC and IMU share an I2C bus. Reading the RTC at 60fps starves the IMU
 // reads in clockUpdateOrient — orientation detection gets noisy. Cache the
-// time once per second; mood logic and drawClock both read from here.
+// time once per second; mood logic and the shared clock face read this cache.
 static RTC_TimeTypeDef _clkTm;
 static RTC_DateTypeDef _clkDt;
 uint32_t               _clkLastRead = 0;   // zeroed by data.h on time-sync
@@ -530,85 +536,165 @@ static void runtimeUpdateOrient() {
   );
 }
 
-static uint8_t clockDow() { return _clkDt.WeekDay % 7; }
-static void drawClock() {
+static uint8_t clockDow() { return _clkDt.WeekDay; }
+
+template <typename Canvas>
+static void drawSharedClockFaceTo(
+  Canvas& canvas,
+  bool landscape,
+  uint8_t orientation,
+  SharedClockFaceCache* cache,
+  UsageMeterRenderState* meterState,
+  bool forceFullRepaint,
+  bool promptExited
+) {
   const Palette& p = characterPalette();
-  char hm[6]; clockFormatHm(hm, sizeof(hm), _clkTm.Hours, _clkTm.Minutes);
-  char ss[4]; clockFormatSeconds(ss, sizeof(ss), _clkTm.Seconds);
-  char dl[8]; clockFormatDateLine(dl, sizeof(dl), _clkDt.Month, _clkDt.Date);
-
-  if (clockOrient == 0) {
-    paintedOrient = 0;
-    // Bottom half — buddy naturally lives at y=0..82, GIF peeks at top
-    // via peek mode. Clearing from 90 leaves both untouched.
-    spr.fillRect(0, 90, W, H - 90, p.bg);
-    spr.setTextDatum(MC_DATUM);
-    spr.setTextSize(4); spr.setTextColor(p.text, p.bg);    spr.drawString(hm, CX, 140);
-    spr.setTextSize(2); spr.setTextColor(p.textDim, p.bg); spr.drawString(ss, CX, 175);
-    spr.setTextSize(1);                                     spr.drawString(dl, CX, 200);
-    spr.setTextDatum(TL_DATUM);
-    return;
-  }
-
-  // Landscape: 240×135 direct-to-LCD. Full fill only on entry; after that
-  // text glyph bg cells repaint themselves and the pet box (small, ~90×50)
-  // gets a fillRect each pet tick — small enough not to tear.
-  M5.Lcd.setRotation(clockOrient);
-  static uint8_t lastSec = 0xFF;
-  bool repaint = paintedOrient != clockOrient;
-  if (repaint) {
-    M5.Lcd.fillScreen(p.bg);
-    paintedOrient = clockOrient;
-    lastSec = 0xFF;
-    usageMeterRenderReset(&clockUsageMeterRenderState);
-  }
-  UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
-    &clockUsageMeterRenderState, 240, 135, repaint
+  const SharedClockFaceLayout layout = sharedClockFaceLayout(landscape);
+  const bool fieldsValid = clockSharedFieldsValid(
+    _clkTm.Hours,
+    _clkTm.Minutes,
+    _clkTm.Seconds,
+    _clkDt.WeekDay,
+    _clkDt.Month,
+    _clkDt.Date
   );
-  if (meterFrame.decision.clear) {
-    clearUsageMeter(M5.Lcd, 240, 135, p.bg);
+
+  // Opening a new GIF state can clear the portrait sprite. Do it before the
+  // cache decision so a persona transition and its text repaint are atomic.
+  if (!buddyMode) {
+    characterSetPeek(true);
+    characterSetState(activeState);
   }
 
-  // Seconds tick at 1Hz; redrawing 3 strings at 60fps is 180 SPI ops/sec
-  // for nothing. Gate on the second changing (or full repaint).
-  if (repaint || _clkTm.Seconds != lastSec) {
-    lastSec = _clkTm.Seconds;
-    char wdl[16]; clockFormatWeekDateLine(wdl, sizeof(wdl), clockDow(), _clkDt.Month, _clkDt.Date);
-    char ssl[3];
-    if (clockValueInRange(_clkTm.Seconds, 0, 59)) snprintf(ssl, sizeof(ssl), "%02d", (int)_clkTm.Seconds);
-    else snprintf(ssl, sizeof(ssl), "--");
-    M5.Lcd.setTextDatum(MC_DATUM);
-    M5.Lcd.setTextSize(3); M5.Lcd.setTextColor(p.text, p.bg);    M5.Lcd.drawString(hm, 170, 42);
-    M5.Lcd.setTextSize(2); M5.Lcd.setTextColor(p.textDim, p.bg); M5.Lcd.drawString(ssl, 170, 72);
-                                                                  M5.Lcd.drawString(wdl, 170, 102);
-    M5.Lcd.setTextDatum(TL_DATUM);
-    M5.Lcd.setTextSize(1);
+  UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
+    meterState, layout.screenWidth, layout.screenHeight, false
+  );
+  SharedClockFaceRenderDecision decision = clockSharedFaceSchedule(
+    cache,
+    millis(),
+    orientation,
+    fieldsValid ? _clkTm.Seconds : -1,
+    fieldsValid ? _clkDt.WeekDay : -1,
+    fieldsValid ? _clkDt.Month : -1,
+    fieldsValid ? _clkDt.Date : -1,
+    activeState,
+    forceFullRepaint,
+    promptExited,
+    meterFrame.decision.draw || meterFrame.decision.clear,
+    false
+  );
+
+  if (decision.clearSurface) {
+    canvas.fillScreen(p.bg);
+    usageMeterRenderReset(meterState);
+    meterFrame = usageMeterFrameForDisplay(
+      meterState, layout.screenWidth, layout.screenHeight, true
+    );
+  } else if (meterFrame.decision.clear) {
+    clearUsageMeter(canvas, layout.screenWidth, layout.screenHeight, p.bg);
   }
 
-  // Pet on left at 5 fps. Clear includes the overlay-particle zone above
-  // the body (y<30) — species draw Zzz/hearts there via BUDDY_Y_OVERLAY=6
-  // which doesn't go through _yb, so the box has to cover it.
-  static uint32_t lastPetTick = 0;
-  if (millis() - lastPetTick >= 200) {
-    lastPetTick = millis();
+  // A functional screen may have selected a proportional/UTF-8 font before
+  // this face. Restore the default fixed font before applying pixel geometry.
+  useDefaultTextFont(canvas);
+  if (decision.drawTime) {
+    char hm[6];
+    char seconds[4];
+    clockFormatSharedTimeSegments(
+      hm,
+      sizeof(hm),
+      seconds,
+      sizeof(seconds),
+      fieldsValid,
+      _clkTm.Hours,
+      _clkTm.Minutes,
+      _clkTm.Seconds
+    );
+    canvas.setTextDatum(TL_DATUM);
+    canvas.setTextSize(layout.time.textSize);
+    canvas.setTextColor(p.text, p.bg);
+    canvas.drawString(hm, layout.time.primary.x, layout.time.primary.y);
+    canvas.setTextColor(p.textDim, p.bg);
+    canvas.drawString(seconds, layout.time.seconds.x, layout.time.seconds.y);
+  }
+
+  if (decision.drawDate) {
+    char dateLine[16];
+    clockFormatSharedDateLine(
+      dateLine,
+      sizeof(dateLine),
+      landscape,
+      fieldsValid,
+      _clkDt.WeekDay,
+      _clkDt.Month,
+      _clkDt.Date
+    );
+    canvas.setTextDatum(MC_DATUM);
+    canvas.setTextSize(layout.date.textSize);
+    canvas.setTextColor(p.textDim, p.bg);
+    canvas.drawString(dateLine, layout.date.centerX, layout.date.centerY);
+  }
+
+  if (decision.drawPet) {
     if (buddyMode) {
-      // ASCII glyphs don't self-clear; wipe the box each tick. Species
-      // hardcode BUDDY_X_CENTER=67 / BUDDY_Y_OVERLAY=6 for particles so
-      // keep portrait coords and just swap the surface — pet lands
-      // upper-left of landscape, which is where we want it anyway.
-      M5.Lcd.fillRect(0, 0, 115, 90, p.bg);
-      buddyRenderTo(&M5.Lcd, activeState);
+      // ASCII species paint sparse glyphs and particles, so clear only the
+      // shared compact pet rectangle. The time and usage regions stay intact.
+      canvas.fillRect(layout.pet.x, layout.pet.y, layout.pet.width, layout.pet.height, p.bg);
+      buddyRenderTo(
+        &canvas,
+        activeState,
+        layout.pet.x + layout.pet.width / 2,
+        layout.pet.y,
+        1
+      );
     } else {
-      // Full-frame GIFs paint every pixel (transparent → pal.bg), so a
-      // per-tick clear just adds a visible black flash between wipe and
-      // last scanline. The entry fillScreen on paintedOrient change
-      // already covers the surround.
-      characterSetState(activeState);
-      characterRenderTo(&M5.Lcd, 57, 45);
+      // GIF frames repaint their own compact half-scale pixels. Avoid a pet
+      // rectangle clear here so there is no black flash before each scanline.
+      characterRenderTo(
+        &canvas,
+        layout.pet.x + layout.pet.width / 2,
+        layout.pet.y + layout.pet.height / 2
+      );
     }
   }
-  if (meterFrame.decision.draw) paintUsageMeter(M5.Lcd, meterFrame.plan);
-  M5.Lcd.setRotation(0);
+
+  // Usage is always the final layer, so no pet/text refresh can cover it.
+  if (meterFrame.decision.draw) paintUsageMeter(canvas, meterFrame.plan);
+  canvas.setTextDatum(TL_DATUM);
+  useDefaultTextFont(canvas);
+}
+
+static void drawSharedClockFace(
+  bool landscape,
+  uint8_t orientation,
+  SharedClockFaceCache* cache,
+  UsageMeterRenderState* meterState,
+  bool forceFullRepaint = false,
+  bool promptExited = false
+) {
+  if (landscape) {
+    M5.Lcd.setRotation(orientation);
+    drawSharedClockFaceTo(
+      M5.Lcd,
+      true,
+      orientation,
+      cache,
+      meterState,
+      forceFullRepaint,
+      promptExited
+    );
+    M5.Lcd.setRotation(0);
+    return;
+  }
+  drawSharedClockFaceTo(
+    spr,
+    false,
+    0,
+    cache,
+    meterState,
+    forceFullRepaint,
+    promptExited
+  );
 }
 
 PersonaState derive(const TamaState& s) {
@@ -1469,19 +1555,29 @@ void loop() {
 
   // blink bookkeeping
 
-  // Charging clock: takes over the home screen when on USB power, no
-  // overlays, no prompt, no live Codex data, and the RTC has been set
-  // by the bridge. Pet sleeps underneath. Exit restores Y via
-  // applyDisplayMode() so the next mode-switch isn't visually offset.
+  // Refresh once per second for both standby and active shared clock faces.
   clockRefreshRtc();   // 1Hz internal throttle; also caches _onUsb
+  SharedClockFaceContext sharedContext = {};
+  sharedContext.normalDisplay = displayMode == DISP_NORMAL;
+  sharedContext.menuVisible = menuOpen;
+  sharedContext.settingsVisible = settingsOpen;
+  sharedContext.resetVisible = resetOpen;
+  sharedContext.passkeyVisible = blePasskey() != 0;
+  sharedContext.promptVisible = inPrompt;
+  sharedContext.functionalOverrideVisible = xferActive();
+  sharedContext.otaProgressVisible = false;
   // Show the clock when nothing is happening — bridge heartbeat alone
   // doesn't count as activity (it's the only way to get the RTC synced).
-  bool clocking = displayMode == DISP_NORMAL
-               && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
-               && tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
-               && dataRtcValid() && _onUsb;
+  bool clocking = tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
+               && dataRtcValid() && _onUsb
+               && sharedClockFaceSelected(sharedContext, SHARED_CLOCK_IDLE);
+  SharedClockActivity sharedActivity = tama.sessionsRunning > 0
+    ? SHARED_CLOCK_ACTIVE
+    : tama.sessionsWaiting > 0 ? SHARED_CLOCK_WAITING : SHARED_CLOCK_IDLE;
+  bool runtimeSharedFace = (tama.sessionsRunning > 0 || tama.sessionsWaiting > 0)
+    && sharedClockFaceSelected(sharedContext, sharedActivity);
   if (clocking) clockUpdateOrient();
-  else { clockOrient = 0; orientFrames = 0; clockSwapFrames = 0; paintedOrient = 0; }
+  else { clockOrient = 0; orientFrames = 0; clockSwapFrames = 0; }
   bool landscapeClock = clocking && clockOrient != 0;
 
   // Codex activity gets the same StickS3 auto-orientation policy as the
@@ -1492,8 +1588,8 @@ void loop() {
     menuOpen,
     settingsOpen,
     resetOpen,
-    tama.sessionsRunning > 0,
-    tama.sessionsWaiting > 0,
+    runtimeSharedFace,
+    false,
     inPrompt
   );
   if (runtimeOrienting) runtimeUpdateOrient();
@@ -1504,27 +1600,38 @@ void loop() {
     paintedRuntimeOrient = 0;
   }
   bool landscapeRuntime = runtimeOrienting && runtimeOrient != 0;
+  bool portraitSharedFace = (clocking && !landscapeClock)
+    || (runtimeSharedFace && !landscapeRuntime);
 
-  static bool wasClocking = false;
-  static bool wasLandscape = false;
-  if (clocking != wasClocking || landscapeClock != wasLandscape) {
-    if (!landscapeClock || landscapeClock != wasLandscape) {
+  if (clocking != previousStandbyClockFace ||
+      landscapeClock != previousLandscapeClockFace) {
+    if (!landscapeClock || landscapeClock != previousLandscapeClockFace) {
       usageMeterRenderReset(&clockUsageMeterRenderState);
+      clockSharedFaceCacheReset(&standbyClockFaceCache);
     }
     if (clocking && !landscapeClock) characterSetPeek(true);
     else applyDisplayMode();
     characterInvalidate();
     if (buddyMode) buddyInvalidate();
-    wasClocking = clocking;
-    wasLandscape = landscapeClock;
+    previousStandbyClockFace = clocking;
+    previousLandscapeClockFace = landscapeClock;
   }
 
-  static bool wasLandscapeRuntime = false;
-  if (landscapeRuntime != wasLandscapeRuntime) {
+  if (runtimeSharedFace != previousRuntimeSharedFace) {
+    clockSharedFaceCacheReset(&runtimeClockFaceCache);
+    usageMeterRenderReset(&runtimeUsageMeterRenderState);
+    characterInvalidate();
+    if (buddyMode) buddyInvalidate();
+    if (!runtimeSharedFace) applyDisplayMode();
+    previousRuntimeSharedFace = runtimeSharedFace;
+  }
+
+  if (landscapeRuntime != previousLandscapeRuntime) {
     // Direct LCD rendering must leave the display in its native portrait
     // rotation before the sprite path resumes.
     M5.Lcd.setRotation(0);
     usageMeterRenderReset(&runtimeUsageMeterRenderState);
+    clockSharedFaceCacheReset(&runtimeClockFaceCache);
     if (landscapeRuntime) {
       characterSetPeek(true);
       buddySetPeek(true);
@@ -1535,25 +1642,18 @@ void loop() {
     }
     characterInvalidate();
     if (buddyMode) buddyInvalidate();
-    wasLandscapeRuntime = landscapeRuntime;
+    previousLandscapeRuntime = landscapeRuntime;
   }
 
-  static bool wasPromptVisible = false;
-  bool promptExited = runtimeNeedsFullRepaintOnPromptExit(wasPromptVisible, inPrompt);
-  const RuntimePetLayout portraitPetLayout = runtimePetLayout(false);
-  bool portraitRuntimePet = !landscapeRuntime
-      && !clocking
-      && displayMode == DISP_NORMAL
-      && !menuOpen
-      && !settingsOpen
-      && !resetOpen
-      && !inPrompt
-      && blePasskey() == 0;
-  characterSetRuntimeViewport(
-    portraitRuntimePet,
-    portraitPetLayout.viewportWidth,
-    portraitPetLayout.viewportHeight
-  );
+  bool promptExited = runtimeNeedsFullRepaintOnPromptExit(previousPromptVisible, inPrompt);
+  if (promptExited) {
+    // The approval scheduler owns separate overlay state. Reset it when the
+    // shared face resumes so a later prompt entry always starts cleanly.
+    runtimeLandscapeRenderState = {};
+    runtimeLandscapePromptVisible = false;
+    paintedRuntimeOrient = 0;
+  }
+  characterSetRuntimeViewport(false);
   if (promptExited && !landscapeRuntime) {
     const Palette& p = characterPalette();
     spr.fillSprite(p.bg);
@@ -1581,22 +1681,11 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
-  if (napping || screenOff || landscapeClock || landscapeRuntime) {
+  if (napping || screenOff || landscapeClock || landscapeRuntime || portraitSharedFace) {
     // skip sprite render — face-down, powered off, or a direct-to-LCD
     // landscape surface below.
   } else if (buddyMode) {
-    if (portraitRuntimePet) {
-      buddyTickRuntime(
-        activeState,
-        portraitPetLayout.centerX,
-        portraitPetLayout.asciiYOffset,
-        portraitPetLayout.asciiScale,
-        portraitPetLayout.viewportWidth,
-        portraitPetLayout.viewportHeight
-      );
-    } else {
-      buddyTick(activeState);
-    }
+    buddyTick(activeState);
   } else if (characterLoaded()) {
     characterSetState(activeState);
     characterTick();
@@ -1623,7 +1712,17 @@ void loop() {
     }
   }
   if (landscapeRuntime && !napping && !screenOff) {
-    drawRuntimeLandscape(inPrompt);
+    if (inPrompt) drawRuntimeLandscape(true);
+    else if (runtimeSharedFace) {
+      drawSharedClockFace(
+        true,
+        runtimeOrient,
+        &runtimeClockFaceCache,
+        &runtimeUsageMeterRenderState,
+        false,
+        promptExited
+      );
+    }
   } else if (inPrompt) {
     const Palette& p = characterPalette();
     UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
@@ -1634,24 +1733,48 @@ void loop() {
     if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
     spr.pushSprite(0, 0);
   } else if (landscapeClock) {
-    drawClock();
-  } else if (!napping && !screenOff) {
-    const Palette& p = characterPalette();
-    UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
-      &portraitUsageMeterRenderState, W, H, true
+    drawSharedClockFace(
+      true,
+      clockOrient,
+      &standbyClockFaceCache,
+      &clockUsageMeterRenderState
     );
-    if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
-    if (blePasskey()) drawPasskey();
-    else if (clocking) drawClock();
-    else if (displayMode == DISP_INFO) drawInfo();
-    else if (displayMode == DISP_PET) drawPet();
-    if (resetOpen) drawReset();
-    else if (settingsOpen) drawSettings();
-    else if (menuOpen) drawMenu();
-    if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
-    spr.pushSprite(0, 0);
+  } else if (!napping && !screenOff) {
+    if (clocking) {
+      drawSharedClockFace(
+        false,
+        0,
+        &standbyClockFaceCache,
+        &clockUsageMeterRenderState
+      );
+      spr.pushSprite(0, 0);
+    } else if (runtimeSharedFace) {
+      drawSharedClockFace(
+        false,
+        0,
+        &runtimeClockFaceCache,
+        &runtimeUsageMeterRenderState,
+        false,
+        promptExited
+      );
+      spr.pushSprite(0, 0);
+    } else {
+      const Palette& p = characterPalette();
+      UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
+        &portraitUsageMeterRenderState, W, H, true
+      );
+      if (meterFrame.decision.clear) clearUsageMeter(spr, W, H, p.bg);
+      if (blePasskey()) drawPasskey();
+      else if (displayMode == DISP_INFO) drawInfo();
+      else if (displayMode == DISP_PET) drawPet();
+      if (resetOpen) drawReset();
+      else if (settingsOpen) drawSettings();
+      else if (menuOpen) drawMenu();
+      if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
+      spr.pushSprite(0, 0);
+    }
   }
-  wasPromptVisible = inPrompt;
+  previousPromptVisible = inPrompt;
 
   // Face-down nap: dim immediately, pause animations, accumulate sleep time.
   // Skipped during approval — you're holding it to read, not sleeping it.

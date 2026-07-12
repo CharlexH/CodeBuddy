@@ -126,8 +126,10 @@ inline constexpr bool sharedClockFaceSelected(
   const SharedClockFaceContext& context,
   SharedClockActivity activity
 ) {
-  (void)activity;
-  return context.normalDisplay &&
+  return (activity == SHARED_CLOCK_IDLE ||
+      activity == SHARED_CLOCK_ACTIVE ||
+      activity == SHARED_CLOCK_WAITING) &&
+    context.normalDisplay &&
     !context.menuVisible &&
     !context.settingsVisible &&
     !context.resetVisible &&
@@ -141,20 +143,25 @@ inline constexpr bool sharedClockPetFrameDue(uint32_t now, uint32_t nextFrameAt)
   return (int32_t)(now - nextFrameAt) >= 0;
 }
 
-inline constexpr SharedClockFaceRenderDecision sharedClockFaceRenderDecision(
+inline constexpr bool sharedClockFaceFullRepaint(
   const SharedClockFaceRenderInput& input
 ) {
-  const bool fullRepaint = input.firstEntry ||
+  return input.firstEntry ||
     input.orientationChanged ||
     input.fullRepaintRequested ||
     input.promptExited;
+}
+
+inline constexpr SharedClockFaceRenderDecision sharedClockFaceRenderDecision(
+  const SharedClockFaceRenderInput& input
+) {
   return {
-    fullRepaint,
-    fullRepaint,
-    fullRepaint || input.secondChanged,
-    fullRepaint || input.dateChanged,
-    fullRepaint || input.petFrameDue,
-    fullRepaint || input.metersChanged || input.forceMeters,
+    sharedClockFaceFullRepaint(input),
+    sharedClockFaceFullRepaint(input),
+    sharedClockFaceFullRepaint(input) || input.secondChanged,
+    sharedClockFaceFullRepaint(input) || input.dateChanged,
+    sharedClockFaceFullRepaint(input) || input.petFrameDue,
+    sharedClockFaceFullRepaint(input) || input.metersChanged || input.forceMeters,
   };
 }
 

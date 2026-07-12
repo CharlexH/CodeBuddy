@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "shared_clock_face_logic.h"
+
 static const char CLOCK_MON[][4] = {
   "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
 };
@@ -52,4 +54,122 @@ inline void clockFormatWeekDateLine(char* out, size_t size, int weekday, int mon
     return;
   }
   snprintf(out, size, "%s %s %02d", clockWeekdayLabel(weekday), clockMonthLabel(month), date);
+}
+
+inline bool clockSharedFieldsValid(
+  int hours,
+  int minutes,
+  int seconds,
+  int weekday,
+  int month,
+  int date
+) {
+  return clockValueInRange(hours, 0, 23) &&
+    clockValueInRange(minutes, 0, 59) &&
+    clockValueInRange(seconds, 0, 59) &&
+    clockValueInRange(weekday, 0, 6) &&
+    clockValueInRange(month, 1, 12) &&
+    clockValueInRange(date, 1, 31);
+}
+
+inline void clockFormatSharedTimeSegments(
+  char* hm,
+  size_t hmSize,
+  char* seconds,
+  size_t secondsSize,
+  bool timeValid,
+  int hours,
+  int minutes,
+  int second
+) {
+  if (!timeValid) {
+    snprintf(hm, hmSize, "--:--");
+    snprintf(seconds, secondsSize, ":--");
+    return;
+  }
+  clockFormatHm(hm, hmSize, hours, minutes);
+  clockFormatSeconds(seconds, secondsSize, second);
+}
+
+inline void clockFormatSharedDateLine(
+  char* out,
+  size_t size,
+  bool includeWeekday,
+  bool dateValid,
+  int weekday,
+  int month,
+  int date
+) {
+  if (!dateValid) {
+    snprintf(out, size, includeWeekday ? "--- --- --" : "--- --");
+    return;
+  }
+  if (includeWeekday) clockFormatWeekDateLine(out, size, weekday, month, date);
+  else clockFormatDateLine(out, size, month, date);
+}
+
+struct SharedClockFaceCache {
+  bool initialized;
+  uint8_t orientation;
+  int16_t lastSecond;
+  uint16_t lastDateKey;
+  uint8_t lastPersona;
+  uint32_t nextPetFrameAt;
+};
+
+inline void clockSharedFaceCacheReset(SharedClockFaceCache* cache) {
+  if (cache == nullptr) return;
+  *cache = {};
+}
+
+inline uint16_t clockSharedDateKey(int weekday, int month, int date) {
+  return (uint16_t)(((weekday & 0x07) << 9) | ((month & 0x0F) << 5) | (date & 0x1F));
+}
+
+inline SharedClockFaceRenderDecision clockSharedFaceSchedule(
+  SharedClockFaceCache* cache,
+  uint32_t now,
+  uint8_t orientation,
+  int second,
+  int weekday,
+  int month,
+  int date,
+  uint8_t persona,
+  bool forceFullRepaint,
+  bool promptExited,
+  bool metersChanged,
+  bool forceMeters
+) {
+  if (cache == nullptr) return {};
+
+  const bool firstEntry = !cache->initialized;
+  const bool orientationChanged = cache->initialized && cache->orientation != orientation;
+  const uint16_t dateKey = clockSharedDateKey(weekday, month, date);
+  const bool secondChanged = cache->initialized && cache->lastSecond != second;
+  const bool dateChanged = cache->initialized && cache->lastDateKey != dateKey;
+  const bool personaChanged = cache->initialized && cache->lastPersona != persona;
+  const bool petFrameDue = firstEntry || personaChanged ||
+    sharedClockPetFrameDue(now, cache->nextPetFrameAt);
+
+  SharedClockFaceRenderInput input = {};
+  input.firstEntry = firstEntry;
+  input.orientationChanged = orientationChanged;
+  // Character state changes may reopen a GIF by clearing the portrait
+  // sprite, so repaint the shared text layers in the same transaction.
+  input.fullRepaintRequested = forceFullRepaint || personaChanged;
+  input.secondChanged = secondChanged;
+  input.dateChanged = dateChanged;
+  input.petFrameDue = petFrameDue;
+  input.metersChanged = metersChanged;
+  input.forceMeters = forceMeters;
+  input.promptExited = promptExited;
+  SharedClockFaceRenderDecision decision = sharedClockFaceRenderDecision(input);
+
+  cache->initialized = true;
+  cache->orientation = orientation;
+  cache->lastSecond = second;
+  cache->lastDateKey = dateKey;
+  cache->lastPersona = persona;
+  if (decision.drawPet) cache->nextPetFrameAt = now + SHARED_CLOCK_PET_FRAME_INTERVAL_MS;
+  return decision;
 }

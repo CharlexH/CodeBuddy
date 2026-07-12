@@ -43,7 +43,13 @@ int main() {
   );
   expect_true(
     !screenOrientRuntimeEligible(true, false, false, false, false, false, false),
-    "idle home screen should remain portrait"
+    "idle standby orientation should remain owned by the charging-clock policy"
+  );
+
+  expect_true(
+    screenOrientRuntimeEligible(true, false, false, false, true, false, false) ==
+      screenOrientRuntimeEligible(true, false, false, false, false, true, false),
+    "active and waiting shared faces should use the same runtime orientation eligibility"
   );
 
   RuntimeLandscapeRenderState render = {};
