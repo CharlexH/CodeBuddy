@@ -39,5 +39,21 @@ def socket_path() -> Path:
     return runtime_root() / "agent.sock"
 
 
+def ota_dir() -> Path:
+    return runtime_root() / "ota"
+
+
+def ota_private_dir() -> Path:
+    return ota_dir() / "private"
+
+
+def ota_public_dir() -> Path:
+    return ota_dir() / "public"
+
+
+def ota_releases_dir() -> Path:
+    return ota_dir() / "releases"
+
+
 def zprofile_path() -> Path:
     return Path.home() / ".zprofile"
