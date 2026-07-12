@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include "ble_bridge.h"
 #include "about_info.h"
+#include "approval_layout_logic.h"
 #include "clock_display_logic.h"
 #include "clock_orient_logic.h"
 #include "screen_orient_logic.h"
@@ -833,7 +834,10 @@ void drawInfo() {
 static void drawApproval() {
   const Palette& p = characterPalette();
   const int AREA = 84;
-  const int FOOTER_Y = H - 12 - usageMeterBottomInset();
+  const PortraitApprovalLayout layout = portraitApprovalLayout(
+    usageMeterBottomInset() > 0
+  );
+  const int FOOTER_Y = layout.footerY;
   spr.fillRect(0, H - AREA, W, AREA, p.bg);
   spr.drawFastHLine(0, H - AREA, W, p.textDim);
 
@@ -865,12 +869,14 @@ static void drawApproval() {
   // Hint wraps by display cells so multi-byte UTF-8 never gets split.
   char hintLines[8][48] = {};
   uint8_t hintRows = utf8WrapInto(tama.promptHint, hintLines, 8, 20, false);
-  uint8_t hintBack = (hintRows > 2) ? (hintRows - 2) : 0;
+  uint8_t hintBack = (hintRows > layout.maxHintRows)
+      ? (hintRows - layout.maxHintRows)
+      : 0;
   uint8_t hintOffset = utf8AutoScrollOffset(hintBack, millis() - promptArrivedMs);
   spr.setTextColor(p.textDim, p.bg);
-  for (uint8_t i = 0; i < 2 && (hintOffset + i) < hintRows; ++i) {
+  for (uint8_t i = 0; i < layout.maxHintRows && (hintOffset + i) < hintRows; ++i) {
     useUtf8FontForText(spr, hintLines[hintOffset + i], &fonts::efontCN_12);
-    spr.setCursor(4, H - AREA + 38 + i * 12);
+    spr.setCursor(4, layout.hintStartY + i * layout.hintLineHeight);
     spr.print(hintLines[hintOffset + i]);
   }
   useDefaultTextFont(spr);
