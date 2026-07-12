@@ -1194,7 +1194,8 @@ static void drawRuntimeLandscape(bool inPrompt) {
         layout.centerX,
         layout.centerY,
         layout.viewportWidth,
-        layout.viewportHeight
+        layout.viewportHeight,
+        decision.repaint
       );
     }
   }

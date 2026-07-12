@@ -52,6 +52,11 @@ static lgfx::LovyanGFX*   _tgt = &spr;
 static uint8_t     directScaleDivisor = 0;
 static int         directClipWidth = 0;
 static int         directClipHeight = 0;
+static bool        directRuntimeDirty = true;
+static bool        directGifPlacementValid = false;
+static RuntimeGifPlacement directGifPlacement = {};
+static int         directGifViewportWidth = 0;
+static int         directGifViewportHeight = 0;
 // Peek mode renders at half scale (2:1 nearest-neighbor in gifDrawCb) so
 // the whole pet fits the 70px window instead of cropping the top.
 static void gifPlace() {
@@ -304,17 +309,31 @@ void characterRenderRuntimeTo(
   int centerX,
   int centerY,
   int viewportWidth,
-  int viewportHeight
+  int viewportHeight,
+  bool forceDirty
 ) {
   uint8_t textFrameCount = 0;
   if (textMode && curState < N_STATES) textFrameCount = textStates[curState].nFrames;
+  RuntimeGifPlacement placement = {};
+  bool placementChanged = false;
+  if (!textMode && gifOpen) {
+    placement = runtimeGifPlacement(true, gifW, gifH);
+    placementChanged = !directGifPlacementValid
+        || directGifPlacement.x != placement.x
+        || directGifPlacement.y != placement.y
+        || directGifPlacement.scaleDivisor != placement.scaleDivisor
+        || directGifViewportWidth != viewportWidth
+        || directGifViewportHeight != viewportHeight;
+  }
+  bool dirty = forceDirty || directRuntimeDirty || placementChanged;
   uint32_t now = millis();
   RuntimeDirectFrameDecision decision = runtimeDirectFrameDecision(
     textMode,
     gifOpen,
     textFrameCount,
     now,
-    textMode ? textNext : nextFrameAt
+    textMode ? textNext : nextFrameAt,
+    dirty
   );
   if (!decision.render) return;
 
@@ -334,6 +353,7 @@ void characterRenderRuntimeTo(
     tgt->setCursor(placement.x, placement.y);
     tgt->print(line);
     textFrame = (textFrame + 1) % state.nFrames;
+    directRuntimeDirty = false;
     return;
   }
 
@@ -345,15 +365,13 @@ void characterRenderRuntimeTo(
   int previousClipWidth = directClipWidth;
   int previousClipHeight = directClipHeight;
 
-  directScaleDivisor = (gifW <= 236 && gifH <= 119) ? 1 : 2;
+  directScaleDivisor = placement.scaleDivisor;
   directClipWidth = viewportWidth;
   directClipHeight = viewportHeight;
   _tgt = tgt;
   peekMode = false;
-  int outputWidth = gifW / directScaleDivisor;
-  int outputHeight = gifH / directScaleDivisor;
-  gifX = centerX - outputWidth / 2;
-  gifY = centerY - outputHeight / 2;
+  gifX = placement.x;
+  gifY = placement.y;
 
   int delayMs = 0;
   if (!gif.playFrame(false, &delayMs)) {
@@ -369,6 +387,11 @@ void characterRenderRuntimeTo(
   directScaleDivisor = previousDivisor;
   directClipWidth = previousClipWidth;
   directClipHeight = previousClipHeight;
+  directRuntimeDirty = false;
+  directGifPlacementValid = true;
+  directGifPlacement = placement;
+  directGifViewportWidth = viewportWidth;
+  directGifViewportHeight = viewportHeight;
 }
 
 void characterSetRuntimeViewport(bool enabled, int width, int height) {
@@ -393,6 +416,8 @@ void characterClose() {
   loaded = false;
   textMode = false;
   curState = 0xFF;
+  directRuntimeDirty = true;
+  directGifPlacementValid = false;
 }
 
 void characterInvalidate() {
@@ -411,6 +436,7 @@ void characterInvalidate() {
 
 void characterSetState(uint8_t s) {
   if (!loaded || s >= N_STATES || s == curState) return;
+  directRuntimeDirty = true;
 
   if (textMode) {
     curState = s;

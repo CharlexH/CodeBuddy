@@ -73,12 +73,14 @@ inline RuntimeDirectFrameDecision runtimeDirectFrameDecision(
   bool gifOpen,
   uint8_t textFrameCount,
   uint32_t now,
-  uint32_t nextFrameAt
+  uint32_t nextFrameAt,
+  bool dirty
 ) {
   bool available = textMode ? textFrameCount > 0 : gifOpen;
   bool due = (int32_t)(now - nextFrameAt) >= 0;
-  bool render = available && due;
-  return RuntimeDirectFrameDecision{render, render};
+  bool render = available && (due || dirty);
+  bool clear = render && (textMode || dirty);
+  return RuntimeDirectFrameDecision{render, clear};
 }
 
 inline constexpr RuntimeTextPlacement runtimeTextPlacement(

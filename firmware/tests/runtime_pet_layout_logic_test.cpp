@@ -60,20 +60,23 @@ int main() {
               "oversized landscape GIFs should be half-scaled and centered");
 
   RuntimeDirectFrameDecision directFrame = runtimeDirectFrameDecision(
-    false, true, 0, 100, 100
+    false, true, 0, 100, 100, false
   );
-  expect_true(directFrame.render && directFrame.clear,
-              "a due direct GIF frame should clear the viewport before rendering");
-  directFrame = runtimeDirectFrameDecision(false, true, 0, 99, 100);
+  expect_true(directFrame.render && !directFrame.clear,
+              "a stable due GIF frame should self-erase without a full viewport clear");
+  directFrame = runtimeDirectFrameDecision(false, true, 0, 99, 100, false);
   expect_true(!directFrame.render && !directFrame.clear,
               "a direct GIF frame that is not due should not clear the viewport");
-  directFrame = runtimeDirectFrameDecision(true, false, 2, 100, 100);
+  directFrame = runtimeDirectFrameDecision(false, true, 0, 99, 100, true);
+  expect_true(directFrame.render && directFrame.clear,
+              "a dirty GIF placement or state should clear and render immediately");
+  directFrame = runtimeDirectFrameDecision(true, false, 2, 100, 100, false);
   expect_true(directFrame.render && directFrame.clear,
               "a due text-mode frame should render without an open GIF");
-  directFrame = runtimeDirectFrameDecision(true, false, 0, 100, 100);
+  directFrame = runtimeDirectFrameDecision(true, false, 0, 100, 100, true);
   expect_true(!directFrame.render && !directFrame.clear,
               "a text-mode state without frames should leave the viewport unchanged");
-  directFrame = runtimeDirectFrameDecision(false, false, 0, 100, 100);
+  directFrame = runtimeDirectFrameDecision(false, false, 0, 100, 100, true);
   expect_true(!directFrame.render && !directFrame.clear,
               "an unavailable direct character should leave the viewport unchanged");
 

@@ -32,7 +32,8 @@ void characterRenderRuntimeTo(
   int centerX,
   int centerY,
   int viewportWidth,
-  int viewportHeight
+  int viewportHeight,
+  bool forceDirty = false
 );
 
 const Palette& characterPalette();
