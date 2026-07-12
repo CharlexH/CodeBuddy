@@ -159,6 +159,58 @@ def test_generation_repairs_corrupt_derived_material(tmp_path):
     )
 
 
+def test_generation_atomically_repairs_legacy_ca_extensions_without_rotating_key(
+    tmp_path, monkeypatch
+):
+    trust = generate_ota_trust(tmp_path / "ota")
+    original_private_key = trust.local_ca_private_key.read_bytes()
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-new",
+            "-sha256",
+            "-key",
+            str(trust.local_ca_private_key),
+            "-out",
+            str(trust.local_ca_certificate),
+            "-days",
+            "3650",
+            "-subj",
+            "/CN=Code Buddy Local OTA CA",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    legacy_certificate = trust.local_ca_certificate.read_bytes()
+    replacements = []
+    real_replace = os.replace
+
+    def observing_replace(source, destination):
+        replacements.append(Path(destination))
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", observing_replace)
+
+    repaired = generate_ota_trust(trust.root)
+
+    assert repaired.local_ca_private_key.read_bytes() == original_private_key
+    assert repaired.local_ca_certificate.read_bytes() != legacy_certificate
+    assert trust.local_ca_certificate in replacements
+    details = subprocess.run(
+        ["openssl", "x509", "-in", str(repaired.local_ca_certificate), "-noout", "-text"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    assert b"Subject Key Identifier" in details
+    assert b"Authority Key Identifier" in details
+
+
 def test_generation_fails_closed_on_malformed_or_wrong_curve_private_key(tmp_path):
     malformed_root = tmp_path / "malformed"
     malformed = generate_ota_trust(malformed_root)

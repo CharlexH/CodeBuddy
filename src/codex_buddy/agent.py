@@ -202,6 +202,21 @@ class BuddyAgent:
         self._ble_connected = False
         self._last_payload: Optional[dict[str, object]] = None
         self._launch_sequence = 0
+        self._ota_session_lock = asyncio.Lock()
+        self._ota_session_active = False
+
+    @property
+    def ota_session_active(self) -> bool:
+        return self._ota_session_active
+
+    @contextlib.asynccontextmanager
+    async def ota_session(self):
+        async with self._ota_session_lock:
+            self._ota_session_active = True
+            try:
+                yield
+            finally:
+                self._ota_session_active = False
 
     async def run(self) -> None:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -427,8 +442,9 @@ class BuddyAgent:
         snapshot = self._snapshot()
         payload = snapshot.as_ble_payload()
         if force or payload != self._last_payload:
-            self._last_payload = payload
-            if self._ble is not None and self._ble_connected:
+            if not self._ota_session_active:
+                self._last_payload = payload
+            if not self._ota_session_active and self._ble is not None and self._ble_connected:
                 try:
                     await self._ble.send_snapshot(snapshot)
                 except Exception:

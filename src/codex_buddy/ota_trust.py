@@ -205,6 +205,10 @@ def _generate_local_ca_certificate(private_key: Path, destination: Path) -> None
             "basicConstraints=critical,CA:TRUE",
             "-addext",
             "keyUsage=critical,keyCertSign,cRLSign",
+            "-addext",
+            "subjectKeyIdentifier=hash",
+            "-addext",
+            "authorityKeyIdentifier=keyid:always",
         ],
         0o644,
     )
@@ -276,6 +280,8 @@ def _certificate_is_valid_ca(certificate: Path, expected_public_der: bytes) -> b
         certificate_public_der == expected_public_der
         and b"CA:TRUE" in details
         and b"Certificate Sign" in details
+        and b"Subject Key Identifier" in details
+        and b"Authority Key Identifier" in details
     )
 
 

@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from codex_buddy.agent import BuddyAgent, ManagedSessionRuntime
 from codex_buddy.catalog import SessionPrompt
 from codex_buddy.events import ApprovalRequest, TurnState
@@ -69,6 +71,32 @@ def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(
     )
 
     assert agent._snapshot().as_ble_payload()["usage"] is None
+
+
+def test_agent_ota_session_suspends_snapshots_and_releases_after_failure(tmp_path):
+    async def exercise():
+        agent = BuddyAgent(tmp_path / "state.json", watcher=None)
+        ble = _CapturingBle()
+        agent._ble = ble
+        agent._ble_connected = True
+
+        await agent._publish_state(force=True)
+        assert len(ble.sent_payloads) == 1
+
+        with pytest.raises(RuntimeError, match="install failed"):
+            async with agent.ota_session():
+                assert agent.ota_session_active is True
+                await agent._publish_state(force=True)
+                assert len(ble.sent_payloads) == 1
+                raise RuntimeError("install failed")
+
+        assert agent.ota_session_active is False
+        async with agent.ota_session():
+            assert agent.ota_session_active is True
+        await agent._publish_state(force=True)
+        assert len(ble.sent_payloads) == 2
+
+    asyncio.run(exercise())
 
 
 def test_agent_launch_registers_managed_session_and_routes_device_approval(tmp_path):

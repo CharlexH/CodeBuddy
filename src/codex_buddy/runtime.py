@@ -55,5 +55,9 @@ def ota_releases_dir() -> Path:
     return ota_dir() / "releases"
 
 
+def ota_sessions_dir() -> Path:
+    return ota_private_dir() / "sessions"
+
+
 def zprofile_path() -> Path:
     return Path.home() / ".zprofile"
