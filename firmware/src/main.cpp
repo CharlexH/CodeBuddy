@@ -231,6 +231,7 @@ const uint8_t SETTINGS_N = settingsMenuItemCount();
 bool    wifiMenuOpen   = false;
 bool    wifiStatusOpen = false;
 uint8_t wifiMenuSel    = 0;
+bool    otaReceiveScreen = false;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -264,6 +265,19 @@ static void applySetting(uint8_t idx) {
     case SETTINGS_LED: s.led = !s.led; break;
     case SETTINGS_CLOCK_ROTATION: s.clockRot = (s.clockRot + 1) % 3; break;
     case SETTINGS_PET: nextPet(); return;
+    case SETTINGS_OTA_UPDATE:
+      if (!wifiManagerProvisioned()) {
+        settingsOpen = false;
+        wifiMenuOpen = true;
+        wifiStatusOpen = false;
+        wifiMenuSel = 0;
+      } else {
+        otaOfferOpenReceiveWindow(&tama.otaOffer, millis(), true);
+        settingsOpen = false;
+        otaReceiveScreen = true;
+      }
+      invalidatePortraitSurface();
+      return;
     case SETTINGS_RESET:
       resetOpen = true;
       resetSel = 0;
@@ -467,6 +481,30 @@ static void drawWifiStatus() {
     spr.setCursor(mx + 7, my + 31); spr.print(clipped[0] ? clipped : "Not configured");
   }
   drawMenuHints(p, mx, mw, my + mh - 12, "", wifi.portalActive ? "Cancel" : "Back");
+}
+
+static void drawOtaReceiveWindow() {
+  const Palette& p = characterPalette();
+  int mw = 124, mh = 112;
+  int mx = (W - mw) / 2, my = (H - mh) / 2;
+  spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
+  spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
+  spr.setTextSize(1);
+  spr.setTextColor(p.text, PANEL);
+  spr.setCursor(mx + 7, my + 9); spr.print("OTA READY");
+  spr.setTextColor(p.textDim, PANEL);
+  spr.setCursor(mx + 7, my + 30); spr.print("Run on your Mac:");
+  spr.setTextColor(p.body, PANEL);
+  spr.setCursor(mx + 7, my + 47); spr.print("code-buddy update");
+  spr.setTextColor(p.textDim, PANEL);
+  uint32_t now = millis();
+  uint32_t remaining = otaOfferWindowActive(tama.otaOffer, now)
+    ? (tama.otaOffer.windowDeadlineMs - now + 999) / 1000 : 0;
+  spr.setCursor(mx + 7, my + 67);
+  spr.printf("Window: %lus", (unsigned long)remaining);
+  spr.setCursor(mx + 7, my + 83);
+  spr.print(tama.otaOffer.pending ? "Request received" : "Waiting for Mac");
+  drawMenuHints(p, mx, mw, my + mh - 12, "", "Cancel");
 }
 
 static void applyWifiMenuAction() {
@@ -1531,6 +1569,8 @@ void loop() {
       // Jump to the approval screen no matter what was open.
       displayMode = DISP_NORMAL;
       menuOpen = settingsOpen = resetOpen = false;
+      otaReceiveScreen = false;
+      otaOfferCancel(&tama.otaOffer);
       applyDisplayMode();
       characterInvalidate();
       if (buddyMode) buddyInvalidate();
@@ -1539,6 +1579,10 @@ void loop() {
 
   bool inPrompt = tama.promptId[0] && !responseSent;
   wifiManagerPoll(inPrompt);
+  if (otaReceiveScreen && !otaOfferWindowActive(tama.otaOffer, now)) {
+    otaReceiveScreen = false;
+    invalidatePortraitSurface();
+  }
 
   if (VALIDATION_UI) {
     napping = false;
@@ -1601,7 +1645,13 @@ void loop() {
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
     beep(800, 60);
-    if (wifiStatusOpen) {
+    if (otaReceiveScreen) {
+      otaOfferCancel(&tama.otaOffer);
+      otaReceiveScreen = false;
+      settingsOpen = true;
+      invalidatePortraitSurface();
+    }
+    else if (wifiStatusOpen) {
       if (wifiManagerUiActive()) wifiManagerCancelProvisioning();
       wifiStatusOpen = false;
       wifiMenuOpen = true;
@@ -1634,6 +1684,8 @@ void loop() {
         statsOnApproval(tookS);
         beep(2400, 60);
         if (tookS < 5) triggerOneShot(P_HEART, 2000);
+      } else if (otaReceiveScreen) {
+        // Receive window is informational; B cancels it.
       } else if (resetOpen) {
         beep(1800, 30);
         resetSel = (resetSel + 1) % RESET_N;
@@ -1672,6 +1724,12 @@ void loop() {
       responseSent = true;
       statsOnDenial();
       beep(600, 60);
+    } else if (otaReceiveScreen) {
+      beep(600, 40);
+      otaOfferCancel(&tama.otaOffer);
+      otaReceiveScreen = false;
+      settingsOpen = true;
+      invalidatePortraitSurface();
     } else if (wifiStatusOpen) {
       beep(2400, 30);
       if (wifiManagerUiActive()) wifiManagerCancelProvisioning();
@@ -1708,11 +1766,13 @@ void loop() {
   SharedClockFaceContext sharedContext = {};
   sharedContext.normalDisplay = displayMode == DISP_NORMAL;
   sharedContext.menuVisible = menuOpen;
-  sharedContext.settingsVisible = settingsOpen || wifiMenuOpen || wifiStatusOpen;
+  sharedContext.settingsVisible = settingsOpen || wifiMenuOpen || wifiStatusOpen
+    || otaReceiveScreen;
   sharedContext.resetVisible = resetOpen;
   sharedContext.passkeyVisible = blePasskey() != 0;
   sharedContext.promptVisible = inPrompt;
-  sharedContext.functionalOverrideVisible = xferActive() || wifiManagerUiActive();
+  sharedContext.functionalOverrideVisible = xferActive() || wifiManagerUiActive()
+    || otaReceiveScreen;
   sharedContext.otaProgressVisible = false;
   // Show the clock when nothing is happening — bridge heartbeat alone
   // doesn't count as activity (it's the only way to get the RTC synced).
@@ -1734,7 +1794,7 @@ void loop() {
   bool runtimeOrienting = screenOrientRuntimeEligible(
     displayMode == DISP_NORMAL,
     menuOpen,
-    settingsOpen || wifiMenuOpen || wifiStatusOpen,
+    settingsOpen || wifiMenuOpen || wifiStatusOpen || otaReceiveScreen,
     resetOpen,
     runtimeSharedFace,
     false,
@@ -1915,7 +1975,8 @@ void loop() {
       if (blePasskey()) drawPasskey();
       else if (displayMode == DISP_INFO) drawInfo();
       else if (displayMode == DISP_PET) drawPet();
-      if (wifiStatusOpen) drawWifiStatus();
+      if (otaReceiveScreen) drawOtaReceiveWindow();
+      else if (wifiStatusOpen) drawWifiStatus();
       else if (wifiMenuOpen) drawWifiMenu();
       else if (resetOpen) drawReset();
       else if (settingsOpen) drawSettings();

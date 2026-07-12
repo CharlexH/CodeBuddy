@@ -27,7 +27,7 @@ _RFC1918_NETWORKS = tuple(
     ipaddress.ip_network(network)
     for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
-_TOKEN = re.compile(r"^[A-Za-z0-9_-]{24,}$")
+_TOKEN = re.compile(r"^[A-Za-z0-9_-]{24,127}$")
 _HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _STATUS_PHRASES = {
     200: "OK",
@@ -273,7 +273,7 @@ class OtaRequestRouter:
         expected_firmware_url: str,
     ) -> None:
         if not _TOKEN.fullmatch(token):
-            raise ValueError("OTA URL token must be at least 24 URL-safe characters")
+            raise ValueError("OTA URL token must be 24-127 URL-safe characters")
         generation = Path(release.generation_dir).resolve()
         resources = {
             "manifest.json": Path(release.manifest),
@@ -410,7 +410,7 @@ class OtaEndpointReservation:
         host = select_private_lan_ipv4(discovery=address_discovery)
         token = token_factory()
         if not _TOKEN.fullmatch(token):
-            raise ValueError("OTA URL token must be at least 24 URL-safe characters")
+            raise ValueError("OTA URL token must be 24-127 URL-safe characters")
         listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             listening_socket.bind((host, port))

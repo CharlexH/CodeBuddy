@@ -17,6 +17,7 @@ from typing import Optional, Sequence, Tuple
 
 CA_NAME = "local-ca-cert.pem"
 PUBLIC_KEY_NAME = "manifest-signing-public.pem"
+MAX_PUBLIC_MATERIAL_BYTES = 64 * 1024
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -32,13 +33,47 @@ def _run(arguments: Sequence[str], *, input_bytes: Optional[bytes] = None) -> by
         raise RuntimeError("invalid OTA public trust material") from exc
 
 
-def _regular_file(path: Path) -> None:
+def _read_public_file(path: Path) -> bytes:
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("platform cannot safely open OTA public trust")
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
     try:
-        metadata = path.lstat()
-    except FileNotFoundError as exc:
-        raise RuntimeError("OTA public trust material is missing") from exc
-    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
-        raise RuntimeError("OTA public trust must use regular non-symlink files")
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError("OTA public trust material cannot be safely opened") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeError("OTA public trust must use regular non-symlink files")
+        if metadata.st_uid != os.geteuid():
+            raise RuntimeError("OTA public trust file owner must be the effective user")
+        mode = stat.S_IMODE(metadata.st_mode)
+        if mode not in {0o400, 0o440, 0o444, 0o600, 0o640, 0o644}:
+            raise RuntimeError("OTA public trust file permissions are unsafe")
+        if metadata.st_size > MAX_PUBLIC_MATERIAL_BYTES:
+            raise RuntimeError("OTA public trust material is too large")
+
+        chunks = []
+        remaining = MAX_PUBLIC_MATERIAL_BYTES + 1
+        while remaining:
+            try:
+                chunk = os.read(descriptor, min(8192, remaining))
+            except InterruptedError:
+                continue
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        contents = b"".join(chunks)
+        if len(contents) > MAX_PUBLIC_MATERIAL_BYTES:
+            raise RuntimeError("OTA public trust material is too large")
+        if not contents:
+            raise RuntimeError("OTA public trust material is empty")
+        return contents
+    finally:
+        os.close(descriptor)
 
 
 def _normalized_material(public_dir: Path) -> Tuple[bytes, bytes, str, str]:
@@ -46,27 +81,29 @@ def _normalized_material(public_dir: Path) -> Tuple[bytes, bytes, str, str]:
         raise RuntimeError("OTA public trust directory is missing or unsafe")
     ca = public_dir / CA_NAME
     public_key = public_dir / PUBLIC_KEY_NAME
-    _regular_file(ca)
-    _regular_file(public_key)
-    for path in (ca, public_key):
-        if b"PRIVATE KEY" in path.read_bytes():
+    ca_bytes = _read_public_file(ca)
+    public_key_bytes = _read_public_file(public_key)
+    for contents in (ca_bytes, public_key_bytes):
+        if b"PRIVATE KEY" in contents:
             raise RuntimeError("private OTA material cannot be injected")
 
-    ca_pem = _run(["x509", "-in", str(ca), "-outform", "PEM"])
-    ca_der = _run(["x509", "-in", str(ca), "-outform", "DER"])
-    ca_details = _run(["x509", "-in", str(ca), "-noout", "-text"])
-    _run(["verify", "-CAfile", str(ca), str(ca)])
+    ca_pem = _run(["x509", "-outform", "PEM"], input_bytes=ca_bytes)
+    ca_der = _run(["x509", "-outform", "DER"], input_bytes=ca_bytes)
+    ca_details = _run(["x509", "-noout", "-text"], input_bytes=ca_bytes)
     if b"CA:TRUE" not in ca_details or b"prime256v1" not in ca_details:
         raise RuntimeError("OTA local CA must be a P-256 CA certificate")
 
     public_pem = _run(
-        ["pkey", "-pubin", "-in", str(public_key), "-pubout", "-outform", "PEM"]
+        ["pkey", "-pubin", "-pubout", "-outform", "PEM"],
+        input_bytes=public_key_bytes,
     )
     public_der = _run(
-        ["pkey", "-pubin", "-in", str(public_key), "-pubout", "-outform", "DER"]
+        ["pkey", "-pubin", "-pubout", "-outform", "DER"],
+        input_bytes=public_key_bytes,
     )
     public_details = _run(
-        ["pkey", "-pubin", "-in", str(public_key), "-text", "-noout"]
+        ["pkey", "-pubin", "-text", "-noout"],
+        input_bytes=public_key_bytes,
     )
     if b"prime256v1" not in public_details:
         raise RuntimeError("OTA manifest public key must use P-256")

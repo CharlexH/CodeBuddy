@@ -139,6 +139,41 @@ def test_semantic_version_policy_is_strict_and_monotonic():
             compare_semantic_versions(invalid, "1.0.0")
 
 
+def test_host_semver_and_byte_bounds_match_firmware_parser():
+    max_version = "1.2.3-" + "a" * 57
+    assert len(max_version.encode("utf-8")) == 63
+    assert compare_semantic_versions(max_version, "1.2.2") > 0
+
+    for invalid in (
+        "١.2.3",
+        "4294967296.0.0",
+        "1.4294967296.0",
+        "1.2.4294967296",
+        "1.2.3-" + "a" * 58,
+    ):
+        with pytest.raises(ValueError, match="semantic version"):
+            compare_semantic_versions(invalid, "1.0.0")
+
+
+def test_host_accepts_device_maximum_canonical_boundaries():
+    version = "1.2.3-" + "a" * 57
+    token = "t" * 127
+    url = f"https://192.168.255.255:65535/{token}/firmware.bin"
+
+    manifest = canonical_manifest_bytes(
+        version=version,
+        chip="esp32s3",
+        size_bytes=0x330000,
+        sha256="ab" * 32,
+        artifact_url=url,
+    )
+
+    assert len(version.encode("utf-8")) == 63
+    assert len(token.encode("utf-8")) == 127
+    assert len(url.encode("utf-8")) <= 255
+    assert len(manifest) <= 1024
+
+
 def test_host_url_policy_matches_device_one_shot_endpoint():
     invalid_urls = (
         "https://8.8.8.8:49321/0123456789abcdefghijklmn/firmware.bin",
@@ -149,6 +184,9 @@ def test_host_url_policy_matches_device_one_shot_endpoint():
         "https://192.168.1.20:49321/short-token/firmware.bin",
         "https://192.168.1.20:49321/prefix/0123456789abcdefghijklmn/firmware.bin",
         "https://192.168.1.20:49321/0123456789abcdefghijklmn/%66irmware.bin",
+        "https://192.168.1.20:49321/0123456789abcdefghijklmn/firmware.bin?",
+        "https://192.168.1.20:49321/0123456789abcdefghijklmn/firmware.bin#",
+        f"https://192.168.1.20:49321/{'t' * 128}/firmware.bin",
     )
     for artifact_url in invalid_urls:
         with pytest.raises(ValueError, match="artifact URL"):

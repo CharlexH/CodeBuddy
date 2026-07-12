@@ -162,7 +162,7 @@ static void testTypedFieldsAndMonotonicVersion() {
 
   const char* invalidVersions[] = {
     "1.2", "01.2.3", "1.02.3", "1.2.03", "v1.2.3", "1.2.3-01",
-    "1.2.3-", "1.2.3+", "1.2.3..4",
+    "1.2.3-", "1.2.3+", "1.2.3..4", "4294967296.0.0",
   };
   for (const char* version : invalidVersions) {
     canonicalManifest(raw, sizeof(raw), version);
@@ -196,9 +196,26 @@ static void testTypedFieldsAndMonotonicVersion() {
                     "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB");
   expect_true(parse(raw, &descriptor) != OTA_MANIFEST_OK,
               "digest must be exactly lowercase hexadecimal");
+
+  char maxVersion[OTA_VERSION_MAX_BYTES];
+  memcpy(maxVersion, "1.2.3-", 6);
+  memset(maxVersion + 6, 'a', 57);
+  maxVersion[63] = 0;
+  canonicalManifest(raw, sizeof(raw), maxVersion);
+  expect_true(parse(raw, &descriptor) == OTA_MANIFEST_OK,
+              "63-byte semantic version boundary should pass");
+  char oversizedVersion[OTA_VERSION_MAX_BYTES + 1];
+  memcpy(oversizedVersion, maxVersion, 63);
+  oversizedVersion[63] = 'a';
+  oversizedVersion[64] = 0;
+  canonicalManifest(raw, sizeof(raw), oversizedVersion);
+  expect_true(parse(raw, &descriptor) != OTA_MANIFEST_OK,
+              "64-byte semantic version must fail");
 }
 
 static void testMacLocalUrlPolicyAndBinding() {
+  expect_true(OTA_MANIFEST_MAX_BYTES == 1024,
+              "manifest byte cap must match the bounded line transport");
   expect_true(otaLocalHttpsUrlValid(VALID_URL, OTA_URL_FIRMWARE),
               "RFC1918 HTTPS firmware URL with explicit port/token should pass");
   expect_true(otaLocalHttpsUrlValid(VALID_MANIFEST_URL, OTA_URL_MANIFEST),
@@ -230,34 +247,131 @@ static void testMacLocalUrlPolicyAndBinding() {
   expect_true(!otaLocalHttpsUrlValid(VALID_URL, OTA_URL_MANIFEST),
               "resource name must be bound to its role");
 
-  OtaOfferDescriptor offer = {};
-  expect_true(otaOfferAccept(
+  char maxToken[OTA_TOKEN_MAX_BYTES];
+  memset(maxToken, 't', sizeof(maxToken) - 1);
+  maxToken[sizeof(maxToken) - 1] = 0;
+  char maxTokenUrl[OTA_URL_MAX_BYTES];
+  snprintf(maxTokenUrl, sizeof(maxTokenUrl),
+           "https://10.0.0.1:1/%s/firmware.bin", maxToken);
+  expect_true(otaLocalHttpsUrlValid(maxTokenUrl, OTA_URL_FIRMWARE),
+              "127-byte token boundary should pass");
+  char oversizedToken[OTA_TOKEN_MAX_BYTES + 1];
+  memset(oversizedToken, 't', sizeof(oversizedToken) - 1);
+  oversizedToken[sizeof(oversizedToken) - 1] = 0;
+  char oversizedTokenUrl[OTA_URL_MAX_BYTES];
+  snprintf(oversizedTokenUrl, sizeof(oversizedTokenUrl),
+           "https://10.0.0.1:1/%s/firmware.bin", oversizedToken);
+  expect_true(!otaLocalHttpsUrlValid(oversizedTokenUrl, OTA_URL_FIRMWARE),
+              "128-byte token must fail");
+
+  OtaOfferState offer = otaOfferStateInitial();
+  expect_true(!otaOfferAcceptHint(
                 "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
-                "1.2.2", false, false, &offer),
-              "valid offer should store fixed coordination metadata");
-  expect_true(offer.pending && strcmp(offer.version, "1.2.3") == 0,
-              "accepted offer should become pending");
+                "1.2.2", 1000, true, false, false, false, true, 0, &offer),
+              "offer outside a physical receive window must fail");
+  expect_true(!otaOfferOpenReceiveWindow(&offer, 1000, false),
+              "non-physical callers must not open the receive window");
+  expect_true(otaOfferOpenReceiveWindow(&offer, 1000, true),
+              "physical settings action should open a bounded window");
+  expect_true(!otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 1050, true, false, false, false, false, 49, &offer),
+              "receive-time battery gate should reject and clear a low-power hint");
+  expect_true(otaOfferOpenReceiveWindow(&offer, 1060, true),
+              "physical action should reopen after a power-gate rejection");
+  expect_true(otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 1100, true, false, false, false, true, 0, &offer),
+              "valid hint inside the physical window should be retained");
+  expect_true(offer.pending && strcmp(offer.manifestUrl, VALID_MANIFEST_URL) == 0,
+              "pending state should retain only bounded endpoint hints");
   OtaManifestDescriptor descriptor = {};
   char raw[OTA_MANIFEST_MAX_BYTES + 1];
   canonicalManifest(raw, sizeof(raw));
   expect_true(parse(raw, &descriptor) == OTA_MANIFEST_OK &&
               otaManifestMatchesOffer(descriptor, offer),
-              "signed artifact must bind to offer origin, token, version and size");
+              "signed artifact must bind to the hinted endpoint/token");
 
-  OtaOfferDescriptor rejected = {};
-  expect_true(!otaOfferAccept(
-                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
-                "1.2.2", true, false, &rejected) && !rejected.pending,
-              "approval conflict must prevent storing an offer");
-  expect_true(!otaOfferAccept(
-                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
-                "1.2.2", false, true, &rejected) && !rejected.pending,
-              "transfer conflict must prevent storing an offer");
-  expect_true(!otaOfferAccept(
+  expect_true(!otaOfferAcceptHint(
                 "1.2.3", 1234, VALID_MANIFEST_URL,
                 "https://192.168.44.8:49321/differentabcdefghijkl/manifest.sig",
-                "1.2.2", false, false, &rejected),
-              "manifest and signature URLs must share exact endpoint/token");
+                "1.2.2", 1200, true, false, false, false, true, 0, &offer) &&
+              !offer.pending && !offer.windowOpen,
+              "bad subsequent hint must clear the prior offer and window");
+
+  expect_true(otaOfferOpenReceiveWindow(&offer, 2000, true),
+              "window should be reopenable by another physical action");
+  expect_true(otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 2100, true, false, false, false, true, 0, &offer),
+              "fresh offer should be accepted");
+  otaOfferLifecyclePoll(&offer, 2101, false, false, false, false);
+  expect_true(!offer.pending && !offer.windowOpen,
+              "BLE disconnect must clear offer state");
+
+  expect_true(otaOfferOpenReceiveWindow(&offer, 3000, true) &&
+              otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 3100, true, false, false, false, true, 0, &offer),
+              "offer should be ready for conflict tests");
+  otaOfferLifecyclePoll(&offer, 3101, true, true, false, false);
+  expect_true(!offer.pending, "prompt conflict must clear pending offer");
+
+  expect_true(otaOfferOpenReceiveWindow(&offer, 3200, true) &&
+              otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 3210, true, false, false, false, true, 0, &offer),
+              "offer should be ready for transfer conflict test");
+  otaOfferLifecyclePoll(&offer, 3211, true, false, true, false);
+  expect_true(!offer.pending, "transfer conflict must clear pending offer");
+
+  expect_true(otaOfferOpenReceiveWindow(&offer, 3300, true) &&
+              otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 3310, true, false, false, false, true, 0, &offer),
+              "offer should be ready for other conflict test");
+  otaOfferLifecyclePoll(&offer, 3311, true, false, false, true);
+  expect_true(!offer.pending, "other functional conflict must clear pending offer");
+
+  expect_true(otaOfferOpenReceiveWindow(&offer, 4000, true) &&
+              otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 4100, true, false, false, false, true, 0, &offer),
+              "offer should be ready for expiry test");
+  otaOfferLifecyclePoll(
+    &offer, 4100 + OTA_OFFER_TTL_MS + 1, true, false, false, false
+  );
+  expect_true(!offer.pending && !offer.windowOpen,
+              "offer expiry must clear all retained hints");
+
+  expect_true(otaOfferOpenReceiveWindow(&offer, 5000, true) &&
+              otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 5100, true, false, false, false, true, 0, &offer),
+              "offer should be ready for execution recheck");
+  expect_true(otaOfferExecutionAllowed(
+                &offer, 5200, true, false, false, false, false, 50),
+              "execution recheck should accept a conflict-free 50 percent battery");
+  expect_true(!otaOfferExecutionAllowed(
+                &offer, 5201, true, false, false, false, false, 49) &&
+              !offer.pending,
+              "execution recheck must clear offer when power gate fails");
+
+  expect_true(otaOfferOpenReceiveWindow(&offer, 5300, true) &&
+              otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 5310, true, false, false, false, true, 0, &offer),
+              "offer should be ready for execution conflict recheck");
+  expect_true(!otaOfferExecutionAllowed(
+                &offer, 5320, true, true, false, false, true, 100) &&
+              !offer.pending,
+              "execution recheck must clear offer when a prompt appears");
+
+  expect_true(otaOfferOpenReceiveWindow(&offer, 6000, true),
+              "physical action should open final cancellation window");
+  otaOfferCancel(&offer);
+  expect_true(!offer.pending && !offer.windowOpen,
+              "cancel or reject must clear all offer state");
 }
 
 int main() {

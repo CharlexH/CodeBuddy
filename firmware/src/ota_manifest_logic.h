@@ -4,13 +4,16 @@
 #include <stdint.h>
 #include <string.h>
 
-constexpr size_t OTA_MANIFEST_MAX_BYTES = 768;
+constexpr size_t OTA_MANIFEST_MAX_BYTES = 1024;
 constexpr size_t OTA_VERSION_MAX_BYTES = 64;
 constexpr size_t OTA_URL_MAX_BYTES = 256;
 constexpr size_t OTA_SHA256_HEX_BYTES = 64;
 constexpr size_t OTA_TOKEN_MAX_BYTES = 128;
 constexpr size_t OTA_SIGNATURE_MAX_BYTES = 80;
 constexpr uint32_t OTA_SLOT_CAPACITY_BYTES = 0x330000UL;
+constexpr uint32_t OTA_RECEIVE_WINDOW_MS = 120000UL;
+constexpr uint32_t OTA_OFFER_TTL_MS = 60000UL;
+constexpr uint8_t OTA_MIN_BATTERY_PERCENT = 50;
 
 enum OtaManifestResult : uint8_t {
   OTA_MANIFEST_OK = 0,
@@ -37,10 +40,11 @@ struct OtaManifestDescriptor {
   char artifactUrl[OTA_URL_MAX_BYTES];
 };
 
-struct OtaOfferDescriptor {
+struct OtaOfferState {
+  bool windowOpen;
   bool pending;
-  char version[OTA_VERSION_MAX_BYTES];
-  uint32_t sizeBytes;
+  uint32_t windowDeadlineMs;
+  uint32_t offerDeadlineMs;
   char manifestUrl[OTA_URL_MAX_BYTES];
   char signatureUrl[OTA_URL_MAX_BYTES];
 };
@@ -415,51 +419,128 @@ inline OtaManifestResult otaManifestAuthenticateWith(
   return otaManifestParseCanonical(raw, rawLength, currentVersion, output);
 }
 
-inline void otaOfferReset(OtaOfferDescriptor* offer) {
+inline OtaOfferState otaOfferStateInitial() {
+  OtaOfferState state = {};
+  return state;
+}
+
+inline void otaOfferReset(OtaOfferState* offer) {
   if (offer) memset(offer, 0, sizeof(*offer));
 }
 
-inline bool otaOfferAccept(
+inline bool otaOfferDeadlineActive(uint32_t now, uint32_t deadline) {
+  return static_cast<int32_t>(now - deadline) < 0;
+}
+
+inline bool otaOfferOpenReceiveWindow(
+  OtaOfferState* offer,
+  uint32_t now,
+  bool physicalAction
+) {
+  if (!offer || !physicalAction) return false;
+  otaOfferReset(offer);
+  offer->windowOpen = true;
+  offer->windowDeadlineMs = now + OTA_RECEIVE_WINDOW_MS;
+  return true;
+}
+
+inline void otaOfferCancel(OtaOfferState* offer) { otaOfferReset(offer); }
+inline void otaOfferReject(OtaOfferState* offer) { otaOfferReset(offer); }
+
+inline bool otaOfferWindowActive(const OtaOfferState& offer, uint32_t now) {
+  return offer.windowOpen && otaOfferDeadlineActive(now, offer.windowDeadlineMs);
+}
+
+inline bool otaOfferAcceptHint(
   const char* version,
   uint32_t sizeBytes,
   const char* manifestUrl,
   const char* signatureUrl,
   const char* currentVersion,
+  uint32_t now,
+  bool connected,
   bool approvalConflict,
   bool transferConflict,
-  OtaOfferDescriptor* output
+  bool otherConflict,
+  bool externalPower,
+  uint8_t batteryPercent,
+  OtaOfferState* output
 ) {
-  otaOfferReset(output);
+  bool windowActive = output && otaOfferWindowActive(*output, now);
   if (!output || !version || !manifestUrl || !signatureUrl || !currentVersion ||
-      approvalConflict || transferConflict || sizeBytes == 0 ||
-      sizeBytes > OTA_SLOT_CAPACITY_BYTES) return false;
+      !windowActive || !connected || approvalConflict || transferConflict ||
+      otherConflict || (!externalPower && batteryPercent < OTA_MIN_BATTERY_PERCENT) ||
+      batteryPercent > 100 || sizeBytes == 0 ||
+      sizeBytes > OTA_SLOT_CAPACITY_BYTES) {
+    otaOfferReset(output);
+    return false;
+  }
   bool versionsValid = false;
   if (otaCompareSemanticVersions(version, currentVersion, &versionsValid) <= 0 ||
-      !versionsValid) return false;
+      !versionsValid) {
+    otaOfferReset(output);
+    return false;
+  }
   if (!otaLocalHttpsUrlsShareEndpoint(
         manifestUrl, OTA_URL_MANIFEST, signatureUrl, OTA_URL_SIGNATURE
-      )) return false;
-  size_t versionLength = strnlen(version, sizeof(output->version));
+      )) {
+    otaOfferReset(output);
+    return false;
+  }
   size_t manifestLength = strnlen(manifestUrl, sizeof(output->manifestUrl));
   size_t signatureLength = strnlen(signatureUrl, sizeof(output->signatureUrl));
-  if (versionLength >= sizeof(output->version) ||
-      manifestLength >= sizeof(output->manifestUrl) ||
-      signatureLength >= sizeof(output->signatureUrl)) return false;
-  memcpy(output->version, version, versionLength + 1);
+  if (manifestLength >= sizeof(output->manifestUrl) ||
+      signatureLength >= sizeof(output->signatureUrl)) {
+    otaOfferReset(output);
+    return false;
+  }
   memcpy(output->manifestUrl, manifestUrl, manifestLength + 1);
   memcpy(output->signatureUrl, signatureUrl, signatureLength + 1);
-  output->sizeBytes = sizeBytes;
   output->pending = true;
+  output->offerDeadlineMs = now + OTA_OFFER_TTL_MS;
   return true;
+}
+
+inline void otaOfferLifecyclePoll(
+  OtaOfferState* offer,
+  uint32_t now,
+  bool connected,
+  bool approvalConflict,
+  bool transferConflict,
+  bool otherConflict
+) {
+  if (!offer || !offer->windowOpen) return;
+  if (!connected || approvalConflict || transferConflict || otherConflict ||
+      !otaOfferWindowActive(*offer, now) ||
+      (offer->pending && !otaOfferDeadlineActive(now, offer->offerDeadlineMs)))
+    otaOfferReset(offer);
+}
+
+inline bool otaOfferExecutionAllowed(
+  OtaOfferState* offer,
+  uint32_t now,
+  bool connected,
+  bool approvalConflict,
+  bool transferConflict,
+  bool otherConflict,
+  bool externalPower,
+  uint8_t batteryPercent
+) {
+  bool allowed = offer && offer->pending &&
+    otaOfferWindowActive(*offer, now) &&
+    otaOfferDeadlineActive(now, offer->offerDeadlineMs) && connected &&
+    !approvalConflict && !transferConflict && !otherConflict &&
+    (externalPower || (batteryPercent >= OTA_MIN_BATTERY_PERCENT &&
+                       batteryPercent <= 100));
+  if (!allowed) otaOfferReset(offer);
+  return allowed;
 }
 
 inline bool otaManifestMatchesOffer(
   const OtaManifestDescriptor& manifest,
-  const OtaOfferDescriptor& offer
+  const OtaOfferState& offer
 ) {
-  return offer.pending && manifest.sizeBytes == offer.sizeBytes &&
-    strcmp(manifest.version, offer.version) == 0 &&
-    otaLocalHttpsUrlsShareEndpoint(
+  return offer.pending && otaLocalHttpsUrlsShareEndpoint(
       manifest.artifactUrl, OTA_URL_FIRMWARE, offer.manifestUrl, OTA_URL_MANIFEST
     ) &&
     otaLocalHttpsUrlsShareEndpoint(

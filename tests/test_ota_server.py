@@ -108,6 +108,12 @@ def test_private_lan_selection_fails_closed_without_rfc1918(candidate):
         select_private_lan_ipv4(discovery=lambda: [candidate])
 
 
+def test_endpoint_token_byte_bounds_match_firmware_parser():
+    assert not ota_server_module._TOKEN.fullmatch("x" * 23)
+    assert ota_server_module._TOKEN.fullmatch("x" * 127)
+    assert not ota_server_module._TOKEN.fullmatch("x" * 128)
+
+
 def test_ephemeral_leaf_is_p256_ip_scoped_server_certificate_and_private(tmp_path):
     trust = generate_ota_trust(tmp_path / "trust")
     sessions = tmp_path / "sessions"

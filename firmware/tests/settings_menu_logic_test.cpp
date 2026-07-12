@@ -20,6 +20,7 @@ int main() {
     SETTINGS_LED,
     SETTINGS_CLOCK_ROTATION,
     SETTINGS_PET,
+    SETTINGS_OTA_UPDATE,
     SETTINGS_RESET,
     SETTINGS_BACK,
   };
@@ -31,12 +32,13 @@ int main() {
     "led",
     "clock rot",
     "ascii pet",
+    "ota update",
     "reset",
     "back",
   };
 
-  expect_true(settingsMenuItemCount() == 9,
-              "settings should expose nine rows after removing transcript");
+  expect_true(settingsMenuItemCount() == 10,
+              "settings should expose a physical OTA receive action");
   for (uint8_t i = 0; i < settingsMenuItemCount(); ++i) {
     expect_true(settingsMenuAction(i) == expected[i],
                 "settings actions should retain their intended order");

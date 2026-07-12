@@ -29,7 +29,7 @@ struct TamaState {
   char     promptId[40];     // pending permission request ID; empty = no prompt
   char     promptTool[96];
   char     promptHint[256];
-  OtaOfferDescriptor otaOffer;
+  OtaOfferState otaOffer;
 };
 
 // ---------------------------------------------------------------------------
@@ -86,6 +86,7 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
     return;
   }
   if (xferCommand(doc)) {
+    otaOfferCancel(&out->otaOffer);
     const char* cmd = doc["cmd"];
     Serial.printf("[data] cmd=%s\n", cmd ? cmd : "(null)");
     _lastLiveMs = millis();
@@ -96,7 +97,7 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
   // download bytes, or write flash. The signed manifest is authenticated by
   // ota_manifest.cpp before any field is later trusted.
   JsonVariant otaVariant = doc["ota_offer"];
-  if (!otaVariant.isNull()) {
+  if (otaVariant.is<JsonVariantConst>()) {
     bool accepted = false;
     if (otaVariant.is<JsonObject>()) {
       JsonObject offer = otaVariant.as<JsonObject>();
@@ -110,20 +111,28 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
         !offer["sizeBytes"].is<bool>();
       uint32_t sizeBytes = sizeTyped ? offer["sizeBytes"].as<uint32_t>() : 0;
       bool promptConflict = out->promptId[0] != 0 || !doc["prompt"].isNull();
-      OtaOfferDescriptor candidate = {};
+      int batteryPercent = (compatBatteryVoltageMv() - 3200) / 10;
+      if (batteryPercent < 0) batteryPercent = 0;
+      if (batteryPercent > 100) batteryPercent = 100;
+      bool externalPower = compatVbusVoltageMv() > 4000;
       accepted = offer.size() == 4 && version && manifestUrl && signatureUrl &&
-        sizeTyped && otaOfferAccept(
+        sizeTyped && otaOfferAcceptHint(
           version,
           sizeBytes,
           manifestUrl,
           signatureUrl,
           CODE_BUDDY_FIRMWARE_VERSION,
+          millis(),
+          bleConnected(),
           promptConflict,
           xferActive(),
-          &candidate
+          wifiManagerUiActive(),
+          externalPower,
+          static_cast<uint8_t>(batteryPercent),
+          &out->otaOffer
         );
-      if (accepted) out->otaOffer = candidate;
     }
+    if (!accepted) otaOfferReject(&out->otaOffer);
     Serial.println(accepted ? "[ota] offer accepted" : "[ota] offer rejected");
     _lastLiveMs = millis();
     return;
@@ -207,6 +216,14 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
   } else {
     out->promptId[0] = 0; out->promptTool[0] = 0; out->promptHint[0] = 0;
   }
+  otaOfferLifecyclePoll(
+    &out->otaOffer,
+    millis(),
+    bleConnected(),
+    out->promptId[0] != 0,
+    xferActive(),
+    wifiManagerUiActive()
+  );
   Serial.printf(
     "[data] snapshot total=%u running=%u waiting=%u prompt=%s msg=%.36s\n",
     out->sessionsTotal,
@@ -268,6 +285,14 @@ inline void dataPoll(TamaState* out) {
   }
 
   out->connected = dataConnected();
+  otaOfferLifecyclePoll(
+    &out->otaOffer,
+    now,
+    out->connected && bleConnected(),
+    out->promptId[0] != 0,
+    xferActive(),
+    wifiManagerUiActive()
+  );
   if (!out->connected) {
     out->sessionsTotal=0; out->sessionsRunning=0; out->sessionsWaiting=0;
     out->recentlyCompleted=false; out->lastUpdated=now;

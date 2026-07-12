@@ -21,13 +21,17 @@ from urllib.parse import unquote, urlsplit
 
 
 _SEMANTIC_VERSION = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
     r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
 _LOWER_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _OTA_SLOT_CAPACITY_BYTES = 0x330000
-_TOKEN = re.compile(r"^[0-9A-Za-z_-]{24,}$")
+_OTA_UINT32_MAX = 0xFFFFFFFF
+_OTA_VERSION_MAX_BYTES = 63
+_OTA_URL_MAX_BYTES = 255
+_OTA_MANIFEST_MAX_BYTES = 1024
+_TOKEN = re.compile(r"^[0-9A-Za-z_-]{24,127}$")
 _RFC1918_NETWORKS = tuple(
     ipaddress.ip_network(network)
     for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
@@ -56,6 +60,8 @@ class OtaRelease:
 
 
 def _parse_semantic_version(value: str) -> SemanticVersion:
+    if not isinstance(value, str) or len(value.encode("utf-8")) > _OTA_VERSION_MAX_BYTES:
+        raise ValueError(f"invalid semantic version: {value!r}")
     match = _SEMANTIC_VERSION.fullmatch(value)
     if not match:
         raise ValueError(f"invalid semantic version: {value!r}")
@@ -63,10 +69,13 @@ def _parse_semantic_version(value: str) -> SemanticVersion:
     for identifier in prerelease:
         if identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0"):
             raise ValueError(f"invalid semantic version: {value!r}")
+    core = tuple(int(match.group(index)) for index in range(1, 4))
+    if any(component > _OTA_UINT32_MAX for component in core):
+        raise ValueError(f"invalid semantic version: {value!r}")
     return SemanticVersion(
-        major=int(match.group(1)),
-        minor=int(match.group(2)),
-        patch=int(match.group(3)),
+        major=core[0],
+        minor=core[1],
+        patch=core[2],
         prerelease=prerelease,
     )
 
@@ -112,6 +121,10 @@ def _validate_artifact_url(value: str) -> None:
         ord(character) < 0x21 or ord(character) > 0x7E for character in value
     ):
         raise ValueError("artifact URL must use canonical visible ASCII")
+    if len(value.encode("utf-8")) > _OTA_URL_MAX_BYTES:
+        raise ValueError("artifact URL exceeds the device byte limit")
+    if "?" in value or "#" in value:
+        raise ValueError("artifact URL must not contain query or fragment delimiters")
     try:
         parsed = urlsplit(value)
         _ = parsed.port
@@ -182,13 +195,16 @@ def canonical_manifest_bytes(
         "schema": 1,
         "version": version,
     }
-    return json.dumps(
+    encoded = json.dumps(
         manifest,
         ensure_ascii=False,
         allow_nan=False,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+    if len(encoded) > _OTA_MANIFEST_MAX_BYTES:
+        raise ValueError("canonical OTA manifest exceeds the device byte limit")
+    return encoded
 
 
 def _run_openssl(

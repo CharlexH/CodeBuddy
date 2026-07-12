@@ -10,6 +10,7 @@ enum SettingsMenuAction : uint8_t {
   SETTINGS_LED,
   SETTINGS_CLOCK_ROTATION,
   SETTINGS_PET,
+  SETTINGS_OTA_UPDATE,
   SETTINGS_RESET,
   SETTINGS_BACK,
   SETTINGS_INVALID,
@@ -24,7 +25,7 @@ enum WifiMenuAction : uint8_t {
   WIFI_MENU_INVALID,
 };
 
-inline constexpr uint8_t settingsMenuItemCount() { return 9; }
+inline constexpr uint8_t settingsMenuItemCount() { return 10; }
 
 inline constexpr SettingsMenuAction settingsMenuAction(uint8_t index) {
   return index < settingsMenuItemCount()
@@ -40,6 +41,7 @@ inline constexpr const char* settingsMenuLabel(uint8_t index) {
       : index == SETTINGS_LED ? "led"
       : index == SETTINGS_CLOCK_ROTATION ? "clock rot"
       : index == SETTINGS_PET ? "ascii pet"
+      : index == SETTINGS_OTA_UPDATE ? "ota update"
       : index == SETTINGS_RESET ? "reset"
       : index == SETTINGS_BACK ? "back"
       : "";
