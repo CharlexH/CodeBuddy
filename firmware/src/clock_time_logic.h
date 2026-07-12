@@ -13,6 +13,18 @@ struct ClockTimeFields {
   int8_t seconds;
 };
 
+struct ClockSyncEpochs {
+  int64_t utc_epoch;
+  int64_t local_epoch;
+};
+
+inline constexpr ClockSyncEpochs clockSyncEpochs(
+  int64_t utc_epoch,
+  int32_t timezone_offset_seconds
+) {
+  return {utc_epoch, utc_epoch + timezone_offset_seconds};
+}
+
 inline bool clockFieldsFromLocalEpoch(int64_t local_epoch, ClockTimeFields* out) {
   if (!out) return false;
   time_t raw = (time_t)local_epoch;

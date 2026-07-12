@@ -1,9 +1,12 @@
 #pragma once
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <sys/time.h>
 #include "ble_bridge.h"
+#include "clock_time_logic.h"
 #include "utf8_text_logic.h"
 #include "usage_meter_json.h"
+#include "wifi_manager.h"
 #include "xfer.h"
 
 struct TamaState {
@@ -86,11 +89,20 @@ static void _applyJson(const char* line, TamaState* out) {
     return;
   }
 
-  // Bridge sends {"time":[epoch_sec, tz_offset_sec]}; gmtime_r on the
-  // adjusted epoch yields local components including weekday.
+  // Bridge sends {"time":[epoch_sec, tz_offset_sec]}. The system clock must
+  // receive raw UTC for TLS certificate validation. The display RTC keeps the
+  // separately offset local epoch for the existing clock-face behavior.
   JsonArray t = doc["time"];
   if (!t.isNull() && t.size() == 2) {
-    time_t local = (time_t)t[0].as<uint32_t>() + (int32_t)t[1];
+    ClockSyncEpochs epochs = clockSyncEpochs(
+      (int64_t)t[0].as<uint32_t>(),
+      (int32_t)t[1]
+    );
+    struct timeval tv = {(time_t)epochs.utc_epoch, 0};
+    if (settimeofday(&tv, nullptr) == 0) {
+      wifiManagerNoteHostUtc((uint32_t)epochs.utc_epoch);
+    }
+    time_t local = (time_t)epochs.local_epoch;
     struct tm lt; gmtime_r(&local, &lt);
     RTC_TimeTypeDef tm((int8_t)lt.tm_hour, (int8_t)lt.tm_min, (int8_t)lt.tm_sec);
     RTC_DateTypeDef dt((int16_t)(lt.tm_year + 1900), (int8_t)(lt.tm_mon + 1),

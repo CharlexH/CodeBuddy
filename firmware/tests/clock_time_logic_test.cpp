@@ -28,5 +28,11 @@ int main() {
   expect_true(fields.minutes == 34, "minutes should advance with epoch");
   expect_true(fields.seconds == 56, "seconds should advance with epoch");
 
+  ClockSyncEpochs sync = clockSyncEpochs(1710000000, 8 * 60 * 60);
+  expect_true(sync.utc_epoch == 1710000000,
+              "system UTC must use the raw bridge epoch");
+  expect_true(sync.local_epoch == 1710000000 + 8 * 60 * 60,
+              "display RTC should apply the timezone offset separately");
+
   return 0;
 }

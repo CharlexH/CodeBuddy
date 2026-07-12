@@ -9,6 +9,7 @@
 #include "screen_orient_logic.h"
 #include "runtime_pet_layout_logic.h"
 #include "settings_menu_logic.h"
+#include "wifi_manager.h"
 #include "clock_time_logic.h"
 #include "data.h"
 #include "persona_logic.h"
@@ -227,6 +228,10 @@ bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
 const uint8_t SETTINGS_N = settingsMenuItemCount();
 
+bool    wifiMenuOpen   = false;
+bool    wifiStatusOpen = false;
+uint8_t wifiMenuSel    = 0;
+
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
 const char* resetItems[] = { "delete char", "factory reset", "back" };
@@ -249,7 +254,13 @@ static void applySetting(uint8_t idx) {
       // hard-off someday, stop advertising via BLEDevice::getAdvertising().
       s.bt = !s.bt;
       break;
-    case SETTINGS_WIFI: s.wifi = !s.wifi; break;   // stored only — no WiFi stack linked
+    case SETTINGS_WIFI:
+      settingsOpen = false;
+      wifiMenuOpen = true;
+      wifiStatusOpen = false;
+      wifiMenuSel = 0;
+      invalidatePortraitSurface();
+      return;
     case SETTINGS_LED: s.led = !s.led; break;
     case SETTINGS_CLOCK_ROTATION: s.clockRot = (s.clockRot + 1) % 3; break;
     case SETTINGS_PET: nextPet(); return;
@@ -320,6 +331,7 @@ static void applyReset(uint8_t idx) {
     _prefs.begin("buddy", false);
     _prefs.clear();
     _prefs.end();
+    wifiManagerForget();
     LittleFS.format();
     bleClearBonds();
   }
@@ -336,13 +348,17 @@ static void drawMenuHints(const Palette& p, int mx, int mw, int hy,
   spr.setTextColor(p.textDim, PANEL);
   // 6px/glyph at size 1; triangle goes 4px after the label ends
   int x = mx + 8;
-  spr.setCursor(x, hy); spr.print(downLbl);
-  x += strlen(downLbl) * 6 + 4;
-  spr.fillTriangle(x, hy + 1, x + 6, hy + 1, x + 3, hy + 6, p.textDim);
-  x = mx + mw / 2 + 4;
-  spr.setCursor(x, hy); spr.print(rightLbl);
-  x += strlen(rightLbl) * 6 + 4;
-  spr.fillTriangle(x, hy, x, hy + 6, x + 5, hy + 3, p.textDim);
+  if (downLbl && downLbl[0]) {
+    spr.setCursor(x, hy); spr.print(downLbl);
+    x += strlen(downLbl) * 6 + 4;
+    spr.fillTriangle(x, hy + 1, x + 6, hy + 1, x + 3, hy + 6, p.textDim);
+  }
+  if (rightLbl && rightLbl[0]) {
+    x = mx + mw / 2 + 4;
+    spr.setCursor(x, hy); spr.print(rightLbl);
+    x += strlen(rightLbl) * 6 + 4;
+    spr.fillTriangle(x, hy, x, hy + 6, x + 5, hy + 3, p.textDim);
+  }
 }
 
 static void drawSettings() {
@@ -370,7 +386,7 @@ static void drawSettings() {
             || action == SETTINGS_LED) {
       bool value = action == SETTINGS_SOUND ? s.sound
           : action == SETTINGS_BLUETOOTH ? s.bt
-          : action == SETTINGS_WIFI ? s.wifi
+          : action == SETTINGS_WIFI ? wifiManagerProvisioned()
           : s.led;
       spr.setTextColor(value ? GREEN : p.textDim, PANEL);
       spr.print(value ? " on" : "off");
@@ -384,6 +400,101 @@ static void drawSettings() {
     }
   }
   drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Change");
+}
+
+static void drawWifiMenu() {
+  const Palette& p = characterPalette();
+  bool provisioned = wifiManagerProvisioned();
+  uint8_t count = wifiMenuItemCount(provisioned);
+  int mw = 118, mh = 28 + count * 18 + MENU_HINT_H;
+  int mx = (W - mw) / 2, my = (H - mh) / 2;
+  spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
+  spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
+  spr.setTextSize(1);
+  spr.setTextColor(p.text, PANEL);
+  spr.setCursor(mx + 7, my + 8);
+  spr.print("WI-FI");
+  for (uint8_t i = 0; i < count; ++i) {
+    bool selected = i == wifiMenuSel;
+    spr.setTextColor(selected ? p.text : p.textDim, PANEL);
+    spr.setCursor(mx + 7, my + 26 + i * 18);
+    spr.print(selected ? "> " : "  ");
+    spr.print(wifiMenuLabel(provisioned, i));
+  }
+  drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Select");
+}
+
+static void drawWifiStatus() {
+  const Palette& p = characterPalette();
+  WifiManagerSnapshot wifi = wifiManagerSnapshot();
+  int mw = 124, mh = 128;
+  int mx = (W - mw) / 2, my = (H - mh) / 2;
+  spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
+  spr.drawRoundRect(mx, my, mw, mh, 4,
+                    wifi.runtime.phase == WIFI_ERROR ? HOT : p.textDim);
+  spr.setTextSize(1);
+  spr.setTextColor(p.text, PANEL);
+  spr.setCursor(mx + 7, my + 8);
+  spr.print("WI-FI");
+  spr.setTextColor(p.textDim, PANEL);
+  if (wifi.portalActive) {
+    spr.setCursor(mx + 7, my + 25); spr.print("Join hotspot:");
+    spr.setTextColor(p.body, PANEL);
+    spr.setCursor(mx + 7, my + 38); spr.print(wifi.apSsid);
+    spr.setTextColor(p.textDim, PANEL);
+    spr.setCursor(mx + 7, my + 55); spr.print("Password:");
+    spr.setTextColor(p.body, PANEL);
+    spr.setCursor(mx + 7, my + 68); spr.print(wifi.apPassword);
+    spr.setTextColor(p.textDim, PANEL);
+    char clippedMessage[19]; wifiStatusClip(wifi.message, clippedMessage, sizeof(clippedMessage));
+    spr.setCursor(mx + 7, my + 85);
+    spr.print(wifi.runtime.phase == WIFI_CONNECTING ? "Connecting..." : clippedMessage);
+  } else if (wifi.runtime.phase == WIFI_ONLINE) {
+    char clippedSsid[19]; wifiStatusClip(wifi.ssid, clippedSsid, sizeof(clippedSsid));
+    spr.setCursor(mx + 7, my + 27); spr.print("Connected");
+    spr.setCursor(mx + 7, my + 44); spr.printf("SSID: %s", clippedSsid);
+    spr.setCursor(mx + 7, my + 61); spr.printf("RSSI: %ld dBm", (long)wifi.rssi);
+    spr.setCursor(mx + 7, my + 78); spr.printf("IP: %s", wifi.ip);
+  } else if (wifi.runtime.provisioned) {
+    char clippedSsid[19]; wifiStatusClip(wifi.ssid, clippedSsid, sizeof(clippedSsid));
+    char clippedMessage[19]; wifiStatusClip(wifi.message, clippedMessage, sizeof(clippedMessage));
+    spr.setCursor(mx + 7, my + 27); spr.print(clippedMessage);
+    spr.setCursor(mx + 7, my + 44); spr.printf("SSID: %s", clippedSsid);
+    spr.setCursor(mx + 7, my + 61); spr.print("RSSI: -");
+    spr.setCursor(mx + 7, my + 78); spr.print("IP: -");
+  } else {
+    char clipped[19]; wifiStatusClip(wifi.message, clipped, sizeof(clipped));
+    spr.setCursor(mx + 7, my + 31); spr.print(clipped[0] ? clipped : "Not configured");
+  }
+  drawMenuHints(p, mx, mw, my + mh - 12, "", wifi.portalActive ? "Cancel" : "Back");
+}
+
+static void applyWifiMenuAction() {
+  bool provisioned = wifiManagerProvisioned();
+  switch (wifiMenuAction(provisioned, wifiMenuSel)) {
+    case WIFI_MENU_STATUS:
+      wifiStatusOpen = true;
+      wifiMenuOpen = false;
+      break;
+    case WIFI_MENU_CHANGE:
+    case WIFI_MENU_SETUP:
+      wifiManagerStartProvisioning();
+      wifiStatusOpen = true;
+      wifiMenuOpen = false;
+      break;
+    case WIFI_MENU_FORGET:
+      wifiManagerForget();
+      wifiStatusOpen = true;
+      wifiMenuOpen = false;
+      break;
+    case WIFI_MENU_BACK:
+      wifiMenuOpen = false;
+      settingsOpen = true;
+      break;
+    case WIFI_MENU_INVALID:
+      return;
+  }
+  invalidatePortraitSurface();
 }
 
 static void drawReset() {
@@ -1326,6 +1437,7 @@ void setup() {
   lastInteractMs = millis();
   statsLoad();
   settingsLoad();
+  wifiManagerBegin(strlen(btName) > 6 ? btName + 6 : "SETUP");
   petNameLoad();
   buddyInit();
 
@@ -1426,6 +1538,7 @@ void loop() {
   }
 
   bool inPrompt = tama.promptId[0] && !responseSent;
+  wifiManagerPoll(inPrompt);
 
   if (VALIDATION_UI) {
     napping = false;
@@ -1488,7 +1601,19 @@ void loop() {
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
     beep(800, 60);
-    if (resetOpen) { resetOpen = false; invalidatePortraitSurface(); }
+    if (wifiStatusOpen) {
+      if (wifiManagerUiActive()) wifiManagerCancelProvisioning();
+      wifiStatusOpen = false;
+      wifiMenuOpen = true;
+      wifiMenuSel = 0;
+      invalidatePortraitSurface();
+    }
+    else if (wifiMenuOpen) {
+      wifiMenuOpen = false;
+      settingsOpen = true;
+      invalidatePortraitSurface();
+    }
+    else if (resetOpen) { resetOpen = false; invalidatePortraitSurface(); }
     else if (settingsOpen) { settingsOpen = false; invalidatePortraitSurface(); }
     else {
       menuOpen = !menuOpen;
@@ -1513,6 +1638,12 @@ void loop() {
         beep(1800, 30);
         resetSel = (resetSel + 1) % RESET_N;
         resetConfirmIdx = 0xFF;
+      } else if (wifiMenuOpen) {
+        beep(1800, 30);
+        uint8_t count = wifiMenuItemCount(wifiManagerProvisioned());
+        wifiMenuSel = (wifiMenuSel + 1) % count;
+      } else if (wifiStatusOpen) {
+        // Status/provisioning is an informational surface. B returns/cancels.
       } else if (settingsOpen) {
         beep(1800, 30);
         settingsSel = (settingsSel + 1) % SETTINGS_N;
@@ -1541,6 +1672,16 @@ void loop() {
       responseSent = true;
       statsOnDenial();
       beep(600, 60);
+    } else if (wifiStatusOpen) {
+      beep(2400, 30);
+      if (wifiManagerUiActive()) wifiManagerCancelProvisioning();
+      wifiStatusOpen = false;
+      wifiMenuOpen = true;
+      wifiMenuSel = 0;
+      invalidatePortraitSurface();
+    } else if (wifiMenuOpen) {
+      beep(2400, 30);
+      applyWifiMenuAction();
     } else if (resetOpen) {
       beep(2400, 30);
       applyReset(resetSel);
@@ -1567,11 +1708,11 @@ void loop() {
   SharedClockFaceContext sharedContext = {};
   sharedContext.normalDisplay = displayMode == DISP_NORMAL;
   sharedContext.menuVisible = menuOpen;
-  sharedContext.settingsVisible = settingsOpen;
+  sharedContext.settingsVisible = settingsOpen || wifiMenuOpen || wifiStatusOpen;
   sharedContext.resetVisible = resetOpen;
   sharedContext.passkeyVisible = blePasskey() != 0;
   sharedContext.promptVisible = inPrompt;
-  sharedContext.functionalOverrideVisible = xferActive();
+  sharedContext.functionalOverrideVisible = xferActive() || wifiManagerUiActive();
   sharedContext.otaProgressVisible = false;
   // Show the clock when nothing is happening — bridge heartbeat alone
   // doesn't count as activity (it's the only way to get the RTC synced).
@@ -1593,7 +1734,7 @@ void loop() {
   bool runtimeOrienting = screenOrientRuntimeEligible(
     displayMode == DISP_NORMAL,
     menuOpen,
-    settingsOpen,
+    settingsOpen || wifiMenuOpen || wifiStatusOpen,
     resetOpen,
     runtimeSharedFace,
     false,
@@ -1774,7 +1915,9 @@ void loop() {
       if (blePasskey()) drawPasskey();
       else if (displayMode == DISP_INFO) drawInfo();
       else if (displayMode == DISP_PET) drawPet();
-      if (resetOpen) drawReset();
+      if (wifiStatusOpen) drawWifiStatus();
+      else if (wifiMenuOpen) drawWifiMenu();
+      else if (resetOpen) drawReset();
       else if (settingsOpen) drawSettings();
       else if (menuOpen) drawMenu();
       if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
@@ -1810,6 +1953,7 @@ void loop() {
   // so now - lastInteractMs underflows when a button is held → flicker.
   // No auto-off on USB power — clock face wants to stay visible while charging.
   if (!screenOff && !inPrompt && !_onUsb
+      && !wifiManagerUiActive()
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     compatSetDisplayEnabled(false);
     screenOff = true;
