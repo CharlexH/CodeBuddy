@@ -1,12 +1,12 @@
 #pragma once
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <sys/time.h>
 #include "ble_bridge.h"
 #include "clock_time_logic.h"
 #include "utf8_text_logic.h"
 #include "usage_meter_json.h"
 #include "wifi_manager.h"
+#include "trusted_time_logic.h"
 #include "xfer.h"
 
 struct TamaState {
@@ -75,7 +75,7 @@ inline const char* dataScenarioName() {
 static bool _rtcValid = false;
 inline bool dataRtcValid() { return _rtcValid; }
 
-static void _applyJson(const char* line, TamaState* out) {
+static void _applyJson(const char* line, TamaState* out, bool trustedTransport) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
@@ -94,14 +94,19 @@ static void _applyJson(const char* line, TamaState* out) {
   // separately offset local epoch for the existing clock-face behavior.
   JsonArray t = doc["time"];
   if (!t.isNull() && t.size() == 2) {
-    ClockSyncEpochs epochs = clockSyncEpochs(
-      (int64_t)t[0].as<uint32_t>(),
-      (int32_t)t[1]
-    );
-    struct timeval tv = {(time_t)epochs.utc_epoch, 0};
-    if (settimeofday(&tv, nullptr) == 0) {
-      wifiManagerNoteHostUtc((uint32_t)epochs.utc_epoch);
+    int64_t utcEpoch = (int64_t)t[0].as<uint32_t>();
+    int32_t timezoneOffset = (int32_t)t[1];
+    if (!trustedTimeInputSane(utcEpoch, timezoneOffset)) {
+      Serial.println("[data] rejected invalid time sync");
+      return;
     }
+    ClockSyncEpochs epochs = clockSyncEpochs(
+      utcEpoch,
+      timezoneOffset
+    );
+    bool trusted = wifiManagerAcceptHostUtc(
+      epochs.utc_epoch, timezoneOffset, trustedTransport
+    );
     time_t local = (time_t)epochs.local_epoch;
     struct tm lt; gmtime_r(&local, &lt);
     RTC_TimeTypeDef tm((int8_t)lt.tm_hour, (int8_t)lt.tm_min, (int8_t)lt.tm_sec);
@@ -114,7 +119,7 @@ static void _applyJson(const char* line, TamaState* out) {
     _clkLastRead = 0;   // force re-read so _clkDt and _rtcValid agree
     clockOnTimeSync((int64_t)local);
     _rtcValid = true;
-    Serial.println("[data] time sync");
+    Serial.println(trusted ? "[data] trusted time sync" : "[data] display-only time sync");
     _lastLiveMs = millis();
     return;
   }
@@ -178,11 +183,11 @@ template<size_t N>
 struct _LineBuf {
   char buf[N];
   uint16_t len = 0;
-  void feed(Stream& s, TamaState* out) {
+  void feed(Stream& s, TamaState* out, bool trustedTransport) {
     while (s.available()) {
       char c = s.read();
       if (c == '\n' || c == '\r') {
-        if (len > 0) { buf[len]=0; if (buf[0]=='{') _applyJson(buf, out); len=0; }
+        if (len > 0) { buf[len]=0; if (buf[0]=='{') _applyJson(buf, out, trustedTransport); len=0; }
       } else if (len < N-1) {
         buf[len++] = c;
       }
@@ -205,7 +210,7 @@ inline void dataPoll(TamaState* out) {
     return;
   }
 
-  _usbLine.feed(Serial, out);
+  _usbLine.feed(Serial, out, true);
   // BLE ring buffer is drained manually since it's not a Stream.
   while (bleAvailable()) {
     int c = bleRead();
@@ -214,7 +219,7 @@ inline void dataPoll(TamaState* out) {
     if (c == '\n' || c == '\r') {
       if (_btLine.len > 0) {
         _btLine.buf[_btLine.len] = 0;
-        if (_btLine.buf[0] == '{') _applyJson(_btLine.buf, out);
+        if (_btLine.buf[0] == '{') _applyJson(_btLine.buf, out, bleSecure());
         _btLine.len = 0;
       }
     } else if (_btLine.len < sizeof(_btLine.buf) - 1) {

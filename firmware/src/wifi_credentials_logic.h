@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "secure_zero.h"
 
 struct WifiCredentials {
   char ssid[33];
@@ -24,6 +25,7 @@ class WifiCredentialStore {
   virtual bool getUInt(const char* key, uint32_t* value) = 0;
   virtual bool putUChar(const char* key, uint8_t value) = 0;
   virtual bool getUChar(const char* key, uint8_t* value) = 0;
+  virtual bool remove(const char* key) = 0;
 };
 
 inline void wifiCredentialKey(char* out, size_t outSize, uint8_t slot, const char* field) {
@@ -39,6 +41,7 @@ inline void wifiCredentialRollback(
   wifiCredentialKey(key, sizeof(key), targetSlot, "valid");
   store.putUChar(key, 0);
   store.putUChar("active", current.valid && current.slot < 2 ? current.slot : 0xff);
+  store.putUChar("migrated", current.valid && current.slot < 2 ? 1 : 0);
 }
 
 inline bool wifiCredentialLoad(WifiCredentialStore& store, WifiCredentials* out) {
@@ -66,9 +69,10 @@ inline bool wifiCredentialLoad(WifiCredentialStore& store, WifiCredentials* out)
       loaded.slot = active;
       loaded.valid = true;
     }
+    wifiSecureZero(encodedPassword, sizeof(encodedPassword));
   }
   store.end();
-  if (!ok) return false;
+  if (!ok) { wifiSecureZero(&loaded, sizeof(loaded)); return false; }
   *out = loaded;
   return true;
 }
@@ -108,9 +112,13 @@ inline bool wifiCredentialCommit(
             store.putUChar(validKey, 1) &&
             store.getUChar(validKey, &marker) && marker == 1 &&
             store.putUChar("active", target) &&
-            store.getUChar("active", &marker) && marker == target;
+            store.getUChar("active", &marker) && marker == target &&
+            store.putUChar("migrated", 1) &&
+            store.getUChar("migrated", &marker) && marker == 1;
   if (!ok) {
     wifiCredentialRollback(store, target, current);
+    wifiSecureZero(encodedPassword, sizeof(encodedPassword));
+    wifiSecureZero(verifyPassword, sizeof(verifyPassword));
     store.end();
     return false;
   }
@@ -119,6 +127,22 @@ inline bool wifiCredentialCommit(
   committed->slot = target;
   committed->generation = generation;
   committed->valid = true;
+  store.remove("ssid");
+  store.remove("password");
+  wifiSecureZero(encodedPassword, sizeof(encodedPassword));
+  wifiSecureZero(verifyPassword, sizeof(verifyPassword));
   store.end();
   return true;
+}
+
+inline bool wifiCredentialMigrationComplete(WifiCredentialStore& store) {
+  if (!store.begin(true)) return true;
+  uint8_t migrated = 0;
+  bool found = store.getUChar("migrated", &migrated);
+  store.end();
+  return found && migrated == 1;
+}
+
+inline bool wifiCredentialMayUseLegacy(WifiCredentialStore& store) {
+  return !wifiCredentialMigrationComplete(store);
 }

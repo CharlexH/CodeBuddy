@@ -52,6 +52,9 @@ class FakeStore : public WifiCredentialStore {
     if (++getCalls == failGetCall || !numbers.count(key) || !value) return false;
     *value = (uint8_t)numbers[key]; return true;
   }
+  bool remove(const char* key) override {
+    strings.erase(key); numbers.erase(key); return true;
+  }
 };
 
 static WifiCredentials oldCredentials() {
@@ -70,6 +73,7 @@ static void seedOld(FakeStore& store) {
   store.numbers["s0_gen"] = 3;
   store.numbers["s0_valid"] = 1;
   store.numbers["active"] = 0;
+  store.numbers["migrated"] = 1;
 }
 
 int main() {
@@ -95,7 +99,7 @@ int main() {
   expect_true(!wifiCredentialCommit(beginFailure, oldCredentials(), next, &committed),
               "namespace begin failure must abort the transaction");
 
-  for (int failPut = 1; failPut <= 6; ++failPut) {
+  for (int failPut = 1; failPut <= 7; ++failPut) {
     FakeStore failure;
     seedOld(failure);
     failure.failPutCall = failPut;
@@ -112,7 +116,7 @@ int main() {
                 "partial writes must preserve the previous password");
   }
 
-  for (int failGet = 1; failGet <= 6; ++failGet) {
+  for (int failGet = 1; failGet <= 7; ++failGet) {
     FakeStore readFailure;
     seedOld(readFailure);
     readFailure.failGetCall = failGet;
@@ -124,6 +128,33 @@ int main() {
                 strcmp(loaded.ssid, "OldNetwork") == 0 &&
                 strcmp(loaded.password, "oldpassword") == 0,
                 "read-back failure must preserve the prior active slot");
+  }
+
+  FakeStore migration;
+  migration.strings["ssid"] = "Legacy";
+  migration.strings["password"] = "legacypass";
+  WifiCredentials legacy = oldCredentials(); legacy.slot = 0xff; legacy.generation = 0;
+  expect_true(wifiCredentialCommit(migration, legacy, next, &committed),
+              "legacy credentials should migrate transactionally");
+  expect_true(wifiCredentialMigrationComplete(migration),
+              "successful commit should set migration-complete marker");
+  expect_true(!migration.strings.count("ssid") && !migration.strings.count("password"),
+              "successful migration should delete legacy credential keys");
+
+  FakeStore corruptAfterMigration;
+  corruptAfterMigration.numbers["migrated"] = 1;
+  corruptAfterMigration.numbers["active"] = 1;
+  corruptAfterMigration.strings["ssid"] = "StaleLegacy";
+  corruptAfterMigration.strings["password"] = "stalepassword";
+  expect_true(!wifiCredentialLoad(corruptAfterMigration, &loaded),
+              "corrupt transactional slot should fail loading");
+  expect_true(!wifiCredentialMayUseLegacy(corruptAfterMigration),
+              "migration marker must forbid fallback to stale legacy keys");
+
+  uint8_t secret[64]; memset(secret, 0xa5, sizeof(secret));
+  wifiSecureZero(secret, sizeof(secret));
+  for (size_t i = 0; i < sizeof(secret); ++i) {
+    expect_true(secret[i] == 0, "full password buffer must be explicitly zeroized");
   }
   return 0;
 }

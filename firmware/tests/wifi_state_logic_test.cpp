@@ -85,11 +85,5 @@ int main() {
   expect_true(strcmp(clipped, "123?45678") == 0,
               "status text should be clipped and control-safe");
 
-  expect_true(wifiTrustedHostTimeFresh(1000, 2000, 1500),
-              "recent host UTC should be trusted");
-  expect_true(!wifiTrustedHostTimeFresh(1000, 3000, 1500),
-              "stale host UTC should allow SNTP fallback");
-  expect_true(!wifiTrustedHostTimeFresh(0, 1000, 1500),
-              "missing host UTC should not be trusted");
   return 0;
 }

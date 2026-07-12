@@ -20,7 +20,7 @@ void wifiManagerPoll(bool approvalPromptVisible);
 bool wifiManagerStartProvisioning();
 void wifiManagerCancelProvisioning();
 void wifiManagerForget();
-void wifiManagerNoteHostUtc(uint32_t epochSeconds);
+bool wifiManagerAcceptHostUtc(int64_t epochSeconds, int32_t timezoneOffset, bool authenticated);
 bool wifiManagerSystemTimeTrusted();
 bool wifiManagerOnline();
 bool wifiManagerProvisioned();

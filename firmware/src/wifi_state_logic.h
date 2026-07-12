@@ -166,11 +166,3 @@ inline void wifiStatusClip(const char* input, char* output, size_t outputSize) {
   }
   output[n] = 0;
 }
-
-inline constexpr bool wifiTrustedHostTimeFresh(
-  uint32_t hostSyncAtMs,
-  uint32_t now,
-  uint32_t freshnessMs = WIFI_HOST_UTC_FRESH_MS
-) {
-  return hostSyncAtMs != 0 && (uint32_t)(now - hostSyncAtMs) <= freshnessMs;
-}
