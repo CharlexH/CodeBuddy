@@ -231,12 +231,10 @@ void buddyTickRuntime(
   if (personaState >= 7) personaState = B_IDLE;
   if (!buddyAdvanceTick(personaState)) return;
 
-  int canvasHeight = (BUDDY_Y_BASE + 5 * BUDDY_CHAR_H + 12) * scale;
-  if (topOffset < viewportHeight) {
-    int clearHeight = canvasHeight;
-    if (topOffset + clearHeight > viewportHeight) clearHeight = viewportHeight - topOffset;
-    if (clearHeight > 0) spr.fillRect(0, topOffset, viewportWidth, clearHeight, BUDDY_BG);
-  }
+  // Species particles can animate above and beside the visible body. Clear
+  // the complete pet viewport so a particle disappearing on the next frame
+  // cannot leave a trail; the caller excludes the usage-meter footprint.
+  spr.fillRect(0, 0, viewportWidth, viewportHeight, BUDDY_BG);
 
   uint8_t previousScale = _scale;
   int previousCenterX = _centerX;

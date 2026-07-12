@@ -17,9 +17,21 @@ struct RuntimeGifPlacement {
   uint8_t scaleDivisor;
 };
 
+struct RuntimePetClearRect {
+  int16_t x;
+  int16_t y;
+  uint16_t width;
+  uint16_t height;
+};
+
 inline constexpr RuntimePetLayout runtimePetLayout(bool landscape) {
   return landscape ? RuntimePetLayout{240, 119, 120, 59, 1, 18}
                    : RuntimePetLayout{135, 224, 67, 112, 2, 30};
+}
+
+inline constexpr RuntimePetClearRect runtimePetClearRect(bool landscape) {
+  return landscape ? RuntimePetClearRect{0, 0, 240, 119}
+                   : RuntimePetClearRect{0, 0, 135, 224};
 }
 
 inline constexpr uint8_t runtimeGifScaleDivisor(

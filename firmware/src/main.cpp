@@ -1171,9 +1171,11 @@ static void drawRuntimeLandscape(bool inPrompt) {
       M5.Lcd.fillRect(0, 0, 115, 90, p.bg);
       buddyRenderTo(&M5.Lcd, activeState);
     } else {
-      // The authored ASCII canvas is 135x82 at 1x. Clear only that centered
-      // box so 5fps animation updates do not wipe the full direct-LCD surface.
-      M5.Lcd.fillRect(layout.centerX - 67, layout.asciiYOffset, 135, 82, p.bg);
+      // Clear the whole pet viewport: some species animate particles above
+      // their centered body. The viewport ends where the meter footprint
+      // begins, and the meters are repainted last below.
+      RuntimePetClearRect clear = runtimePetClearRect(true);
+      M5.Lcd.fillRect(clear.x, clear.y, clear.width, clear.height, p.bg);
       buddyRenderTo(
         &M5.Lcd,
         activeState,

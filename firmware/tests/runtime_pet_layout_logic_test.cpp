@@ -28,6 +28,17 @@ int main() {
   expect_true(landscape.asciiScale == 1, "landscape ASCII pet should use scale 1");
   expect_true(landscape.asciiYOffset == 18, "landscape ASCII pet should use the landscape vertical offset");
 
+  const RuntimePetClearRect portraitClear = runtimePetClearRect(false);
+  expect_true(portraitClear.x == 0 && portraitClear.y == 0,
+              "portrait ASCII frames should clear particles above the visual offset");
+  expect_true(portraitClear.width == 135 && portraitClear.height == 224,
+              "portrait ASCII frames should clear the full pet viewport without the meter footprint");
+  const RuntimePetClearRect landscapeClear = runtimePetClearRect(true);
+  expect_true(landscapeClear.x == 0 && landscapeClear.y == 0,
+              "landscape ASCII frames should clear particles above the visual offset");
+  expect_true(landscapeClear.width == 240 && landscapeClear.height == 119,
+              "landscape ASCII frames should clear the full pet viewport without the meter footprint");
+
   expect_true(runtimeGifScaleDivisor(false, 135, 224) == 1,
               "portrait runtime GIFs should stay at native scale");
   expect_true(runtimeGifScaleDivisor(true, 236, 119) == 1,
