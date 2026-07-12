@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -456,12 +457,19 @@ class OtaHttpsServer:
         session_root: Optional[Path] = None,
         port: int = 0,
         request_timeout: float = 5.0,
+        minimum_transfer_bytes_per_second: float = 16 * 1024,
+        max_transfer_timeout: float = 300.0,
         max_header_bytes: int = 8192,
         max_headers: int = 48,
         max_concurrency: int = 4,
     ) -> None:
         if (
-            request_timeout <= 0
+            not math.isfinite(request_timeout)
+            or not math.isfinite(minimum_transfer_bytes_per_second)
+            or not math.isfinite(max_transfer_timeout)
+            or request_timeout <= 0
+            or minimum_transfer_bytes_per_second <= 0
+            or max_transfer_timeout <= 0
             or max_header_bytes < 512
             or max_headers < 1
             or max_concurrency < 1
@@ -495,6 +503,8 @@ class OtaHttpsServer:
         self._trust = trust
         self._session_root = session_root
         self._request_timeout = request_timeout
+        self._minimum_transfer_bytes_per_second = minimum_transfer_bytes_per_second
+        self._max_transfer_timeout = max_transfer_timeout
         self._max_header_bytes = max_header_bytes
         self._max_headers = max_headers
         self._max_concurrency = max_concurrency
@@ -519,15 +529,15 @@ class OtaHttpsServer:
             raise RuntimeError("OTA HTTPS server has already been started")
         self._started = True
         host = self.offer.host
-        material = create_ephemeral_tls_material(
-            trust=self._trust,
-            ip_address=host,
-            session_root=self._session_root,
-        )
-        self._material = material
-        self.session_dir = material.session_dir
         listening_socket: Optional[socket.socket] = None
         try:
+            material = create_ephemeral_tls_material(
+                trust=self._trust,
+                ip_address=host,
+                session_root=self._session_root,
+            )
+            self._material = material
+            self.session_dir = material.session_dir
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.load_cert_chain(
@@ -614,29 +624,47 @@ class OtaHttpsServer:
         over_capacity = len(self._clients) >= self._max_concurrency
         self._clients[task] = writer
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._request_timeout
+        transfer_deadline: Optional[float] = None
         was_cancelled = False
         try:
-            await asyncio.wait_for(
-                self._serve_connection(reader, writer, over_capacity=over_capacity),
-                timeout=max(0.0, deadline - loop.time()),
-            )
-        except asyncio.TimeoutError:
-            pass
+            try:
+                response = await asyncio.wait_for(
+                    self._route_request(reader, over_capacity=over_capacity),
+                    timeout=self._request_timeout,
+                )
+            except asyncio.TimeoutError:
+                return
+            except asyncio.CancelledError:
+                was_cancelled = True
+                raise
+            except Exception:
+                response = OtaRequestRouter._error(500)
+
+            transfer_timeout = self._transfer_timeout(response)
+            transfer_deadline = loop.time() + transfer_timeout
+            try:
+                await asyncio.wait_for(
+                    self._write_response(writer, response),
+                    timeout=transfer_timeout,
+                )
+            except asyncio.TimeoutError:
+                return
+            if response.completes_offer:
+                self._complete.set()
+                if self._server is not None:
+                    self._server.close()
         except asyncio.CancelledError:
             was_cancelled = True
             raise
         except Exception:
-            remaining = deadline - loop.time()
-            if remaining > 0:
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(
-                        self._write_response(writer, OtaRequestRouter._error(500)),
-                        timeout=remaining,
-                    )
+            pass
         finally:
             writer.close()
-            remaining = deadline - loop.time()
+            remaining = (
+                transfer_deadline - loop.time()
+                if transfer_deadline is not None
+                else 0.0
+            )
             if not was_cancelled and remaining > 0:
                 with contextlib.suppress(BaseException):
                     await asyncio.wait_for(
@@ -645,38 +673,37 @@ class OtaHttpsServer:
                     )
             self._clients.pop(task, None)
 
-    async def _serve_connection(
+    async def _route_request(
         self,
         reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
         *,
         over_capacity: bool,
-    ) -> None:
+    ) -> OtaHttpResponse:
         if over_capacity:
-            await self._write_response(writer, OtaRequestRouter._error(503))
-            return
+            return OtaRequestRouter._error(503)
         try:
             raw = await reader.readuntil(b"\r\n\r\n")
         except asyncio.LimitOverrunError:
-            await self._write_response(writer, OtaRequestRouter._error(431))
-            return
+            return OtaRequestRouter._error(431)
         except (asyncio.IncompleteReadError, ValueError):
-            await self._write_response(writer, OtaRequestRouter._error(400))
-            return
+            return OtaRequestRouter._error(400)
         if len(raw) > self._max_header_bytes:
-            await self._write_response(writer, OtaRequestRouter._error(431))
-            return
+            return OtaRequestRouter._error(431)
         try:
             method, target, headers = self._parse_request(raw)
         except ValueError:
-            await self._write_response(writer, OtaRequestRouter._error(400))
-            return
-        response = self._router.route(method, target, headers)
-        await self._write_response(writer, response)
-        if response.completes_offer:
-            self._complete.set()
-            if self._server is not None:
-                self._server.close()
+            return OtaRequestRouter._error(400)
+        return self._router.route(method, target, headers)
+
+    def _transfer_timeout(self, response: OtaHttpResponse) -> float:
+        estimated = (
+            len(response.body) / self._minimum_transfer_bytes_per_second
+            + self._request_timeout
+        )
+        return min(
+            self._max_transfer_timeout,
+            max(self._request_timeout, estimated),
+        )
 
     def _parse_request(self, raw: bytes) -> tuple[str, str, Dict[str, str]]:
         try:

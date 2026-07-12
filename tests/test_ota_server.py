@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import socket
 import ssl
 import stat
 import subprocess
@@ -301,6 +302,71 @@ def test_server_rejects_signed_manifest_url_mismatch_and_closes_reservation(tmp_
     assert reservation.closed is True
 
 
+def test_start_failure_releases_reserved_port_and_private_tls_session(tmp_path):
+    async def exercise():
+        trust = generate_ota_trust(tmp_path / "trust")
+        server = OtaHttpsServer(
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
+            trust=trust,
+            token_factory=lambda: TOKEN,
+            session_root=tmp_path / "sessions",
+        )
+        offer = server.offer
+        trust.local_ca_certificate.write_text("not a certificate")
+
+        with pytest.raises(RuntimeError, match="openssl failed"):
+            await server.start()
+
+        rebound = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            rebound.bind((offer.host, offer.port))
+        finally:
+            rebound.close()
+        assert server.active_connection_count == 0
+        assert not any((tmp_path / "sessions").glob("https-*"))
+
+    asyncio.run(exercise())
+
+
+def test_async_context_start_failure_closes_reservation(tmp_path, monkeypatch):
+    async def exercise():
+        server = OtaHttpsServer(
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
+            trust=generate_ota_trust(tmp_path / "trust"),
+            token_factory=lambda: TOKEN,
+            session_root=tmp_path / "sessions",
+        )
+        offer = server.offer
+
+        def fail_tls_material(**kwargs):
+            raise RuntimeError("injected OpenSSL failure")
+
+        monkeypatch.setattr(
+            ota_server_module,
+            "create_ephemeral_tls_material",
+            fail_tls_material,
+        )
+
+        with pytest.raises(RuntimeError, match="injected OpenSSL failure"):
+            async with server:
+                pytest.fail("context body must not run")
+
+        rebound = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            rebound.bind((offer.host, offer.port))
+        finally:
+            rebound.close()
+        assert server.active_connection_count == 0
+
+    asyncio.run(exercise())
+
+
 def test_tls_server_is_one_shot_and_removes_leaf_material(tmp_path):
     async def exercise():
         trust = generate_ota_trust(tmp_path / "trust")
@@ -481,7 +547,9 @@ def test_connection_timeout_bounds_drain_and_writer_shutdown_together(tmp_path):
             ),
             trust=generate_ota_trust(tmp_path / "trust"),
             token_factory=lambda: TOKEN,
-            request_timeout=timeout,
+            request_timeout=0.05,
+            minimum_transfer_bytes_per_second=1,
+            max_transfer_timeout=timeout,
         )
         reader = asyncio.StreamReader()
         reader.feed_data(
@@ -496,6 +564,150 @@ def test_connection_timeout_bounds_drain_and_writer_shutdown_together(tmp_path):
         assert elapsed < timeout * 1.6
         assert writer.closed is True
         assert server.active_connection_count == 0
+        assert server._complete.is_set() is False
         await server.close()
 
     asyncio.run(exercise())
+
+
+def test_slowloris_header_is_still_bounded_by_request_timeout(tmp_path):
+    async def exercise():
+        timeout = 0.05
+        server = OtaHttpsServer(
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
+            trust=generate_ota_trust(tmp_path / "trust"),
+            token_factory=lambda: TOKEN,
+            request_timeout=timeout,
+            max_transfer_timeout=1.0,
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"GET /")
+        writer = _NonReadingWriter()
+        started = asyncio.get_running_loop().time()
+
+        await server._handle_connection(reader, writer)
+
+        assert asyncio.get_running_loop().time() - started < timeout * 2
+        assert writer.closed is True
+        await server.close()
+
+    asyncio.run(exercise())
+
+
+def test_valid_transfer_may_outlive_header_timeout(tmp_path):
+    async def exercise():
+        server = OtaHttpsServer(
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
+            trust=generate_ota_trust(tmp_path / "trust"),
+            token_factory=lambda: TOKEN,
+            request_timeout=0.05,
+            minimum_transfer_bytes_per_second=1,
+            max_transfer_timeout=1.0,
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            f"GET /{TOKEN}/firmware.bin HTTP/1.1\r\nHost: device\r\n\r\n".encode()
+        )
+        writer = _NonReadingWriter()
+        asyncio.get_running_loop().call_later(0.15, writer._never_drains.set)
+        started = asyncio.get_running_loop().time()
+
+        await server._handle_connection(reader, writer)
+
+        assert asyncio.get_running_loop().time() - started > 0.1
+        assert server._complete.is_set() is True
+        await server.close()
+
+    asyncio.run(exercise())
+
+
+def test_real_tls_slow_firmware_reader_can_outlive_header_timeout(tmp_path):
+    async def exercise():
+        firmware = b"z" * (2 * 1024 * 1024)
+        trust = generate_ota_trust(tmp_path / "trust")
+        server = OtaHttpsServer(
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+                firmware=firmware,
+            ),
+            trust=trust,
+            token_factory=lambda: TOKEN,
+            session_root=tmp_path / "sessions",
+            request_timeout=0.05,
+            minimum_transfer_bytes_per_second=64 * 1024,
+            max_transfer_timeout=5.0,
+        )
+        offer = await server.start()
+        context = ssl.create_default_context(cafile=str(trust.local_ca_certificate))
+        reader, writer = await asyncio.open_connection(
+            offer.host,
+            offer.port,
+            ssl=context,
+            server_hostname=offer.host,
+            limit=4096,
+        )
+        writer.write(
+            f"GET /{TOKEN}/firmware.bin HTTP/1.1\r\nHost: {offer.host}\r\n\r\n".encode()
+        )
+        await writer.drain()
+        await asyncio.sleep(0.15)
+
+        raw = await asyncio.wait_for(reader.read(), timeout=5.0)
+
+        assert raw.endswith(firmware)
+        await server.wait_until_complete(timeout=1.0)
+        writer.close()
+        await writer.wait_closed()
+
+    asyncio.run(exercise())
+
+
+def test_default_transfer_budget_allows_two_megabytes_more_than_five_seconds(
+    tmp_path,
+):
+    firmware = b"z" * (2 * 1024 * 1024)
+    server = OtaHttpsServer(
+        release_factory=lambda firmware_url: _release(
+            tmp_path / "release",
+            artifact_url=firmware_url,
+            firmware=firmware,
+        ),
+        trust=generate_ota_trust(tmp_path / "trust"),
+        token_factory=lambda: TOKEN,
+    )
+    response = server._router.route(
+        "GET",
+        f"/{TOKEN}/firmware.bin",
+        {},
+    )
+
+    assert 5.0 < server._transfer_timeout(response) <= 300.0
+    server._reservation.close()
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_transfer_timeout": float("inf")},
+        {"max_transfer_timeout": float("nan")},
+        {"minimum_transfer_bytes_per_second": float("nan")},
+    ],
+)
+def test_transfer_limits_must_be_finite(tmp_path, limits):
+    with pytest.raises(ValueError, match="resource limits"):
+        OtaHttpsServer(
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
+            trust=generate_ota_trust(tmp_path / "trust"),
+            token_factory=lambda: TOKEN,
+            **limits,
+        )
