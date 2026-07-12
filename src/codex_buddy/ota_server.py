@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ipaddress
+import json
 import os
 import re
 import secrets
@@ -263,7 +264,13 @@ class OtaHttpResponse:
 
 
 class OtaRequestRouter:
-    def __init__(self, release: OtaRelease, *, token: str) -> None:
+    def __init__(
+        self,
+        release: OtaRelease,
+        *,
+        token: str,
+        expected_firmware_url: str,
+    ) -> None:
         if not _TOKEN.fullmatch(token):
             raise ValueError("OTA URL token must be at least 24 URL-safe characters")
         generation = Path(release.generation_dir).resolve()
@@ -279,6 +286,15 @@ class OtaRequestRouter:
             if path.resolve().parent != generation:
                 raise ValueError("OTA server requires files from the immutable generation")
             contents[expected_name] = path.read_bytes()
+        try:
+            manifest = json.loads(contents["manifest.json"].decode("utf-8"))
+            signed_firmware_url = manifest["artifact"]["url"]
+        except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
+            raise ValueError("OTA signed manifest artifact URL is missing or invalid") from exc
+        if signed_firmware_url != expected_firmware_url:
+            raise ValueError(
+                "OTA signed manifest artifact URL does not match the reserved endpoint"
+            )
         self._token = token
         self._contents = contents
 
@@ -369,11 +385,71 @@ class OtaServerOffer:
         return self.base_url + "/firmware.bin"
 
 
+class OtaEndpointReservation:
+    def __init__(
+        self,
+        *,
+        offer: OtaServerOffer,
+        listening_socket: socket.socket,
+    ) -> None:
+        self.offer = offer
+        self._socket: Optional[socket.socket] = listening_socket
+        self._claimed = False
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        address_discovery: Callable[[], Iterable[str]] = _discover_active_ipv4,
+        token_factory: Callable[[], str] = lambda: secrets.token_urlsafe(32),
+        port: int = 0,
+    ) -> "OtaEndpointReservation":
+        if port < 0 or port > 65535:
+            raise ValueError("OTA HTTPS port is out of range")
+        host = select_private_lan_ipv4(discovery=address_discovery)
+        token = token_factory()
+        if not _TOKEN.fullmatch(token):
+            raise ValueError("OTA URL token must be at least 24 URL-safe characters")
+        listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            listening_socket.bind((host, port))
+            listening_socket.listen(8)
+            listening_socket.setblocking(False)
+            bound_port = int(listening_socket.getsockname()[1])
+            return cls(
+                offer=OtaServerOffer(host=host, port=bound_port, token=token),
+                listening_socket=listening_socket,
+            )
+        except BaseException:
+            listening_socket.close()
+            raise
+
+    @property
+    def closed(self) -> bool:
+        return self._socket is None
+
+    def claim_socket(self) -> socket.socket:
+        if self._claimed or self._socket is None:
+            raise RuntimeError("OTA endpoint reservation has already been claimed or closed")
+        self._claimed = True
+        listening_socket = self._socket
+        self._socket = None
+        return listening_socket
+
+    def close(self) -> None:
+        listening_socket = self._socket
+        self._socket = None
+        if listening_socket is not None:
+            listening_socket.close()
+
+
 class OtaHttpsServer:
     def __init__(
         self,
         *,
-        release: OtaRelease,
+        release: Optional[OtaRelease] = None,
+        release_factory: Optional[Callable[[str], OtaRelease]] = None,
+        reservation: Optional[OtaEndpointReservation] = None,
         trust: OtaTrustPaths,
         address_discovery: Callable[[], Iterable[str]] = _discover_active_ipv4,
         token_factory: Callable[[], str] = lambda: secrets.token_urlsafe(32),
@@ -384,8 +460,6 @@ class OtaHttpsServer:
         max_headers: int = 48,
         max_concurrency: int = 4,
     ) -> None:
-        if port < 0 or port > 65535:
-            raise ValueError("OTA HTTPS port is out of range")
         if (
             request_timeout <= 0
             or max_header_bytes < 512
@@ -393,30 +467,58 @@ class OtaHttpsServer:
             or max_concurrency < 1
         ):
             raise ValueError("OTA HTTPS resource limits must be positive")
-        token = token_factory()
-        self._router = OtaRequestRouter(release, token=token)
+        if (release is None) == (release_factory is None):
+            raise ValueError("provide exactly one of release or release_factory")
+        if release is not None and reservation is None:
+            raise ValueError("a prebuilt OTA release requires a fixed endpoint reservation")
+        if reservation is None:
+            reservation = OtaEndpointReservation.create(
+                address_discovery=address_discovery,
+                token_factory=token_factory,
+                port=port,
+            )
+        try:
+            if release_factory is not None:
+                release = release_factory(reservation.offer.firmware_url)
+            if release is None:
+                raise ValueError("OTA release factory did not return a release")
+            self._router = OtaRequestRouter(
+                release,
+                token=reservation.offer.token,
+                expected_firmware_url=reservation.offer.firmware_url,
+            )
+        except BaseException:
+            reservation.close()
+            raise
+        self.release = release
+        self._reservation = reservation
         self._trust = trust
-        self._address_discovery = address_discovery
         self._session_root = session_root
-        self._port = port
         self._request_timeout = request_timeout
         self._max_header_bytes = max_header_bytes
         self._max_headers = max_headers
         self._max_concurrency = max_concurrency
-        self._active_requests = 0
         self._server: Optional[asyncio.AbstractServer] = None
         self._material: Optional[EphemeralTlsMaterial] = None
         self._complete = asyncio.Event()
         self._close_lock = asyncio.Lock()
-        self._offer: Optional[OtaServerOffer] = None
+        self._clients: Dict[asyncio.Task, asyncio.StreamWriter] = {}
         self._started = False
         self.session_dir: Optional[Path] = None
+
+    @property
+    def offer(self) -> OtaServerOffer:
+        return self._reservation.offer
+
+    @property
+    def active_connection_count(self) -> int:
+        return len(self._clients)
 
     async def start(self) -> OtaServerOffer:
         if self._started:
             raise RuntimeError("OTA HTTPS server has already been started")
         self._started = True
-        host = select_private_lan_ipv4(discovery=self._address_discovery)
+        host = self.offer.host
         material = create_ephemeral_tls_material(
             trust=self._trust,
             ip_address=host,
@@ -424,6 +526,7 @@ class OtaHttpsServer:
         )
         self._material = material
         self.session_dir = material.session_dir
+        listening_socket: Optional[socket.socket] = None
         try:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -431,10 +534,10 @@ class OtaHttpsServer:
                 certfile=str(material.certificate),
                 keyfile=str(material.private_key),
             )
+            listening_socket = self._reservation.claim_socket()
             self._server = await asyncio.start_server(
                 self._handle_connection,
-                host=host,
-                port=self._port,
+                sock=listening_socket,
                 ssl=context,
                 limit=self._max_header_bytes + 1,
                 ssl_handshake_timeout=self._request_timeout,
@@ -442,14 +545,13 @@ class OtaHttpsServer:
             sockets = self._server.sockets or ()
             if len(sockets) != 1:
                 raise RuntimeError("OTA HTTPS server did not bind exactly one LAN socket")
-            bound_port = int(sockets[0].getsockname()[1])
-            self._offer = OtaServerOffer(
-                host=host,
-                port=bound_port,
-                token=self._router.token,
-            )
-            return self._offer
+            if int(sockets[0].getsockname()[1]) != self.offer.port:
+                raise RuntimeError("OTA HTTPS server did not retain the reserved port")
+            listening_socket = None
+            return self.offer
         except BaseException:
+            if listening_socket is not None:
+                listening_socket.close()
             await self.close()
             raise
 
@@ -466,6 +568,30 @@ class OtaHttpsServer:
             if server is not None:
                 server.close()
                 await server.wait_closed()
+            self._reservation.close()
+            current_task = asyncio.current_task()
+            clients = [
+                (task, writer)
+                for task, writer in self._clients.items()
+                if task is not current_task
+            ]
+            for _, writer in clients:
+                writer.close()
+            for task, _ in clients:
+                task.cancel()
+            if clients:
+                await asyncio.gather(
+                    *(task for task, _ in clients),
+                    return_exceptions=True,
+                )
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(
+                        asyncio.gather(
+                            *(writer.wait_closed() for _, writer in clients),
+                            return_exceptions=True,
+                        ),
+                        timeout=self._request_timeout,
+                    )
             material = self._material
             self._material = None
             if material is not None:
@@ -481,47 +607,76 @@ class OtaHttpsServer:
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        if self._active_requests >= self._max_concurrency:
+        task = asyncio.current_task()
+        if task is None:
+            writer.close()
+            return
+        over_capacity = len(self._clients) >= self._max_concurrency
+        self._clients[task] = writer
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._request_timeout
+        was_cancelled = False
+        try:
+            await asyncio.wait_for(
+                self._serve_connection(reader, writer, over_capacity=over_capacity),
+                timeout=max(0.0, deadline - loop.time()),
+            )
+        except asyncio.TimeoutError:
+            pass
+        except asyncio.CancelledError:
+            was_cancelled = True
+            raise
+        except Exception:
+            remaining = deadline - loop.time()
+            if remaining > 0:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(
+                        self._write_response(writer, OtaRequestRouter._error(500)),
+                        timeout=remaining,
+                    )
+        finally:
+            writer.close()
+            remaining = deadline - loop.time()
+            if not was_cancelled and remaining > 0:
+                with contextlib.suppress(BaseException):
+                    await asyncio.wait_for(
+                        writer.wait_closed(),
+                        timeout=remaining,
+                    )
+            self._clients.pop(task, None)
+
+    async def _serve_connection(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        *,
+        over_capacity: bool,
+    ) -> None:
+        if over_capacity:
             await self._write_response(writer, OtaRequestRouter._error(503))
             return
-        self._active_requests += 1
         try:
-            try:
-                raw = await asyncio.wait_for(
-                    reader.readuntil(b"\r\n\r\n"),
-                    timeout=self._request_timeout,
-                )
-            except asyncio.TimeoutError:
-                await self._write_response(writer, OtaRequestRouter._error(408))
-                return
-            except asyncio.LimitOverrunError:
-                await self._write_response(writer, OtaRequestRouter._error(431))
-                return
-            except (asyncio.IncompleteReadError, ValueError):
-                await self._write_response(writer, OtaRequestRouter._error(400))
-                return
-            if len(raw) > self._max_header_bytes:
-                await self._write_response(writer, OtaRequestRouter._error(431))
-                return
-            try:
-                method, target, headers = self._parse_request(raw)
-            except ValueError:
-                await self._write_response(writer, OtaRequestRouter._error(400))
-                return
-            response = self._router.route(method, target, headers)
-            await self._write_response(writer, response)
-            if response.completes_offer:
-                self._complete.set()
-                if self._server is not None:
-                    self._server.close()
-        except Exception:
-            with contextlib.suppress(Exception):
-                await self._write_response(writer, OtaRequestRouter._error(500))
-        finally:
-            self._active_requests -= 1
-            writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
+            raw = await reader.readuntil(b"\r\n\r\n")
+        except asyncio.LimitOverrunError:
+            await self._write_response(writer, OtaRequestRouter._error(431))
+            return
+        except (asyncio.IncompleteReadError, ValueError):
+            await self._write_response(writer, OtaRequestRouter._error(400))
+            return
+        if len(raw) > self._max_header_bytes:
+            await self._write_response(writer, OtaRequestRouter._error(431))
+            return
+        try:
+            method, target, headers = self._parse_request(raw)
+        except ValueError:
+            await self._write_response(writer, OtaRequestRouter._error(400))
+            return
+        response = self._router.route(method, target, headers)
+        await self._write_response(writer, response)
+        if response.completes_offer:
+            self._complete.set()
+            if self._server is not None:
+                self._server.close()
 
     def _parse_request(self, raw: bytes) -> tuple[str, str, Dict[str, str]]:
         try:

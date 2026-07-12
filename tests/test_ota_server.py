@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import ipaddress
+import json
 import ssl
 import stat
 import subprocess
@@ -8,8 +10,9 @@ from pathlib import Path
 import pytest
 
 import codex_buddy.ota_server as ota_server_module
-from codex_buddy.ota_release import OtaRelease
+from codex_buddy.ota_release import OtaRelease, canonical_manifest_bytes
 from codex_buddy.ota_server import (
+    OtaEndpointReservation,
     OtaHttpsServer,
     OtaRequestRouter,
     create_ephemeral_tls_material,
@@ -21,12 +24,25 @@ from codex_buddy.ota_trust import generate_ota_trust
 TOKEN = "test-token-with-enough-entropy"
 
 
-def _release(tmp_path: Path) -> OtaRelease:
+def _release(
+    tmp_path: Path,
+    *,
+    artifact_url: str,
+    firmware: bytes = b"firmware-bytes",
+) -> OtaRelease:
     generation = tmp_path / ".current.generations" / "1.2.3-generation"
     generation.mkdir(parents=True)
-    (generation / "manifest.json").write_bytes(b'{"schema":1}')
+    (generation / "manifest.json").write_bytes(
+        canonical_manifest_bytes(
+            version="1.2.3",
+            chip="esp32s3",
+            size_bytes=len(firmware),
+            sha256=hashlib.sha256(firmware).hexdigest(),
+            artifact_url=artifact_url,
+        )
+    )
     (generation / "manifest.sig").write_bytes(b"signature-bytes")
-    (generation / "firmware.bin").write_bytes(b"firmware-bytes")
+    (generation / "firmware.bin").write_bytes(firmware)
     current = tmp_path / "current"
     current.symlink_to(generation)
     return OtaRelease(
@@ -36,6 +52,35 @@ def _release(tmp_path: Path) -> OtaRelease:
         manifest=generation / "manifest.json",
         signature=generation / "manifest.sig",
     )
+
+
+async def _wait_for_connection_count(server: OtaHttpsServer, expected: int) -> None:
+    for _ in range(100):
+        if server.active_connection_count == expected:
+            return
+        await asyncio.sleep(0.001)
+    assert server.active_connection_count == expected
+
+
+class _NonReadingWriter:
+    def __init__(self, *, wait_closed_blocks: bool = False) -> None:
+        self.closed = False
+        self.bytes_written = 0
+        self._never_drains = asyncio.Event()
+        self._wait_closed_blocks = wait_closed_blocks
+
+    def write(self, contents: bytes) -> None:
+        self.bytes_written += len(contents)
+
+    async def drain(self) -> None:
+        await self._never_drains.wait()
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        if self._wait_closed_blocks:
+            await asyncio.Event().wait()
 
 
 def test_private_lan_selection_accepts_only_rfc1918_candidates():
@@ -135,13 +180,18 @@ def test_leaf_key_path_is_private_before_openssl_writes_it(tmp_path, monkeypatch
 
 
 def test_router_serves_exact_allowlist_with_get_and_head(tmp_path):
-    router = OtaRequestRouter(_release(tmp_path), token=TOKEN)
+    firmware_url = f"https://192.168.44.8:443/{TOKEN}/firmware.bin"
+    router = OtaRequestRouter(
+        _release(tmp_path, artifact_url=firmware_url),
+        token=TOKEN,
+        expected_firmware_url=firmware_url,
+    )
 
     get_response = router.route("GET", f"/{TOKEN}/manifest.json", {})
     head_response = router.route("HEAD", f"/{TOKEN}/firmware.bin", {})
 
     assert get_response.status == 200
-    assert get_response.body == b'{"schema":1}'
+    assert json.loads(get_response.body)["artifact"]["url"] == firmware_url
     assert get_response.headers["Content-Length"] == str(len(get_response.body))
     assert head_response.status == 200
     assert head_response.body == b""
@@ -165,7 +215,12 @@ def test_router_serves_exact_allowlist_with_get_and_head(tmp_path):
 def test_router_rejects_methods_paths_ranges_and_request_bodies(
     tmp_path, method, path, headers, status
 ):
-    response = OtaRequestRouter(_release(tmp_path), token=TOKEN).route(method, path, headers)
+    firmware_url = f"https://192.168.44.8:443/{TOKEN}/firmware.bin"
+    response = OtaRequestRouter(
+        _release(tmp_path, artifact_url=firmware_url),
+        token=TOKEN,
+        expected_firmware_url=firmware_url,
+    ).route(method, path, headers)
 
     assert response.status == status
     assert response.body != b"firmware-bytes"
@@ -173,8 +228,13 @@ def test_router_rejects_methods_paths_ranges_and_request_bodies(
 
 
 def test_router_reads_immutable_generation_not_mutable_current_alias(tmp_path):
-    release = _release(tmp_path)
-    router = OtaRequestRouter(release, token=TOKEN)
+    firmware_url = f"https://192.168.44.8:443/{TOKEN}/firmware.bin"
+    release = _release(tmp_path, artifact_url=firmware_url)
+    router = OtaRequestRouter(
+        release,
+        token=TOKEN,
+        expected_firmware_url=firmware_url,
+    )
     replacement = tmp_path / "replacement"
     replacement.mkdir()
     (replacement / "firmware.bin").write_bytes(b"replacement")
@@ -188,7 +248,8 @@ def test_router_reads_immutable_generation_not_mutable_current_alias(tmp_path):
 
 
 def test_router_rejects_release_paths_outside_generation(tmp_path):
-    release = _release(tmp_path)
+    firmware_url = f"https://192.168.44.8:443/{TOKEN}/firmware.bin"
+    release = _release(tmp_path, artifact_url=firmware_url)
     outside = tmp_path / "outside.bin"
     outside.write_bytes(b"outside")
     malformed = OtaRelease(
@@ -200,14 +261,54 @@ def test_router_rejects_release_paths_outside_generation(tmp_path):
     )
 
     with pytest.raises(ValueError, match="immutable generation"):
-        OtaRequestRouter(malformed, token=TOKEN)
+        OtaRequestRouter(
+            malformed,
+            token=TOKEN,
+            expected_firmware_url=firmware_url,
+        )
+
+
+def test_reservation_holds_ephemeral_port_while_release_is_signed(tmp_path):
+    reservation = OtaEndpointReservation.create(token_factory=lambda: TOKEN)
+    try:
+        assert reservation.offer.port > 0
+        release = _release(tmp_path, artifact_url=reservation.offer.firmware_url)
+        server = OtaHttpsServer(
+            release=release,
+            reservation=reservation,
+            trust=generate_ota_trust(tmp_path / "trust"),
+            session_root=tmp_path / "sessions",
+        )
+        manifest = json.loads(release.manifest.read_bytes())
+        assert manifest["artifact"]["url"] == reservation.offer.firmware_url
+        assert server.offer == reservation.offer
+    finally:
+        reservation.close()
+
+
+def test_server_rejects_signed_manifest_url_mismatch_and_closes_reservation(tmp_path):
+    reservation = OtaEndpointReservation.create(token_factory=lambda: TOKEN)
+    wrong_url = f"https://{reservation.offer.host}:9/{TOKEN}/firmware.bin"
+
+    with pytest.raises(ValueError, match="signed manifest artifact URL"):
+        OtaHttpsServer(
+            release=_release(tmp_path, artifact_url=wrong_url),
+            reservation=reservation,
+            trust=generate_ota_trust(tmp_path / "trust"),
+            session_root=tmp_path / "sessions",
+        )
+
+    assert reservation.closed is True
 
 
 def test_tls_server_is_one_shot_and_removes_leaf_material(tmp_path):
     async def exercise():
         trust = generate_ota_trust(tmp_path / "trust")
         server = OtaHttpsServer(
-            release=_release(tmp_path / "release"),
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
             trust=trust,
             token_factory=lambda: TOKEN,
             session_root=tmp_path / "sessions",
@@ -219,6 +320,8 @@ def test_tls_server_is_one_shot_and_removes_leaf_material(tmp_path):
             offer.firmware_url
             == f"https://{offer.host}:{offer.port}/{TOKEN}/firmware.bin"
         )
+        served_manifest = json.loads(server.release.manifest.read_bytes())
+        assert served_manifest["artifact"]["url"] == offer.firmware_url
         context = ssl.create_default_context(cafile=str(trust.local_ca_certificate))
         reader, writer = await asyncio.open_connection(
             offer.host,
@@ -227,7 +330,10 @@ def test_tls_server_is_one_shot_and_removes_leaf_material(tmp_path):
             server_hostname=offer.host,
         )
         writer.write(
-            f"GET /{TOKEN}/firmware.bin HTTP/1.1\r\nHost: {offer.host}\r\nConnection: close\r\n\r\n".encode()
+            (
+                f"GET /{TOKEN}/firmware.bin HTTP/1.1\r\n"
+                f"Host: {offer.host}\r\nConnection: close\r\n\r\n"
+            ).encode()
         )
         await writer.drain()
         raw = await reader.read()
@@ -250,7 +356,10 @@ def test_tls_server_tears_down_on_timeout_and_cancellation(tmp_path):
     async def exercise_timeout():
         trust = generate_ota_trust(tmp_path / "trust")
         server = OtaHttpsServer(
-            release=_release(tmp_path / "release"),
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
             trust=trust,
             token_factory=lambda: TOKEN,
             session_root=tmp_path / "sessions",
@@ -262,7 +371,10 @@ def test_tls_server_tears_down_on_timeout_and_cancellation(tmp_path):
         assert session_dir is not None and not session_dir.exists()
 
         server = OtaHttpsServer(
-            release=_release(tmp_path / "release-2"),
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release-2",
+                artifact_url=firmware_url,
+            ),
             trust=trust,
             token_factory=lambda: TOKEN + "-2",
             session_root=tmp_path / "sessions",
@@ -277,3 +389,113 @@ def test_tls_server_tears_down_on_timeout_and_cancellation(tmp_path):
         assert session_dir is not None and not session_dir.exists()
 
     asyncio.run(exercise_timeout())
+
+
+def test_close_cancels_slow_client_before_removing_tls_material(tmp_path):
+    async def exercise():
+        trust = generate_ota_trust(tmp_path / "trust")
+        server = OtaHttpsServer(
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
+            trust=trust,
+            token_factory=lambda: TOKEN,
+            session_root=tmp_path / "sessions",
+            request_timeout=5.0,
+        )
+        await server.start()
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            f"GET /{TOKEN}/firmware.bin HTTP/1.1\r\nHost: device\r\n\r\n".encode()
+        )
+        writer = _NonReadingWriter()
+        client_task = asyncio.create_task(server._handle_connection(reader, writer))
+        await _wait_for_connection_count(server, 1)
+
+        await server.close()
+
+        assert client_task.done()
+        assert writer.closed is True
+        assert server.active_connection_count == 0
+        assert server.session_dir is not None and not server.session_dir.exists()
+
+    asyncio.run(exercise())
+
+
+def test_max_concurrency_rejects_second_client_and_close_leaves_no_tasks(tmp_path):
+    async def exercise():
+        trust = generate_ota_trust(tmp_path / "trust")
+        server = OtaHttpsServer(
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
+            trust=trust,
+            token_factory=lambda: TOKEN,
+            session_root=tmp_path / "sessions",
+            request_timeout=2.0,
+            max_concurrency=1,
+        )
+        offer = await server.start()
+        context = ssl.create_default_context(cafile=str(trust.local_ca_certificate))
+        first_reader, first_writer = await asyncio.open_connection(
+            offer.host,
+            offer.port,
+            ssl=context,
+            server_hostname=offer.host,
+        )
+        first_writer.write(b"GET /")
+        await first_writer.drain()
+        await _wait_for_connection_count(server, 1)
+        second_reader, second_writer = await asyncio.open_connection(
+            offer.host,
+            offer.port,
+            ssl=context,
+            server_hostname=offer.host,
+        )
+        second_writer.write(
+            f"GET /{TOKEN}/manifest.json HTTP/1.1\r\nHost: {offer.host}\r\n\r\n".encode()
+        )
+        await second_writer.drain()
+
+        response = await asyncio.wait_for(second_reader.read(), timeout=1.0)
+
+        assert response.startswith(b"HTTP/1.1 503")
+        await server.close()
+        assert server.active_connection_count == 0
+        assert await asyncio.wait_for(first_reader.read(), timeout=1.0) == b""
+        first_writer.close()
+        second_writer.close()
+
+    asyncio.run(exercise())
+
+
+def test_connection_timeout_bounds_drain_and_writer_shutdown_together(tmp_path):
+    async def exercise():
+        timeout = 0.1
+        server = OtaHttpsServer(
+            release_factory=lambda firmware_url: _release(
+                tmp_path / "release",
+                artifact_url=firmware_url,
+            ),
+            trust=generate_ota_trust(tmp_path / "trust"),
+            token_factory=lambda: TOKEN,
+            request_timeout=timeout,
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            f"GET /{TOKEN}/firmware.bin HTTP/1.1\r\nHost: device\r\n\r\n".encode()
+        )
+        writer = _NonReadingWriter(wait_closed_blocks=True)
+        started = asyncio.get_running_loop().time()
+
+        await server._handle_connection(reader, writer)
+
+        elapsed = asyncio.get_running_loop().time() - started
+        assert elapsed < timeout * 1.6
+        assert writer.closed is True
+        assert server.active_connection_count == 0
+        await server.close()
+
+    asyncio.run(exercise())
