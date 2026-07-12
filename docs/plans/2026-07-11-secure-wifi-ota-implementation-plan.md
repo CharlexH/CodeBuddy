@@ -4,9 +4,9 @@
 
 **Goal:** Add an opt-in, signed, rollback-safe Wi-Fi OTA path for StickS3 while retaining BLE as the local approval/control transport.
 
-**Architecture:** USB remains the bootstrap and recovery path. A physically initiated on-device provisioning flow stores Wi-Fi credentials locally, then a manual update command downloads only an application image to the inactive OTA slot over HTTPS. A signed manifest, pinned signing public key, image digest verification, boot-health confirmation, and rollback prevent an untrusted or broken image from becoming the active firmware.
+**Architecture:** USB remains the bootstrap and recovery path. A physically initiated on-device provisioning flow stores Wi-Fi credentials locally, then a manual update command downloads only an application image to the inactive OTA slot from a dedicated same-origin HTTPS update host. A signature over the exact downloaded manifest bytes, readback digest verification of the written partition, boot-health confirmation, and active rollback keep an untrusted or broken image from becoming the lasting active firmware.
 
-**Tech Stack:** ESP32-S3, Arduino-ESP32/ESP-IDF APIs, `wifi_prov_mgr` Security 1, WPA2 SoftAP, `esp_https_ota`, `esp_ota_ops`, mbedTLS, NVS, PlatformIO, GitHub Release or equivalent HTTPS artifact host.
+**Tech Stack:** ESP32-S3, Arduino-ESP32/ESP-IDF APIs, `wifi_prov_mgr` Security 1, WPA2 SoftAP, `esp_ota_ops`, `esp_partition`, mbedTLS, NVS, PlatformIO, and a release-owner-controlled HTTPS artifact origin.
 
 ---
 
@@ -25,7 +25,7 @@
 Before implementation, the release owner must provide:
 
 1. A protected offline/private signing key and a rotation procedure; only the matching public verification key is compiled into firmware.
-2. An HTTPS hostname under release-owner control for a versioned manifest and image (for example GitHub Releases behind a stable redirect, Cloudflare R2, or an equivalent immutable artifact host).
+2. A dedicated HTTPS origin under release-owner control for the versioned manifest, detached signature, and image (for example `https://updates.<release-owner-domain>` backed by Cloudflare R2 or equivalent immutable storage). GitHub Releases may mirror artifacts for humans, but device OTA must not use GitHub asset URLs or cross-domain redirects.
 3. A release channel decision (`stable` first; `beta` only after stable works) and a minimum supported firmware version.
 4. A security decision for a later irreversible hardening pass: ESP32-S3 Secure Boot v2 and flash encryption. This should be a separate, signed-off migration because enabling it changes USB recovery and key custody.
 
@@ -41,10 +41,11 @@ USB bootstrap
   -> manifest verified -> update available
   -> physical confirmation + power gate
   -> HTTPS download to inactive slot
-  -> image digest verified -> set boot slot -> reboot
+  -> write complete -> read back inactive slot -> digest verified
+  -> set boot slot -> reboot
   -> pending verification boot
   -> hardware/FS/BLE health check
-  -> mark valid OR rollback automatically
+  -> mark valid OR mark invalid and actively reboot into rollback
 ```
 
 Failures always return to the normal BLE firmware. A failed network connection, manifest verification, digest check, or update download never changes the active boot partition.
@@ -60,7 +61,7 @@ Failures always return to the normal BLE firmware. A failed network connection, 
 
 ## Manifest and update contract
 
-The release pipeline publishes a canonical JSON manifest and detached signature. The device has one fixed production public key and accepts only an Ed25519 signature over the exact canonical manifest bytes (or an ESP-IDF-supported equivalent selected and tested before implementation).
+The release pipeline publishes a canonical JSON manifest and detached signature from the same HTTPS origin as the image. The device has one fixed production public key and accepts only an Ed25519 signature over the exact downloaded manifest byte sequence (or an ESP-IDF-supported equivalent selected and tested before implementation). The signature is not over a parsed object, a reserialized object, or a digest supplied inside the manifest.
 
 ```json
 {
@@ -79,13 +80,25 @@ The release pipeline publishes a canonical JSON manifest and detached signature.
 }
 ```
 
-Validation order is: HTTPS certificate validation, manifest size/type/schema validation, signature validation, channel/chip/version policy, fixed-host URL policy, then image download. Stream the image to the inactive partition with `esp_https_ota`; calculate SHA-256 as it streams and compare it to the signed manifest before setting the new boot partition. Reject redirects to a different host, HTTP, oversized manifests/images, downgrades, and an image that does not fit the inactive slot.
+The manifest fetch order is deliberately byte-oriented:
+
+1. Fetch the manifest and detached signature from fixed paths on the compiled production origin with normal TLS verification, redirects disabled, a strict response-size limit, and no content decoding or newline conversion.
+2. Verify the detached signature over the exact downloaded manifest bytes **before** JSON parsing or field access.
+3. Require strict UTF-8 with no BOM, NUL, invalid sequence, alternate character encoding, non-finite number, or non-canonical number/string escape. Run a duplicate-key-aware JSON validator at every object depth; a parser that silently keeps the first or last duplicate is not sufficient.
+4. Parse only after steps 1–3 succeed, serialize the typed result with the same documented canonicalization profile used by the release tool, and require byte-for-byte equality with the signed bytes. This defends against parser/canonicalizer ambiguity in addition to the explicit duplicate-key check.
+5. Validate the complete typed schema and policy: `schema`, `channel`, `version`, `chip`, `minimumVersion`, and `publishedAt`, then bind one artifact tuple consisting of `artifact.url`, lowercase 64-hex `artifact.sha256`, integer `artifact.sizeBytes`, manifest `version`, and `channel`. No field may have an alias, implicit default, lossy numeric conversion, or unconsumed duplicate/unknown replacement.
+
+The compiled update origin is one exact `https` scheme, lowercase host, and port. The manifest, signature, and artifact URL must use that same origin; redirects are disabled rather than followed. Paths must be versioned, immutable, normalized, free of user info/fragments/dot segments, and match `/code-buddy/<channel>/<version>/firmware.bin`. Reject HTTP, a foreign host or port, any redirect, oversized manifests/images, downgrades, a response length different from signed `sizeBytes`, and an image that does not fit the inactive slot. GitHub Releases remains an optional mirror only because its asset redirects do not satisfy this fixed-origin device policy.
+
+Do not use the convenience `esp_https_ota_finish()` path for the security decision because its finish/validation ordering does not expose the exact written partition for the required pre-switch digest gate. Use `esp_ota_begin()` + bounded `esp_ota_write()` calls to the inactive application partition, tracking received bytes only for progress. After the final byte, require received length == signed `sizeBytes`, call `esp_ota_end()` to close and validate the image, then read exactly `sizeBytes` back from that partition through `esp_partition_read()` in bounded chunks and compute SHA-256 over the readback bytes. Compare that digest in constant time with the signed lowercase digest. Only after both `esp_ota_end()` and readback digest verification succeed may code call `esp_ota_set_boot_partition()`. Erase/restart staging on any error; a streaming download hash may be retained as diagnostics, but it must not replace partition readback and must never authorize a boot-slot switch.
 
 ## Boot health and rollback
 
 - Enable and verify the ESP-IDF bootloader rollback configuration before exposing OTA in Settings.
 - An updated image begins in a pending-verification state. In the first 30 seconds it must initialise NVS/LittleFS, display, buttons, BLE advertising, and its normal event loop without a reset or panic.
-- Only after those checks call `esp_ota_mark_app_valid_cancel_rollback()`. A reset, watchdog, failed health check, or missed deadline leaves the image unconfirmed so the bootloader rolls back to the known-good slot.
+- Only after all checks call `esp_ota_mark_app_valid_cancel_rollback()` exactly once. Any explicit health failure or deadline expiry must call `esp_ota_mark_app_invalid_rollback_and_reboot()`; merely returning to the event loop or leaving the image unconfirmed is not sufficient because rollback should not depend on a later incidental reset.
+- Arm the 30-second deadline before fallible application initialisation and service it from a minimal boot-health supervisor that does not depend on Wi-Fi, BLE, LittleFS, or the normal UI task. Its failure path is one-shot: atomically latch `rollback_requested`, persist only a non-secret bounded reason when NVS is usable, stop normal startup, call the invalid/rollback/reboot API, and never retry it in a loop. If the API unexpectedly returns, log only the error code, wait a bounded interval, and call `esp_restart()`; the still-pending bootloader state must then select the prior valid slot. OTA must remain hidden unless bootloader rollback is proven enabled, preventing a reboot loop on a configuration without rollback.
+- Track pending-boot attempts and the last rollback reason independently from update availability. The known-good image clears the attempt marker after observing a rollback. Tests must prove that a health timeout causes an active reboot request once, that a reboot while still pending cannot re-enter OTA download, and that repeated failures land on the prior valid image rather than alternating slots or looping indefinitely.
 - Require external power or battery at least 50% before download. Recheck immediately before setting the boot partition; refuse updates when charging/battery state is unavailable.
 - Preserve a USB recovery guide and a Settings screen showing active version, pending version, rollback reason, and last update error code without secrets.
 
@@ -165,9 +178,9 @@ git commit -m "feat: add physical Wi-Fi provisioning"
 - Create: `firmware/src/ota_public_key.h`
 - Test: `firmware/tests/ota_manifest_test.cpp`
 
-**Step 1: Write failing parser/signature tests**
+**Step 1: Write failing byte-authentication and parser tests**
 
-Use known-good signed test fixtures. Reject wrong key, modified byte, missing fields, wrong chip, invalid digest length, HTTP/foreign-host URL, oversized notes, unsupported schema, and semantic downgrade.
+Use known-good signed byte fixtures. Prove verification consumes the original byte buffer before parsing. Reject wrong key, any modified whitespace/escape/newline byte, UTF-8 BOM, invalid UTF-8, NUL, duplicate keys at root and nested object levels, non-canonical equivalent JSON, missing/unknown/retyped fields, wrong chip, invalid digest length/case, size overflow, artifact version/path mismatch, HTTP/foreign-origin/alternate-port URL, redirect response, oversized notes, unsupported schema, and semantic downgrade.
 
 **Step 2: Verify red**
 
@@ -175,9 +188,9 @@ Run: `cd firmware && pio test -e m5stack-sticks3 -f ota_manifest_test`
 
 Expected: fixtures fail authentication before verification code exists.
 
-**Step 3: Implement minimal verifier**
+**Step 3: Implement minimal byte-first verifier**
 
-Bound manifest input before parsing, canonicalise exactly once in the release tool and device implementation, and use the compiled public key. Keep the public key in source; keep the private key outside the repository and CI logs.
+Fetch bounded raw bytes and the detached signature from fixed same-origin paths. Verify the signature over those bytes before invoking JSON code. Then run a strict UTF-8/canonical JSON scanner with explicit duplicate-key rejection, parse into fixed-width typed fields, reserialize canonically, and compare it byte-for-byte with the signed input. Validate and return one immutable artifact descriptor containing version/channel plus the exact URL, digest, and size; the downloader accepts only this descriptor, never independently parsed fields. Keep the public key in source; keep the private key outside the repository and CI logs.
 
 **Step 4: Verify green**
 
@@ -198,9 +211,9 @@ git commit -m "feat: verify signed OTA manifests"
 - Modify: `firmware/src/main.cpp`
 - Test: `firmware/tests/ota_update_policy_test.cpp`
 
-**Step 1: Write failing policy tests**
+**Step 1: Write failing policy and ordering tests**
 
-Cover power rejection, active-slot rejection, non-HTTPS rejection, SHA mismatch, interrupted download, image-size overflow, and only setting boot partition after all checks succeed.
+Cover power rejection, active-slot rejection, non-HTTPS/foreign-origin/redirect rejection, signed-size versus `Content-Length` and received-length mismatch, interrupted download, image-size overflow, `esp_ota_end()` failure, partition-read failure, and readback SHA mismatch. Use a fake adapter/event log to assert the only successful order is `begin -> write* -> end -> partition_read* -> digest_match -> set_boot_partition`, and that no failure path emits `set_boot_partition`.
 
 **Step 2: Verify red**
 
@@ -208,11 +221,11 @@ Run the pure policy test with g++ before adapter code exists.
 
 **Step 3: Implement minimal staging adapter**
 
-Use `esp_https_ota` with normal TLS verification, no insecure certificate bypass, strict redirect policy, timeout/retry budget, streaming SHA-256, and the inactive application partition returned by `esp_ota_get_next_update_partition`. The UI shows phase and percent but never a URL or secret.
+Use the ordinary ESP HTTPS client with normal TLS verification, no insecure certificate bypass, redirects disabled, and a bounded timeout/retry budget. Resolve the inactive application partition with `esp_ota_get_next_update_partition()`, then stage through `esp_ota_begin()`/`esp_ota_write()`/`esp_ota_end()`. Require the exact signed byte count, read the written partition back with `esp_partition_read()`, hash the readback, compare it in constant time, and only then call `esp_ota_set_boot_partition()`. The UI shows phase and percent but never a URL or secret.
 
 **Step 4: Verify green and fault injection**
 
-On a sacrificial device/slot, interrupt network and power at each phase. Verify the original firmware always remains bootable and a bad digest never changes boot target.
+On a sacrificial device/slot, interrupt network and power during erase/write, after `esp_ota_end()`, during partition readback, and immediately before/after the boot-slot switch. Inject a transport hash that matches while corrupting mocked/readback partition bytes to prove only the readback digest authorizes the switch. Verify the original firmware always remains bootable and a bad digest or read failure never changes the boot target.
 
 **Step 5: Commit**
 
@@ -230,7 +243,7 @@ git commit -m "feat: stage verified OTA application images"
 
 **Step 1: Write failing health-gate tests**
 
-Require all boot conditions plus the deadline. Test that any failure or timeout does not mark valid.
+Require all boot conditions plus the deadline. Test that success marks valid once; any explicit failure or timeout latches rollback once, calls `esp_ota_mark_app_invalid_rollback_and_reboot()`, and cannot resume normal startup. Test the API-unexpectedly-returned fallback invokes one bounded `esp_restart()`, and that a second pending boot selects the prior valid partition rather than looping.
 
 **Step 2: Verify red**
 
@@ -238,11 +251,11 @@ Run the focused host C++ test; it must fail while no health aggregator exists.
 
 **Step 3: Implement the minimal confirmation gate**
 
-Check `esp_ota_get_state_partition`, gather display/buttons/LittleFS/BLE readiness, then mark valid exactly once. Surface a non-secret failure code and allow USB recovery.
+Arm an independent deadline before fallible startup, check `esp_ota_get_state_partition`, and gather display/buttons/LittleFS/BLE readiness without making the supervisor depend on those subsystems. Mark valid exactly once on success. On failure/timeout, atomically stop startup and actively mark invalid/rollback/reboot once, with bounded restart fallback if the API returns. Surface a non-secret failure code from the recovered known-good image and retain USB recovery.
 
 **Step 4: Verify green on hardware**
 
-Install a signed known-good image, then a deliberately boot-failing test image in the inactive slot. Prove first image becomes valid and the second rolls back automatically.
+Install a signed known-good image, then images that fail immediately, fail one required subsystem, and hang past the deadline. Prove the good image becomes valid, each bad image actively reboots, the bootloader selects the prior valid image, the rollback reason is visible there, and no case produces repeated pending-image boots or a reboot loop.
 
 **Step 5: Commit**
 
@@ -262,7 +275,7 @@ git commit -m "feat: confirm healthy OTA boots with rollback"
 
 **Step 1: Write a failing release verifier fixture**
 
-The verifier must reject a manifest whose version, SHA-256, image size, or signature does not match the artifact.
+The verifier must reject a manifest whose version/path, SHA-256, image size, origin, canonical bytes, or signature does not match the artifact. Include duplicate-key, alternate-encoding, redirect, and cross-origin fixtures.
 
 **Step 2: Verify red**
 
@@ -270,11 +283,11 @@ Run `python3 scripts/verify-ota-release.py fixtures/bad-manifest.json`; expect a
 
 **Step 3: Implement the pipeline**
 
-Build both `full.bin` (USB recovery) and app-only `firmware.bin` (OTA); produce SHA-256, sign the canonical manifest in a protected release environment, publish immutable versioned paths, and update only a signed stable-channel index. The private key never enters the firmware repository or a developer shell history.
+Build both `full.bin` (USB recovery) and app-only `firmware.bin` (OTA); derive version, exact byte size, and SHA-256 from the final app artifact; construct one canonical manifest whose versioned same-origin URL binds those values; sign the exact emitted bytes in a protected release environment; and verify them again before upload. Publish manifest, detached signature, and image to immutable paths on the dedicated update origin, then atomically update only a signed stable-channel pointer on that origin. Configure the device-facing origin to serve bytes without content transformation and to reject redirects; GitHub Releases may receive a mirror but is never written into the device manifest. The private key never enters the firmware repository or a developer shell history.
 
 **Step 4: Verify green**
 
-Run local verification against a test signing key outside the repo, then run a release-candidate download/update/rollback test on physical hardware.
+Run local verification against a test signing key outside the repo. As a release gate, fetch every production URL exactly as the device does and prove: valid public CA chain and hostname, exact expected origin/port, zero redirects, immutable versioned cache policy, manifest/signature byte stability, advertised size, artifact digest, and signature all match. Then run a release-candidate download/readback/update/rollback test on physical hardware. Do not enable the Settings OTA entry until the dedicated origin and these gates pass in production.
 
 **Step 5: Commit**
 
@@ -294,10 +307,11 @@ After OTA is proven, add only these opt-in operations: NTP as an offline/host-ab
 
 ## Verification checklist
 
-- Unit tests cover every state transition, signature rejection path, URL/power policy, digest mismatch, and boot-health decision.
+- Unit tests cover every state transition, byte-before-parse signature rejection path, duplicate-key/encoding ambiguity, same-origin/no-redirect URL policy, partition-readback digest mismatch, operation ordering, and active boot-health rollback decision.
 - `pio run -s` succeeds with the selected Arduino-ESP32 version.
 - First USB flash works exactly as today.
 - Provision/cancel/forget have no credentials in serial log or device UI after completion.
 - A successful signed OTA survives reboot and reports the new version.
-- A tampered manifest, wrong-host URL, expired/invalid signature, bad image, network interruption, and forced boot failure all leave or restore a bootable known-good firmware.
+- A tampered or non-canonical manifest, duplicate JSON key, ambiguous encoding, wrong-origin URL, any redirect, invalid signature, signed-size mismatch, corrupt written partition, network interruption, and forced/timeout boot failure all leave or actively restore a bootable known-good firmware.
+- Production rollout is blocked until the dedicated update origin passes TLS, no-redirect, immutable-path, exact-byte, signature, size, digest, readback, and rollback-loop gates on physical hardware.
 - Existing BLE pairing, usage meter, approval buttons, and runtime landscape continue working before, during (where safe), and after an OTA attempt.
