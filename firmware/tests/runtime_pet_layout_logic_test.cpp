@@ -80,6 +80,21 @@ int main() {
   expect_true(!directFrame.render && !directFrame.clear,
               "an unavailable direct character should leave the viewport unchanged");
 
+  CompactCharacterRenderDecision compact = compactCharacterRenderDecision(
+    true, false, 2, 100, 100, false
+  );
+  expect_true(compact.kind == COMPACT_CHARACTER_TEXT && compact.render && compact.clearPetRect,
+              "compact rendering must route valid text-mode frames without requiring an open GIF");
+  compact = compactCharacterRenderDecision(false, true, 0, 100, 100, false);
+  expect_true(compact.kind == COMPACT_CHARACTER_GIF && compact.render && !compact.clearPetRect,
+              "compact GIF frames should render without a per-frame pet-rectangle clear");
+  compact = compactCharacterRenderDecision(true, false, 0, 100, 100, true);
+  expect_true(compact.kind == COMPACT_CHARACTER_NONE && !compact.render,
+              "text mode without frames should remain unavailable even when forced dirty");
+  const CompactTextPlacement compactText = compactTextPlacement(19, 0, 0, 115, 90);
+  expect_true(compactText.visibleCharacters == 9 && compactText.x == 3 && compactText.y == 37,
+              "long compact text frames should be clipped and centered inside the pet rectangle");
+
   const RuntimeTextPlacement landscapeText = runtimeTextPlacement(5, 120, 59);
   expect_true(landscapeText.x == 90 && landscapeText.y == 51,
               "landscape text-mode frames should be centered at the runtime pet center");

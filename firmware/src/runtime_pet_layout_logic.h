@@ -34,6 +34,24 @@ struct RuntimeTextPlacement {
   int16_t y;
 };
 
+enum CompactCharacterKind : uint8_t {
+  COMPACT_CHARACTER_NONE,
+  COMPACT_CHARACTER_TEXT,
+  COMPACT_CHARACTER_GIF,
+};
+
+struct CompactCharacterRenderDecision {
+  CompactCharacterKind kind;
+  bool render;
+  bool clearPetRect;
+};
+
+struct CompactTextPlacement {
+  int16_t x;
+  int16_t y;
+  uint8_t visibleCharacters;
+};
+
 inline constexpr RuntimePetLayout runtimePetLayout(bool landscape) {
   return landscape ? RuntimePetLayout{240, 119, 120, 59, 1, 18}
                    : RuntimePetLayout{135, 224, 67, 112, 2, 30};
@@ -81,6 +99,41 @@ inline RuntimeDirectFrameDecision runtimeDirectFrameDecision(
   bool render = available && (due || dirty);
   bool clear = render && (textMode || dirty);
   return RuntimeDirectFrameDecision{render, clear};
+}
+
+inline CompactCharacterRenderDecision compactCharacterRenderDecision(
+  bool textMode,
+  bool gifOpen,
+  uint8_t textFrameCount,
+  uint32_t now,
+  uint32_t nextFrameAt,
+  bool dirty
+) {
+  CompactCharacterKind kind = textMode
+    ? (textFrameCount > 0 ? COMPACT_CHARACTER_TEXT : COMPACT_CHARACTER_NONE)
+    : (gifOpen ? COMPACT_CHARACTER_GIF : COMPACT_CHARACTER_NONE);
+  bool render = kind != COMPACT_CHARACTER_NONE &&
+    ((int32_t)(now - nextFrameAt) >= 0 || dirty);
+  return CompactCharacterRenderDecision{
+    kind,
+    render,
+    render && kind == COMPACT_CHARACTER_TEXT,
+  };
+}
+
+inline constexpr CompactTextPlacement compactTextPlacement(
+  uint8_t characterCount,
+  int16_t petX,
+  int16_t petY,
+  uint16_t petWidth,
+  uint16_t petHeight
+) {
+  return CompactTextPlacement{
+    (int16_t)(petX + (petWidth -
+      ((characterCount < petWidth / 12 ? characterCount : petWidth / 12) * 12)) / 2),
+    (int16_t)(petY + (petHeight > 16 ? (petHeight - 16) / 2 : 0)),
+    (uint8_t)(characterCount < petWidth / 12 ? characterCount : petWidth / 12),
+  };
 }
 
 inline constexpr RuntimeTextPlacement runtimeTextPlacement(

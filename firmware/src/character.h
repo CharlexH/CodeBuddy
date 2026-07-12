@@ -25,7 +25,17 @@ void characterClose();   // close GIF + clear loaded flag; FS stays mounted   //
 // header strip; off renders full-size centered in the upper home area.
 // Adaptive to actual canvas height — no padding required in source art.
 void characterSetPeek(bool peek);
-void characterRenderTo(lgfx::LovyanGFX* tgt, int cx, int cy);
+void characterRenderTo(lgfx::LovyanGFX* tgt, int cx, int cy, bool forceDirty = false);
+void characterRenderCompactTo(
+  lgfx::LovyanGFX* tgt,
+  int centerX,
+  int centerY,
+  int petX,
+  int petY,
+  int petWidth,
+  int petHeight,
+  bool forceDirty = false
+);
 void characterSetRuntimeViewport(bool enabled, int width = 135, int height = 224);
 void characterRenderRuntimeTo(
   lgfx::LovyanGFX* tgt,

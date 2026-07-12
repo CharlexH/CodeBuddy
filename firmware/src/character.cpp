@@ -289,19 +289,73 @@ const Palette& characterPalette() { return pal; }
 // One-shot half-scale render to an arbitrary surface (M5.Lcd for the
 // landscape clock). Caller owns clearing. Advances frame timing so
 // animation runs even when characterTick() is bypassed.
-void characterRenderTo(lgfx::LovyanGFX* tgt, int cx, int cy) {
+void characterRenderTo(lgfx::LovyanGFX* tgt, int cx, int cy, bool forceDirty) {
   if (!gifOpen) return;   // caller opens via characterSetState(activeState)
   lgfx::LovyanGFX* prevT = _tgt; bool prevP = peekMode; int px = gifX, py = gifY;
   _tgt = tgt; peekMode = true;
   gifX = cx - gifW / 4;
   gifY = cy - gifH / 4;
   uint32_t now = millis();
-  if (now >= nextFrameAt) {
+  if (forceDirty || (int32_t)(now - nextFrameAt) >= 0) {
     int delayMs = 0;
     if (!gif.playFrame(false, &delayMs)) { gif.reset(); gif.playFrame(false, &delayMs); }
     nextFrameAt = now + (delayMs > 0 ? delayMs : 100);
   }
   _tgt = prevT; peekMode = prevP; gifX = px; gifY = py;
+}
+
+void characterRenderCompactTo(
+  lgfx::LovyanGFX* tgt,
+  int centerX,
+  int centerY,
+  int petX,
+  int petY,
+  int petWidth,
+  int petHeight,
+  bool forceDirty
+) {
+  uint8_t textFrameCount = 0;
+  if (textMode && curState < N_STATES) textFrameCount = textStates[curState].nFrames;
+  uint32_t now = millis();
+  CompactCharacterRenderDecision decision = compactCharacterRenderDecision(
+    textMode,
+    gifOpen,
+    textFrameCount,
+    now,
+    textMode ? textNext : nextFrameAt,
+    forceDirty || directRuntimeDirty
+  );
+  if (!decision.render) return;
+
+  if (decision.kind == COMPACT_CHARACTER_GIF) {
+    // Full GIF frames self-erase transparent pixels. Do not clear the compact
+    // box first or the display flashes between the clear and decoded scanlines.
+    characterRenderTo(tgt, centerX, centerY, forceDirty || directRuntimeDirty);
+    directRuntimeDirty = false;
+    return;
+  }
+
+  TextState& state = textStates[curState];
+  if (decision.clearPetRect) tgt->fillRect(petX, petY, petWidth, petHeight, pal.bg);
+  textNext = now + state.delayMs;
+  const char* line = state.frames[textFrame];
+  CompactTextPlacement placement = compactTextPlacement(
+    strlen(line),
+    petX,
+    petY,
+    petWidth,
+    petHeight
+  );
+  char visibleLine[20];
+  memcpy(visibleLine, line, placement.visibleCharacters);
+  visibleLine[placement.visibleCharacters] = 0;
+  tgt->setFont(nullptr);
+  tgt->setTextColor(pal.body, pal.bg);
+  tgt->setTextSize(2);
+  tgt->setCursor(placement.x, placement.y);
+  tgt->print(visibleLine);
+  textFrame = (textFrame + 1) % state.nFrames;
+  directRuntimeDirty = false;
 }
 
 void characterRenderRuntimeTo(

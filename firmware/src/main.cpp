@@ -649,12 +649,18 @@ static void drawSharedClockFaceTo(
         1
       );
     } else {
-      // GIF frames repaint their own compact half-scale pixels. Avoid a pet
-      // rectangle clear here so there is no black flash before each scanline.
-      characterRenderTo(
+      // The compact character renderer routes both GIF and text manifests.
+      // Text frames clear only this pet rectangle; GIF frames self-erase so
+      // they avoid a black flash before each decoded scanline.
+      characterRenderCompactTo(
         &canvas,
         layout.pet.x + layout.pet.width / 2,
-        layout.pet.y + layout.pet.height / 2
+        layout.pet.y + layout.pet.height / 2,
+        layout.pet.x,
+        layout.pet.y,
+        layout.pet.width,
+        layout.pet.height,
+        decision.fullRepaint
       );
     }
   }
