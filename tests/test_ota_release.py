@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import struct
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -133,6 +134,7 @@ def test_release_bundle_binds_firmware_digest_size_and_has_no_private_material(t
         chip="esp32s3",
         artifact_url=ONE_TIME_URL,
         signing_private_key=trust.manifest_private_key,
+        expected_signing_public_key=trust.manifest_public_key,
     )
 
     assert release.output_dir == tmp_path / "release"
@@ -173,6 +175,7 @@ def test_release_refuses_output_inside_private_trust_directory(tmp_path):
             chip="esp32s3",
             artifact_url=ONE_TIME_URL,
             signing_private_key=trust.manifest_private_key,
+            expected_signing_public_key=trust.manifest_public_key,
         )
 
 
@@ -191,6 +194,7 @@ def test_release_rejects_private_key_and_symlink_as_firmware(tmp_path):
                 chip="esp32s3",
                 artifact_url=ONE_TIME_URL,
                 signing_private_key=trust.manifest_private_key,
+                expected_signing_public_key=trust.manifest_public_key,
             )
 
 
@@ -211,6 +215,7 @@ def test_release_rejects_non_esp32s3_application_image(tmp_path):
                 chip="esp32s3",
                 artifact_url=ONE_TIME_URL,
                 signing_private_key=trust.manifest_private_key,
+                expected_signing_public_key=trust.manifest_public_key,
             )
 
 
@@ -233,6 +238,7 @@ def test_atomic_writes_handle_short_os_writes(tmp_path, monkeypatch):
         chip="esp32s3",
         artifact_url=ONE_TIME_URL,
         signing_private_key=trust.manifest_private_key,
+        expected_signing_public_key=trust.manifest_public_key,
     )
 
     assert release.firmware.read_bytes() == image.read_bytes()
@@ -260,6 +266,7 @@ def test_interleaved_builds_publish_immutable_complete_generations(tmp_path):
             chip="esp32s3",
             artifact_url=ONE_TIME_URL.replace("0123456789abcdef", f"0123456789abcde{number}"),
             signing_private_key=trust.manifest_private_key,
+            expected_signing_public_key=trust.manifest_public_key,
         )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -280,3 +287,103 @@ def test_interleaved_builds_publish_immutable_complete_generations(tmp_path):
         )
     current = (tmp_path / "release").resolve()
     assert current in {release.generation_dir.resolve() for release in releases}
+
+
+def test_release_rejects_rsa_signing_key(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_esp32s3_image())
+    rsa_key = tmp_path / "rsa-key.pem"
+    subprocess.run(
+        ["openssl", "genrsa", "-out", str(rsa_key), "2048"],
+        check=True,
+        capture_output=True,
+    )
+    rsa_key.chmod(0o600)
+
+    with pytest.raises(ValueError, match="P-256"):
+        build_ota_release(
+            image_path=image,
+            output_dir=tmp_path / "release",
+            version="1.2.3",
+            current_version="1.2.2",
+            chip="esp32s3",
+            artifact_url=ONE_TIME_URL,
+            signing_private_key=rsa_key,
+            expected_signing_public_key=trust.manifest_public_key,
+        )
+
+
+def test_release_rejects_p256_key_not_bound_to_expected_public_key(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+    other = generate_ota_trust(tmp_path / "other")
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_esp32s3_image())
+
+    with pytest.raises(ValueError, match="expected firmware public key"):
+        build_ota_release(
+            image_path=image,
+            output_dir=tmp_path / "release",
+            version="1.2.3",
+            current_version="1.2.2",
+            chip="esp32s3",
+            artifact_url=ONE_TIME_URL,
+            signing_private_key=other.manifest_private_key,
+            expected_signing_public_key=trust.manifest_public_key,
+        )
+
+
+def test_release_rejects_signing_key_symlink_or_permissive_mode(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_esp32s3_image())
+    signing_symlink = tmp_path / "signing-key.pem"
+    signing_symlink.symlink_to(trust.manifest_private_key)
+
+    with pytest.raises(ValueError, match="regular non-symlink"):
+        build_ota_release(
+            image_path=image,
+            output_dir=tmp_path / "release-symlink",
+            version="1.2.3",
+            current_version="1.2.2",
+            chip="esp32s3",
+            artifact_url=ONE_TIME_URL,
+            signing_private_key=signing_symlink,
+            expected_signing_public_key=trust.manifest_public_key,
+        )
+
+    trust.manifest_private_key.chmod(0o640)
+    with pytest.raises(ValueError, match="0600"):
+        build_ota_release(
+            image_path=image,
+            output_dir=tmp_path / "release-mode",
+            version="1.2.3",
+            current_version="1.2.2",
+            chip="esp32s3",
+            artifact_url=ONE_TIME_URL,
+            signing_private_key=trust.manifest_private_key,
+            expected_signing_public_key=trust.manifest_public_key,
+        )
+
+
+def test_release_accepts_protected_managed_p256_pair(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_esp32s3_image())
+
+    release = build_ota_release(
+        image_path=image,
+        output_dir=tmp_path / "release",
+        version="1.2.3",
+        current_version="1.2.2",
+        chip="esp32s3",
+        artifact_url=ONE_TIME_URL,
+        signing_private_key=trust.manifest_private_key,
+        expected_signing_public_key=trust.manifest_public_key,
+    )
+
+    assert verify_manifest_signature(
+        release.manifest.read_bytes(),
+        release.signature.read_bytes(),
+        trust.manifest_public_key,
+    )

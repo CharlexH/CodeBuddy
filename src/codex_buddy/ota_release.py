@@ -344,11 +344,43 @@ def _validate_esp32s3_application_image(contents: bytes) -> None:
         raise ValueError("firmware must be an ESP32-S3 application image")
 
 
-def _derive_public_key(private_key: Path, destination: Path) -> None:
-    completed = _run_openssl(
-        ["pkey", "-in", str(private_key), "-pubout"],
-    )
-    _atomic_write(destination, completed.stdout, 0o600)
+def _validate_signing_pair(
+    private_key: Path,
+    expected_public_key: Path,
+) -> bytes:
+    if private_key.is_symlink() or not private_key.is_file():
+        raise ValueError("signing private key must be a regular non-symlink file")
+    if stat.S_IMODE(private_key.lstat().st_mode) != 0o600:
+        raise ValueError("signing private key permissions must be exactly 0600")
+    if expected_public_key.is_symlink() or not expected_public_key.is_file():
+        raise ValueError("expected firmware public key must be a regular non-symlink file")
+    expected_public_key_bytes = expected_public_key.read_bytes()
+
+    try:
+        private_details = _run_openssl(
+            ["ec", "-in", str(private_key), "-text", "-noout"]
+        ).stdout
+        expected_details = _run_openssl(
+            ["pkey", "-pubin", "-text", "-noout"],
+            input_bytes=expected_public_key_bytes,
+        ).stdout
+        derived_public_der = _run_openssl(
+            ["pkey", "-in", str(private_key), "-pubout", "-outform", "DER"]
+        ).stdout
+        expected_public_der = _run_openssl(
+            ["pkey", "-pubin", "-outform", "DER"],
+            input_bytes=expected_public_key_bytes,
+        ).stdout
+    except RuntimeError as exc:
+        raise ValueError("signing keys must be valid P-256 keys") from exc
+    if (
+        b"ASN1 OID: prime256v1" not in private_details
+        or b"ASN1 OID: prime256v1" not in expected_details
+    ):
+        raise ValueError("signing keys must use P-256 (prime256v1)")
+    if derived_public_der != expected_public_der:
+        raise ValueError("signing private key does not match expected firmware public key")
+    return expected_public_key_bytes
 
 
 def _publish_release_generation(
@@ -358,7 +390,7 @@ def _publish_release_generation(
     image_bytes: bytes,
     manifest_bytes: bytes,
     signature_bytes: bytes,
-    signing_private_key: Path,
+    expected_public_key_bytes: bytes,
 ) -> OtaRelease:
     parent = output_dir.parent
     _require_real_directory(parent, create=True)
@@ -379,7 +411,7 @@ def _publish_release_generation(
         _atomic_write(signature, signature_bytes)
 
         verification_key = staging / ".verification-public.pem"
-        _derive_public_key(signing_private_key, verification_key)
+        _atomic_write(verification_key, expected_public_key_bytes, 0o600)
         try:
             if not verify_manifest_signature(
                 manifest.read_bytes(),
@@ -429,16 +461,30 @@ def build_ota_release(
     chip: str,
     artifact_url: str,
     signing_private_key: Path,
+    expected_signing_public_key: Path,
 ) -> OtaRelease:
     image_path = Path(image_path)
     output_dir = Path(output_dir)
     signing_private_key = Path(signing_private_key)
+    expected_signing_public_key = Path(expected_signing_public_key)
     require_monotonic_version(version, current_version)
     if image_path.is_symlink() or not image_path.is_file():
         raise ValueError(f"firmware image must be a regular non-symlink file: {image_path}")
-    if _is_within(image_path, signing_private_key.parent):
+    expected_public_key_bytes = _validate_signing_pair(
+        signing_private_key,
+        expected_signing_public_key,
+    )
+    image_is_signing_key = image_path.resolve() == signing_private_key.resolve()
+    image_is_in_managed_private_dir = (
+        signing_private_key.parent.name == "private"
+        and _is_within(image_path, signing_private_key.parent)
+    )
+    if image_is_signing_key or image_is_in_managed_private_dir:
         raise ValueError("firmware image must not come from the private trust directory")
-    if _is_within(output_dir, signing_private_key.parent):
+    if (
+        signing_private_key.parent.name == "private"
+        and _is_within(output_dir, signing_private_key.parent)
+    ):
         raise ValueError("release output must not be inside the private trust directory")
 
     image_bytes = image_path.read_bytes()
@@ -459,5 +505,5 @@ def build_ota_release(
             image_bytes=image_bytes,
             manifest_bytes=manifest_bytes,
             signature_bytes=signature_bytes,
-            signing_private_key=signing_private_key,
+            expected_public_key_bytes=expected_public_key_bytes,
         )

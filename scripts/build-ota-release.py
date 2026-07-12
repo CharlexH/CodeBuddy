@@ -25,6 +25,12 @@ def main() -> int:
         type=Path,
         default=runtime.ota_private_dir() / "manifest-signing-key.pem",
     )
+    parser.add_argument(
+        "--signing-public-key",
+        type=Path,
+        default=runtime.ota_public_dir() / "manifest-signing-public.pem",
+        help="public key embedded in the target firmware",
+    )
     arguments = parser.parse_args()
 
     release = build_ota_release(
@@ -35,6 +41,7 @@ def main() -> int:
         chip=arguments.chip,
         artifact_url=arguments.url,
         signing_private_key=arguments.signing_key,
+        expected_signing_public_key=arguments.signing_public_key,
     )
     print(f"Signed OTA release: {release.output_dir}")
     print(release.firmware)
