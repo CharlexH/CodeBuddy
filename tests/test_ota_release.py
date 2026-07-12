@@ -17,7 +17,7 @@ from codex_buddy.ota_release import (
     sign_manifest,
     verify_manifest_signature,
 )
-from codex_buddy.ota_trust import generate_ota_trust
+from codex_buddy.ota_trust import bootstrap_ota_trust, generate_ota_trust
 
 
 ONE_TIME_URL = "https://192.168.1.20:49321/0123456789abcdefghijklmn/firmware.bin"
@@ -232,6 +232,55 @@ def test_public_trust_injection_fails_closed_for_missing_malformed_or_mismatched
     )
     assert completed.returncode != 0
     assert not output.exists()
+
+
+def test_managed_injection_requires_independent_pins_and_never_self_pins(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    script = project / "firmware/scripts/inject-ota-trust.py"
+    output = tmp_path / "ota_trust_generated.h"
+    trust = generate_ota_trust(tmp_path / "managed")
+    command = [
+        "python3", str(script), "--managed-root", str(trust.root),
+        "--output", str(output),
+    ]
+
+    missing_pins = subprocess.run(command, capture_output=True)
+    assert missing_pins.returncode != 0
+    assert not output.exists()
+    assert not trust.trust_pins.exists()
+
+    bootstrap_ota_trust(trust.root)
+    subprocess.run(command, check=True, capture_output=True)
+    assert output.is_file()
+
+    other = generate_ota_trust(tmp_path / "other")
+    trust.manifest_public_key.write_bytes(other.manifest_public_key.read_bytes())
+    output.write_text("stale header")
+    mismatch = subprocess.run(command, capture_output=True)
+    assert mismatch.returncode != 0
+    assert not output.exists()
+
+
+def test_explicit_generation_command_adds_pins_without_rotating_existing_keys(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    generator = project / "scripts/generate-ota-trust.py"
+    trust = generate_ota_trust(tmp_path / "managed")
+    original_private = (
+        trust.local_ca_private_key.read_bytes(),
+        trust.manifest_private_key.read_bytes(),
+    )
+
+    subprocess.run(
+        ["python3", str(generator), "--root", str(trust.root)],
+        check=True,
+        capture_output=True,
+    )
+
+    assert trust.trust_pins.is_file()
+    assert (
+        trust.local_ca_private_key.read_bytes(),
+        trust.manifest_private_key.read_bytes(),
+    ) == original_private
 
 
 def test_release_bundle_binds_firmware_digest_size_and_has_no_private_material(tmp_path):

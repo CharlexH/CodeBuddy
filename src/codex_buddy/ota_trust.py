@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
+import hmac
+import json
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -22,6 +26,17 @@ class OtaTrustPaths:
     local_ca_certificate: Path
     manifest_private_key: Path
     manifest_public_key: Path
+    trust_pins: Path
+
+
+@dataclass(frozen=True)
+class OtaTrustPins:
+    ca_der_sha256: str
+    manifest_public_der_sha256: str
+
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PINS_SCHEMA = 1
 
 
 def ota_trust_paths(root: Optional[Path] = None) -> OtaTrustPaths:
@@ -36,6 +51,7 @@ def ota_trust_paths(root: Optional[Path] = None) -> OtaTrustPaths:
         local_ca_certificate=public_dir / "local-ca-cert.pem",
         manifest_private_key=private_dir / "manifest-signing-key.pem",
         manifest_public_key=public_dir / "manifest-signing-public.pem",
+        trust_pins=public_dir / "trust-pins.json",
     )
 
 
@@ -256,6 +272,92 @@ def _public_key_der(public_key: Path) -> bytes:
     ).stdout
 
 
+def _certificate_der(certificate: Path) -> bytes:
+    return _run_openssl(
+        ["x509", "-in", str(certificate), "-outform", "DER"]
+    ).stdout
+
+
+def _pins_bytes(pins: OtaTrustPins) -> bytes:
+    return (
+        json.dumps(
+            {
+                "caDerSha256": pins.ca_der_sha256,
+                "manifestPublicDerSha256": pins.manifest_public_der_sha256,
+                "schema": _PINS_SCHEMA,
+            },
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("ascii")
+
+
+def _current_public_pins(paths: OtaTrustPaths) -> OtaTrustPins:
+    try:
+        return OtaTrustPins(
+            ca_der_sha256=hashlib.sha256(
+                _certificate_der(paths.local_ca_certificate)
+            ).hexdigest(),
+            manifest_public_der_sha256=hashlib.sha256(
+                _public_key_der(paths.manifest_public_key)
+            ).hexdigest(),
+        )
+    except RuntimeError as exc:
+        raise RuntimeError("OTA public trust cannot be pinned") from exc
+
+
+def _require_protected_trust_directory(path: Path, label: str) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"OTA {label} directory is missing") from exc
+    if path.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
+        raise RuntimeError(f"OTA {label} directory must be a real directory")
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise RuntimeError(f"OTA {label} directory permissions must be exactly 0700")
+
+
+def load_ota_trust_pins(trust: OtaTrustPaths) -> OtaTrustPins:
+    _require_protected_trust_directory(trust.root, "trust root")
+    _require_protected_trust_directory(trust.public_dir, "public trust")
+    path = trust.trust_pins
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError("OTA trust pin metadata is missing; run explicit trust bootstrap") from exc
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError("OTA trust pin metadata must be a regular non-symlink file")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise RuntimeError("OTA trust pin metadata permissions must be exactly 0600")
+    raw = path.read_bytes()
+    if not raw or len(raw) > 512 or b"\x00" in raw or raw.startswith(b"\xef\xbb\xbf"):
+        raise RuntimeError("OTA trust pin metadata is malformed")
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+        if (
+            not isinstance(parsed, dict)
+            or set(parsed) != {"caDerSha256", "manifestPublicDerSha256", "schema"}
+            or parsed["schema"] != _PINS_SCHEMA
+            or isinstance(parsed["schema"], bool)
+            or not isinstance(parsed["caDerSha256"], str)
+            or not isinstance(parsed["manifestPublicDerSha256"], str)
+            or not _SHA256.fullmatch(parsed["caDerSha256"])
+            or not _SHA256.fullmatch(parsed["manifestPublicDerSha256"])
+        ):
+            raise ValueError("invalid pin schema")
+        pins = OtaTrustPins(
+            ca_der_sha256=parsed["caDerSha256"],
+            manifest_public_der_sha256=parsed["manifestPublicDerSha256"],
+        )
+    except (UnicodeDecodeError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        raise RuntimeError("OTA trust pin metadata is malformed") from exc
+    if not hmac.compare_digest(raw, _pins_bytes(pins)):
+        raise RuntimeError("OTA trust pin metadata is not canonical")
+    return pins
+
+
 def _certificate_is_valid_ca(certificate: Path, expected_public_der: bytes) -> bool:
     if certificate.is_symlink() or not certificate.is_file():
         return False
@@ -324,6 +426,91 @@ def generate_ota_trust(root: Optional[Path] = None) -> OtaTrustPaths:
 
         paths.local_ca_certificate.chmod(0o644)
         paths.manifest_public_key.chmod(0o644)
+        return paths
+
+
+def bootstrap_ota_trust(
+    root: Optional[Path] = None,
+    *,
+    rotate_pins: bool = False,
+) -> OtaTrustPaths:
+    """Explicitly create/repair key material and deliberately establish build pins."""
+    candidate_paths = ota_trust_paths(root)
+    if os.path.lexists(candidate_paths.trust_pins) and not rotate_pins:
+        # Once firmware trust is pinned, losing either private key is a key
+        # rotation, not a repair. Never silently create a replacement.
+        pinned_before = load_ota_trust_pins(candidate_paths)
+        for private_key in (
+            candidate_paths.local_ca_private_key,
+            candidate_paths.manifest_private_key,
+        ):
+            if (
+                not os.path.lexists(private_key)
+                or private_key.is_symlink()
+                or not private_key.is_file()
+            ):
+                raise RuntimeError(
+                    "OTA private key rotation requires the explicit rotate-pins flag"
+                )
+        try:
+            ca_public_der = _validate_p256_private_key(
+                candidate_paths.local_ca_private_key,
+                "local CA private key",
+            )
+            manifest_public_der = _validate_p256_private_key(
+                candidate_paths.manifest_private_key,
+                "manifest signing private key",
+            )
+            certificate_hash = hashlib.sha256(
+                _certificate_der(candidate_paths.local_ca_certificate)
+            ).hexdigest()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "OTA trust key rotation requires the explicit rotate-pins flag"
+            ) from exc
+        if (
+            not hmac.compare_digest(
+                hashlib.sha256(manifest_public_der).hexdigest(),
+                pinned_before.manifest_public_der_sha256,
+            )
+            or not hmac.compare_digest(
+                certificate_hash,
+                pinned_before.ca_der_sha256,
+            )
+            or not _certificate_is_valid_ca(
+                candidate_paths.local_ca_certificate,
+                ca_public_der,
+            )
+        ):
+            raise RuntimeError(
+                "OTA trust key rotation requires the explicit rotate-pins flag"
+            )
+    paths = generate_ota_trust(root)
+    current = _current_public_pins(paths)
+    with _exclusive_file_lock(paths.root / ".pins.lock"):
+        if os.path.lexists(paths.trust_pins):
+            try:
+                pinned = load_ota_trust_pins(paths)
+            except RuntimeError as exc:
+                if not rotate_pins:
+                    raise RuntimeError(
+                        "OTA trust pins require explicit rotation to replace"
+                    ) from exc
+            else:
+                matches = (
+                    hmac.compare_digest(pinned.ca_der_sha256, current.ca_der_sha256)
+                    and hmac.compare_digest(
+                        pinned.manifest_public_der_sha256,
+                        current.manifest_public_der_sha256,
+                    )
+                )
+                if matches:
+                    return paths
+                if not rotate_pins:
+                    raise RuntimeError(
+                        "OTA trust key rotation requires the explicit rotate-pins flag"
+                    )
+        _atomic_write(paths.trust_pins, _pins_bytes(current), 0o600)
         return paths
 
 

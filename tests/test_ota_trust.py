@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from codex_buddy import runtime
-from codex_buddy.ota_trust import export_public_trust, generate_ota_trust
+from codex_buddy.ota_trust import (
+    bootstrap_ota_trust,
+    export_public_trust,
+    generate_ota_trust,
+    load_ota_trust_pins,
+)
 
 
 def _mode(path: Path) -> int:
@@ -54,6 +59,98 @@ def test_generation_creates_two_independent_p256_key_pairs_with_safe_modes(tmp_p
             text=True,
         ).stdout
         assert "ASN1 OID: prime256v1" in details
+
+
+def test_key_generation_does_not_implicitly_create_build_pins(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+
+    assert not trust.trust_pins.is_file()
+    with pytest.raises(RuntimeError, match="pin metadata"):
+        load_ota_trust_pins(trust)
+
+
+def test_explicit_bootstrap_atomically_pins_existing_trust_and_is_idempotent(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+    original_keys = (
+        trust.local_ca_private_key.read_bytes(),
+        trust.manifest_private_key.read_bytes(),
+    )
+
+    bootstrapped = bootstrap_ota_trust(trust.root)
+    pins = load_ota_trust_pins(bootstrapped)
+    original_pin_bytes = trust.trust_pins.read_bytes()
+    bootstrapped_again = bootstrap_ota_trust(trust.root)
+
+    assert bootstrapped_again == trust
+    assert trust.trust_pins.read_bytes() == original_pin_bytes
+    assert _mode(trust.trust_pins) == 0o600
+    assert _mode(trust.public_dir) == 0o700
+    assert len(pins.ca_der_sha256) == 64
+    assert len(pins.manifest_public_der_sha256) == 64
+    assert (
+        trust.local_ca_private_key.read_bytes(),
+        trust.manifest_private_key.read_bytes(),
+    ) == original_keys
+
+
+def test_pin_rotation_requires_explicit_flag(tmp_path):
+    trust = bootstrap_ota_trust(tmp_path / "ota")
+    original_pins = trust.trust_pins.read_bytes()
+    original_public = (
+        trust.local_ca_certificate.read_bytes(),
+        trust.manifest_public_key.read_bytes(),
+    )
+    other = generate_ota_trust(tmp_path / "other")
+    trust.local_ca_private_key.write_bytes(other.local_ca_private_key.read_bytes())
+    trust.manifest_private_key.write_bytes(other.manifest_private_key.read_bytes())
+    trust.local_ca_private_key.chmod(0o600)
+    trust.manifest_private_key.chmod(0o600)
+
+    with pytest.raises(RuntimeError, match="rotation"):
+        bootstrap_ota_trust(trust.root)
+    assert trust.trust_pins.read_bytes() == original_pins
+    assert (
+        trust.local_ca_certificate.read_bytes(),
+        trust.manifest_public_key.read_bytes(),
+    ) == original_public
+
+    rotated = bootstrap_ota_trust(trust.root, rotate_pins=True)
+
+    assert rotated.trust_pins.read_bytes() != original_pins
+    load_ota_trust_pins(rotated)
+
+
+def test_pinned_bootstrap_never_regenerates_a_missing_private_key_implicitly(tmp_path):
+    trust = bootstrap_ota_trust(tmp_path / "ota")
+    trust.manifest_private_key.unlink()
+
+    with pytest.raises(RuntimeError, match="rotation"):
+        bootstrap_ota_trust(trust.root)
+
+    assert not trust.manifest_private_key.exists()
+
+
+def test_pin_loader_rejects_missing_corrupt_symlink_or_permissive_metadata(tmp_path):
+    trust = bootstrap_ota_trust(tmp_path / "ota")
+    original = trust.trust_pins.read_bytes()
+
+    trust.trust_pins.unlink()
+    with pytest.raises(RuntimeError, match="pin metadata"):
+        load_ota_trust_pins(trust)
+    trust.trust_pins.write_text("not json")
+    trust.trust_pins.chmod(0o600)
+    with pytest.raises(RuntimeError, match="pin metadata"):
+        load_ota_trust_pins(trust)
+    trust.trust_pins.write_bytes(original)
+    trust.trust_pins.chmod(0o644)
+    with pytest.raises(RuntimeError, match="0600"):
+        load_ota_trust_pins(trust)
+    trust.trust_pins.unlink()
+    victim = tmp_path / "victim.json"
+    victim.write_bytes(original)
+    trust.trust_pins.symlink_to(victim)
+    with pytest.raises(RuntimeError, match="non-symlink"):
+        load_ota_trust_pins(trust)
 
 
 def test_generation_is_idempotent_and_repairs_private_permissions(tmp_path):
