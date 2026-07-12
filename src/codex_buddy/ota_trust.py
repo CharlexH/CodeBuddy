@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import os
-import shutil
+import stat
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Iterator, Optional, Sequence, Tuple
 
 from . import runtime
 
@@ -37,11 +39,17 @@ def ota_trust_paths(root: Optional[Path] = None) -> OtaTrustPaths:
     )
 
 
-def _run_openssl(arguments: Sequence[str]) -> None:
+def _run_openssl(
+    arguments: Sequence[str],
+    *,
+    input_bytes: Optional[bytes] = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
     try:
-        subprocess.run(
+        return subprocess.run(
             ["openssl", *arguments],
-            check=True,
+            input=input_bytes,
+            check=check,
             capture_output=True,
         )
     except FileNotFoundError as exc:
@@ -51,13 +59,66 @@ def _run_openssl(arguments: Sequence[str]) -> None:
         raise RuntimeError(f"openssl failed: {detail or 'unknown error'}") from exc
 
 
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_all(descriptor: int, contents: bytes) -> None:
+    remaining = memoryview(contents)
+    while remaining:
+        try:
+            written = os.write(descriptor, remaining)
+        except InterruptedError:
+            continue
+        if written <= 0:
+            raise OSError("write returned without making progress")
+        remaining = remaining[written:]
+
+
+def _require_real_directory(directory: Path, *, create: bool) -> None:
+    if os.path.lexists(directory) and directory.is_symlink():
+        raise ValueError(f"directory must not be a symlink: {directory}")
+    if create:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        metadata = directory.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError(f"directory does not exist: {directory}") from exc
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError(f"path must be a directory: {directory}")
+    directory.chmod(0o700)
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path) -> Iterator[None]:
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise RuntimeError(f"cannot safely open OTA lock {path}") from exc
+    try:
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
 def _atomic_openssl_output(
     destination: Path,
     arguments: Callable[[Path], Sequence[str]],
     mode: int,
 ) -> None:
-    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    destination.parent.chmod(0o700)
+    _require_real_directory(destination.parent, create=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
         dir=destination.parent,
@@ -65,18 +126,46 @@ def _atomic_openssl_output(
     temporary = Path(temporary_name)
     try:
         os.close(descriptor)
+        descriptor = -1
         temporary.chmod(0o600)
         _run_openssl(arguments(temporary))
         if temporary.stat().st_size == 0:
             raise RuntimeError(f"openssl produced an empty file for {destination.name}")
+        sync_descriptor = os.open(temporary, os.O_RDONLY)
+        try:
+            os.fsync(sync_descriptor)
+        finally:
+            os.close(sync_descriptor)
         temporary.chmod(mode)
         os.replace(temporary, destination)
         destination.chmod(mode)
+        _fsync_directory(destination.parent)
     finally:
-        try:
+        if descriptor >= 0:
             os.close(descriptor)
-        except OSError:
-            pass
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_write(destination: Path, contents: bytes, mode: int) -> None:
+    _require_real_directory(destination.parent, create=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        temporary.chmod(0o600)
+        _write_all(descriptor, contents)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        temporary.chmod(mode)
+        os.replace(temporary, destination)
+        destination.chmod(mode)
+        _fsync_directory(destination.parent)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
         temporary.unlink(missing_ok=True)
 
 
@@ -136,32 +225,100 @@ def _export_public_key(private_key: Path, destination: Path) -> None:
     )
 
 
+def _validate_p256_private_key(private_key: Path, label: str) -> bytes:
+    if private_key.is_symlink() or not private_key.is_file():
+        raise RuntimeError(f"{label} must be a regular private key file")
+    private_key.chmod(0o600)
+    try:
+        details = _run_openssl(
+            ["ec", "-in", str(private_key), "-text", "-noout"]
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"{label} is malformed or invalid") from exc
+    output = details.stdout + details.stderr
+    if b"ASN1 OID: prime256v1" not in output:
+        raise RuntimeError(f"{label} must use P-256 (prime256v1)")
+    try:
+        return _run_openssl(
+            ["pkey", "-in", str(private_key), "-pubout", "-outform", "DER"]
+        ).stdout
+    except RuntimeError as exc:
+        raise RuntimeError(f"{label} cannot derive a public key") from exc
+
+
+def _public_key_der(public_key: Path) -> bytes:
+    return _run_openssl(
+        ["pkey", "-pubin", "-in", str(public_key), "-outform", "DER"]
+    ).stdout
+
+
+def _certificate_is_valid_ca(certificate: Path, expected_public_der: bytes) -> bool:
+    if certificate.is_symlink() or not certificate.is_file():
+        return False
+    try:
+        public_pem = _run_openssl(
+            ["x509", "-in", str(certificate), "-pubkey", "-noout"]
+        ).stdout
+        certificate_public_der = _run_openssl(
+            ["pkey", "-pubin", "-outform", "DER"],
+            input_bytes=public_pem,
+        ).stdout
+        details = _run_openssl(
+            ["x509", "-in", str(certificate), "-noout", "-text"]
+        ).stdout
+        _run_openssl(["x509", "-in", str(certificate), "-checkend", "0", "-noout"])
+        _run_openssl(
+            ["verify", "-CAfile", str(certificate), str(certificate)]
+        )
+    except RuntimeError:
+        return False
+    return (
+        certificate_public_der == expected_public_der
+        and b"CA:TRUE" in details
+        and b"Certificate Sign" in details
+    )
+
+
+def _public_key_matches(public_key: Path, expected_der: bytes) -> bool:
+    if public_key.is_symlink() or not public_key.is_file():
+        return False
+    try:
+        return _public_key_der(public_key) == expected_der
+    except RuntimeError:
+        return False
+
+
 def generate_ota_trust(root: Optional[Path] = None) -> OtaTrustPaths:
     paths = ota_trust_paths(root)
-    for directory in (paths.root, paths.private_dir, paths.public_dir):
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        directory.chmod(0o700)
+    _require_real_directory(paths.root, create=True)
+    with _exclusive_file_lock(paths.root / ".generate.lock"):
+        for directory in (paths.private_dir, paths.public_dir):
+            _require_real_directory(directory, create=True)
 
-    if not paths.local_ca_private_key.exists():
-        _generate_p256_private_key(paths.local_ca_private_key)
-        paths.local_ca_certificate.unlink(missing_ok=True)
-    paths.local_ca_private_key.chmod(0o600)
-    if not paths.local_ca_certificate.exists():
-        _generate_local_ca_certificate(
+        if not os.path.lexists(paths.local_ca_private_key):
+            _generate_p256_private_key(paths.local_ca_private_key)
+        ca_public_der = _validate_p256_private_key(
             paths.local_ca_private_key,
-            paths.local_ca_certificate,
+            "local CA private key",
         )
+        if not _certificate_is_valid_ca(paths.local_ca_certificate, ca_public_der):
+            _generate_local_ca_certificate(
+                paths.local_ca_private_key,
+                paths.local_ca_certificate,
+            )
 
-    if not paths.manifest_private_key.exists():
-        _generate_p256_private_key(paths.manifest_private_key)
-        paths.manifest_public_key.unlink(missing_ok=True)
-    paths.manifest_private_key.chmod(0o600)
-    if not paths.manifest_public_key.exists():
-        _export_public_key(paths.manifest_private_key, paths.manifest_public_key)
+        if not os.path.lexists(paths.manifest_private_key):
+            _generate_p256_private_key(paths.manifest_private_key)
+        manifest_public_der = _validate_p256_private_key(
+            paths.manifest_private_key,
+            "manifest signing private key",
+        )
+        if not _public_key_matches(paths.manifest_public_key, manifest_public_der):
+            _export_public_key(paths.manifest_private_key, paths.manifest_public_key)
 
-    paths.local_ca_certificate.chmod(0o644)
-    paths.manifest_public_key.chmod(0o644)
-    return paths
+        paths.local_ca_certificate.chmod(0o644)
+        paths.manifest_public_key.chmod(0o644)
+        return paths
 
 
 def export_public_trust(
@@ -169,13 +326,19 @@ def export_public_trust(
     destination: Path,
 ) -> Tuple[Path, Path]:
     destination = Path(destination)
-    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
-    destination.chmod(0o700)
+    _require_real_directory(destination, create=True)
     expected_names = {
         trust.local_ca_certificate.name,
         trust.manifest_public_key.name,
     }
-    unexpected = [path.name for path in destination.iterdir() if path.name not in expected_names]
+    entries = list(destination.iterdir())
+    symlinks = [path.name for path in entries if path.is_symlink()]
+    if symlinks:
+        raise ValueError(
+            "public trust destination contains a symlink: "
+            + ", ".join(sorted(symlinks))
+        )
+    unexpected = [path.name for path in entries if path.name not in expected_names]
     if unexpected:
         raise ValueError(
             "public trust destination contains unexpected material: "
@@ -184,10 +347,12 @@ def export_public_trust(
 
     exported = []
     for source in (trust.local_ca_certificate, trust.manifest_public_key):
-        if "PRIVATE KEY" in source.read_text(encoding="ascii"):
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("public OTA trust source must be a regular file")
+        contents = source.read_bytes()
+        if b"PRIVATE KEY" in contents:
             raise ValueError("refusing to export private OTA material")
         target = destination / source.name
-        shutil.copyfile(source, target)
-        target.chmod(0o644)
+        _atomic_write(target, contents, 0o644)
         exported.append(target)
     return exported[0], exported[1]

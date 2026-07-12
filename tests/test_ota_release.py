@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import struct
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -17,6 +20,19 @@ from codex_buddy.ota_trust import generate_ota_trust
 
 
 ONE_TIME_URL = "https://192.168.1.20:49321/code-buddy/ota/0123456789abcdef/firmware.bin"
+
+
+def _esp32s3_image(payload: bytes = b"firmware-payload") -> bytes:
+    header = bytearray(24)
+    header[0] = 0xE9
+    header[1] = 1
+    header[2] = 2
+    header[3] = 0x3F
+    header[4:8] = struct.pack("<I", 0x40377B4C)
+    header[8] = 0xEE
+    header[12:14] = struct.pack("<H", 9)
+    header[23] = 0
+    return bytes(header) + struct.pack("<II", 0x3C0E0020, len(payload)) + payload + b"\xef"
 
 
 def test_manifest_has_exact_deterministic_canonical_bytes():
@@ -107,7 +123,7 @@ def test_release_bundle_binds_firmware_digest_size_and_has_no_private_material(t
     trust = generate_ota_trust(tmp_path / "ota")
     image = tmp_path / "source" / "firmware input.bin"
     image.parent.mkdir()
-    image.write_bytes(b"firmware-payload\x00\xff")
+    image.write_bytes(_esp32s3_image(b"firmware-payload\x00\xff"))
 
     release = build_ota_release(
         image_path=image,
@@ -119,6 +135,8 @@ def test_release_bundle_binds_firmware_digest_size_and_has_no_private_material(t
         signing_private_key=trust.manifest_private_key,
     )
 
+    assert release.output_dir == tmp_path / "release"
+    assert release.output_dir.is_symlink()
     assert {path.name for path in release.output_dir.iterdir()} == {
         "firmware.bin",
         "manifest.json",
@@ -144,7 +162,7 @@ def test_release_bundle_binds_firmware_digest_size_and_has_no_private_material(t
 def test_release_refuses_output_inside_private_trust_directory(tmp_path):
     trust = generate_ota_trust(tmp_path / "ota")
     image = tmp_path / "firmware.bin"
-    image.write_bytes(b"firmware")
+    image.write_bytes(_esp32s3_image())
 
     with pytest.raises(ValueError, match="private"):
         build_ota_release(
@@ -156,3 +174,109 @@ def test_release_refuses_output_inside_private_trust_directory(tmp_path):
             artifact_url=ONE_TIME_URL,
             signing_private_key=trust.manifest_private_key,
         )
+
+
+def test_release_rejects_private_key_and_symlink_as_firmware(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+    image_symlink = tmp_path / "firmware.bin"
+    image_symlink.symlink_to(trust.manifest_private_key)
+
+    for image in (trust.manifest_private_key, image_symlink):
+        with pytest.raises(ValueError, match="firmware image"):
+            build_ota_release(
+                image_path=image,
+                output_dir=tmp_path / f"release-{image.name}",
+                version="1.2.3",
+                current_version="1.2.2",
+                chip="esp32s3",
+                artifact_url=ONE_TIME_URL,
+                signing_private_key=trust.manifest_private_key,
+            )
+
+
+def test_release_rejects_non_esp32s3_application_image(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+    wrong_chip = bytearray(_esp32s3_image())
+    wrong_chip[12:14] = struct.pack("<H", 2)
+
+    for number, contents in enumerate((b"not firmware", bytes(wrong_chip), b"\xe9" * 32)):
+        image = tmp_path / f"invalid-{number}.bin"
+        image.write_bytes(contents)
+        with pytest.raises(ValueError, match="ESP32-S3 application image"):
+            build_ota_release(
+                image_path=image,
+                output_dir=tmp_path / f"release-{number}",
+                version="1.2.3",
+                current_version="1.2.2",
+                chip="esp32s3",
+                artifact_url=ONE_TIME_URL,
+                signing_private_key=trust.manifest_private_key,
+            )
+
+
+def test_atomic_writes_handle_short_os_writes(tmp_path, monkeypatch):
+    trust = generate_ota_trust(tmp_path / "ota")
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_esp32s3_image(b"short-write" * 100))
+    real_write = os.write
+
+    def short_write(descriptor, contents):
+        return real_write(descriptor, contents[: max(1, min(7, len(contents)))])
+
+    monkeypatch.setattr(os, "write", short_write)
+
+    release = build_ota_release(
+        image_path=image,
+        output_dir=tmp_path / "release",
+        version="1.2.3",
+        current_version="1.2.2",
+        chip="esp32s3",
+        artifact_url=ONE_TIME_URL,
+        signing_private_key=trust.manifest_private_key,
+    )
+
+    assert release.firmware.read_bytes() == image.read_bytes()
+    assert verify_manifest_signature(
+        release.manifest.read_bytes(),
+        release.signature.read_bytes(),
+        trust.manifest_public_key,
+    )
+
+
+def test_interleaved_builds_publish_immutable_complete_generations(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+    images = []
+    for number in range(2):
+        image = tmp_path / f"firmware-{number}.bin"
+        image.write_bytes(_esp32s3_image(bytes([number]) * 4096))
+        images.append(image)
+
+    def build(number):
+        return build_ota_release(
+            image_path=images[number],
+            output_dir=tmp_path / "release",
+            version=f"1.2.{number + 3}",
+            current_version="1.2.2",
+            chip="esp32s3",
+            artifact_url=ONE_TIME_URL.replace("0123456789abcdef", f"0123456789abcde{number}"),
+            signing_private_key=trust.manifest_private_key,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        releases = list(executor.map(build, range(2)))
+
+    assert releases[0].generation_dir != releases[1].generation_dir
+    for release, image in zip(releases, images):
+        assert {path.name for path in release.generation_dir.iterdir()} == {
+            "firmware.bin",
+            "manifest.json",
+            "manifest.sig",
+        }
+        assert release.firmware.read_bytes() == image.read_bytes()
+        assert verify_manifest_signature(
+            release.manifest.read_bytes(),
+            release.signature.read_bytes(),
+            trust.manifest_public_key,
+        )
+    current = (tmp_path / "release").resolve()
+    assert current in {release.generation_dir.resolve() for release in releases}
