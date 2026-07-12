@@ -3,6 +3,8 @@
 #include <ArduinoJson.h>
 #include "ble_bridge.h"
 #include "clock_time_logic.h"
+#include "firmware_version.h"
+#include "ota_manifest_logic.h"
 #include "utf8_text_logic.h"
 #include "usage_meter_json.h"
 #include "wifi_manager.h"
@@ -27,6 +29,7 @@ struct TamaState {
   char     promptId[40];     // pending permission request ID; empty = no prompt
   char     promptTool[96];
   char     promptHint[256];
+  OtaOfferDescriptor otaOffer;
 };
 
 // ---------------------------------------------------------------------------
@@ -85,6 +88,43 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
   if (xferCommand(doc)) {
     const char* cmd = doc["cmd"];
     Serial.printf("[data] cmd=%s\n", cmd ? cmd : "(null)");
+    _lastLiveMs = millis();
+    return;
+  }
+
+  // An OTA offer is coordination metadata only. It cannot start Wi-Fi,
+  // download bytes, or write flash. The signed manifest is authenticated by
+  // ota_manifest.cpp before any field is later trusted.
+  JsonVariant otaVariant = doc["ota_offer"];
+  if (!otaVariant.isNull()) {
+    bool accepted = false;
+    if (otaVariant.is<JsonObject>()) {
+      JsonObject offer = otaVariant.as<JsonObject>();
+      const char* version = offer["version"].is<const char*>()
+        ? offer["version"].as<const char*>() : nullptr;
+      const char* manifestUrl = offer["manifestUrl"].is<const char*>()
+        ? offer["manifestUrl"].as<const char*>() : nullptr;
+      const char* signatureUrl = offer["signatureUrl"].is<const char*>()
+        ? offer["signatureUrl"].as<const char*>() : nullptr;
+      bool sizeTyped = offer["sizeBytes"].is<uint32_t>() &&
+        !offer["sizeBytes"].is<bool>();
+      uint32_t sizeBytes = sizeTyped ? offer["sizeBytes"].as<uint32_t>() : 0;
+      bool promptConflict = out->promptId[0] != 0 || !doc["prompt"].isNull();
+      OtaOfferDescriptor candidate = {};
+      accepted = offer.size() == 4 && version && manifestUrl && signatureUrl &&
+        sizeTyped && otaOfferAccept(
+          version,
+          sizeBytes,
+          manifestUrl,
+          signatureUrl,
+          CODE_BUDDY_FIRMWARE_VERSION,
+          promptConflict,
+          xferActive(),
+          &candidate
+        );
+      if (accepted) out->otaOffer = candidate;
+    }
+    Serial.println(accepted ? "[ota] offer accepted" : "[ota] offer rejected");
     _lastLiveMs = millis();
     return;
   }

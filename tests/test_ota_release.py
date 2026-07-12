@@ -20,7 +20,25 @@ from codex_buddy.ota_release import (
 from codex_buddy.ota_trust import generate_ota_trust
 
 
-ONE_TIME_URL = "https://192.168.1.20:49321/code-buddy/ota/0123456789abcdef/firmware.bin"
+ONE_TIME_URL = "https://192.168.1.20:49321/0123456789abcdefghijklmn/firmware.bin"
+
+
+def _certificate_der_sha256(path: Path) -> str:
+    der = subprocess.run(
+        ["openssl", "x509", "-in", str(path), "-outform", "DER"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    return hashlib.sha256(der).hexdigest()
+
+
+def _public_key_der_sha256(path: Path) -> str:
+    der = subprocess.run(
+        ["openssl", "pkey", "-pubin", "-in", str(path), "-outform", "DER"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    return hashlib.sha256(der).hexdigest()
 
 
 def _esp32s3_image(payload: bytes = b"firmware-payload") -> bytes:
@@ -73,6 +91,7 @@ def test_manifest_has_exact_deterministic_canonical_bytes():
         ({"sha256": "AB" * 32}, "SHA-256"),
         ({"sha256": "ab" * 31}, "SHA-256"),
         ({"size_bytes": 0}, "size"),
+        ({"size_bytes": 0x330001}, "slot"),
         ({"chip": "esp32"}, "chip"),
     ],
 )
@@ -118,6 +137,101 @@ def test_semantic_version_policy_is_strict_and_monotonic():
     for invalid in ("1.2", "01.2.3", "1.2.3.4", "v1.2.3"):
         with pytest.raises(ValueError, match="semantic version"):
             compare_semantic_versions(invalid, "1.0.0")
+
+
+def test_host_url_policy_matches_device_one_shot_endpoint():
+    invalid_urls = (
+        "https://8.8.8.8:49321/0123456789abcdefghijklmn/firmware.bin",
+        "https://127.0.0.1:49321/0123456789abcdefghijklmn/firmware.bin",
+        "https://169.254.1.1:49321/0123456789abcdefghijklmn/firmware.bin",
+        "https://192.168.1.20/0123456789abcdefghijklmn/firmware.bin",
+        "https://192.168.1.20:049321/0123456789abcdefghijklmn/firmware.bin",
+        "https://192.168.1.20:49321/short-token/firmware.bin",
+        "https://192.168.1.20:49321/prefix/0123456789abcdefghijklmn/firmware.bin",
+        "https://192.168.1.20:49321/0123456789abcdefghijklmn/%66irmware.bin",
+    )
+    for artifact_url in invalid_urls:
+        with pytest.raises(ValueError, match="artifact URL"):
+            canonical_manifest_bytes(
+                version="1.2.3",
+                chip="esp32s3",
+                size_bytes=1234,
+                sha256="ab" * 32,
+                artifact_url=artifact_url,
+            )
+
+
+def test_firmware_current_version_matches_host_package_version():
+    project = Path(__file__).resolve().parents[1]
+    package_version = __import__("codex_buddy").__version__
+    version_header = (project / "firmware/src/firmware_version.h").read_text()
+
+    assert f'#define CODE_BUDDY_FIRMWARE_VERSION "{package_version}"' in version_header
+
+
+def test_public_trust_injection_is_deterministic_and_contains_no_private_key(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    script = project / "firmware/scripts/inject-ota-trust.py"
+    trust = generate_ota_trust(tmp_path / "managed trust")
+    output = tmp_path / "generated" / "ota_trust_generated.h"
+    arguments = [
+        "python3", str(script),
+        "--public-dir", str(trust.public_dir),
+        "--output", str(output),
+        "--expected-ca-sha256", _certificate_der_sha256(trust.local_ca_certificate),
+        "--expected-public-sha256", _public_key_der_sha256(trust.manifest_public_key),
+    ]
+
+    subprocess.run(arguments, check=True, capture_output=True)
+    first = output.read_bytes()
+    subprocess.run(arguments, check=True, capture_output=True)
+
+    assert output.read_bytes() == first
+    assert b"BEGIN CERTIFICATE" in first
+    assert b"BEGIN PUBLIC KEY" in first
+    assert b"PRIVATE KEY" not in first
+
+
+def test_public_trust_injection_fails_closed_for_missing_malformed_or_mismatched_material(
+    tmp_path,
+):
+    project = Path(__file__).resolve().parents[1]
+    script = project / "firmware/scripts/inject-ota-trust.py"
+    trust = generate_ota_trust(tmp_path / "trust")
+    other = generate_ota_trust(tmp_path / "other")
+    output = tmp_path / "ota_trust_generated.h"
+
+    cases = [
+        (tmp_path / "missing", "00" * 32, "00" * 32),
+        (trust.public_dir, "00" * 32, _public_key_der_sha256(trust.manifest_public_key)),
+        (trust.public_dir, _certificate_der_sha256(trust.local_ca_certificate),
+         _public_key_der_sha256(other.manifest_public_key)),
+    ]
+    for public_dir, ca_digest, public_digest in cases:
+        output.write_text("stale trust must not survive")
+        completed = subprocess.run(
+            [
+                "python3", str(script), "--public-dir", str(public_dir),
+                "--output", str(output), "--expected-ca-sha256", ca_digest,
+                "--expected-public-sha256", public_digest,
+            ],
+            capture_output=True,
+        )
+        assert completed.returncode != 0
+        assert not output.exists()
+
+    trust.manifest_public_key.write_text("not a public key")
+    completed = subprocess.run(
+        [
+            "python3", str(script), "--public-dir", str(trust.public_dir),
+            "--output", str(output),
+            "--expected-ca-sha256", _certificate_der_sha256(trust.local_ca_certificate),
+            "--expected-public-sha256", "00" * 32,
+        ],
+        capture_output=True,
+    )
+    assert completed.returncode != 0
+    assert not output.exists()
 
 
 def test_release_bundle_binds_firmware_digest_size_and_has_no_private_material(tmp_path):

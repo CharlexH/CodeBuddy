@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -25,7 +26,12 @@ _SEMANTIC_VERSION = re.compile(
     r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
 _LOWER_SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_TOKEN = re.compile(r"^[0-9A-Za-z_-]{16,}$")
+_OTA_SLOT_CAPACITY_BYTES = 0x330000
+_TOKEN = re.compile(r"^[0-9A-Za-z_-]{24,}$")
+_RFC1918_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
 _THREAD_LOCKS: Dict[str, threading.Lock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
 
@@ -102,6 +108,10 @@ def require_monotonic_version(candidate: str, current: str) -> str:
 
 
 def _validate_artifact_url(value: str) -> None:
+    if not isinstance(value, str) or not value or any(
+        ord(character) < 0x21 or ord(character) > 0x7E for character in value
+    ):
+        raise ValueError("artifact URL must use canonical visible ASCII")
     try:
         parsed = urlsplit(value)
         _ = parsed.port
@@ -111,15 +121,36 @@ def _validate_artifact_url(value: str) -> None:
         raise ValueError("artifact URL must use HTTPS")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("artifact URL must not contain credentials")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError as exc:
+        raise ValueError("artifact URL must use an RFC1918 IPv4 address") from exc
+    if (
+        not isinstance(address, ipaddress.IPv4Address)
+        or str(address) != parsed.hostname
+        or not any(address in network for network in _RFC1918_NETWORKS)
+    ):
+        raise ValueError("artifact URL must use an RFC1918 IPv4 address")
+    if parsed.port is None or parsed.port <= 0:
+        raise ValueError("artifact URL must include an explicit valid port")
+    if parsed.netloc != f"{parsed.hostname}:{parsed.port}":
+        raise ValueError("artifact URL authority must use canonical IPv4 and port text")
     if parsed.fragment:
         raise ValueError("artifact URL must not contain a fragment")
     if parsed.query:
         raise ValueError("artifact URL must not contain a query")
     decoded_path = unquote(parsed.path)
+    if decoded_path != parsed.path:
+        raise ValueError("artifact URL path must not use percent encoding")
     segments = decoded_path.split("/")
     if any(segment in (".", "..") for segment in segments):
         raise ValueError("artifact URL path must be normalized")
-    if len(segments) < 3 or segments[-1] != "firmware.bin" or not _TOKEN.fullmatch(segments[-2]):
+    if (
+        len(segments) != 3
+        or segments[0] != ""
+        or segments[-1] != "firmware.bin"
+        or not _TOKEN.fullmatch(segments[-2])
+    ):
         raise ValueError("artifact URL must contain a one-time token and end in firmware.bin")
 
 
@@ -136,6 +167,8 @@ def canonical_manifest_bytes(
         raise ValueError("chip must be esp32s3")
     if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes <= 0:
         raise ValueError("artifact size must be a positive integer")
+    if size_bytes > _OTA_SLOT_CAPACITY_BYTES:
+        raise ValueError("artifact size exceeds the firmware OTA slot")
     if not _LOWER_SHA256.fullmatch(sha256):
         raise ValueError("SHA-256 must be 64 lowercase hexadecimal characters")
     _validate_artifact_url(artifact_url)
