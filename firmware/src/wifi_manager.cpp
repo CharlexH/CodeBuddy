@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <esp_system.h>
 #include <time.h>
+#include "wifi_credentials_logic.h"
 
 namespace {
 
@@ -15,7 +16,40 @@ constexpr uint32_t SNTP_RETRY_MS = 5UL * 60UL * 1000UL;
 constexpr time_t TRUSTED_EPOCH_MIN = 1700000000;
 constexpr uint8_t MAX_SCAN_RESULTS = 12;
 
-Preferences prefs;
+class PreferencesCredentialStore : public WifiCredentialStore {
+ public:
+  bool begin(bool readOnly) override { return prefs_.begin("codebuddy_wifi", readOnly); }
+  void end() override { prefs_.end(); }
+  bool putString(const char* key, const char* value) override {
+    return prefs_.putString(key, value) == strlen(value);
+  }
+  bool getString(const char* key, char* out, size_t size) override {
+    if (!prefs_.isKey(key)) return false;
+    size_t n = prefs_.getString(key, out, size);
+    return n > 0 && n < size;
+  }
+  bool putUInt(const char* key, uint32_t value) override {
+    return prefs_.putUInt(key, value) == sizeof(value);
+  }
+  bool getUInt(const char* key, uint32_t* value) override {
+    if (!value || !prefs_.isKey(key)) return false;
+    *value = prefs_.getUInt(key, 0);
+    return true;
+  }
+  bool putUChar(const char* key, uint8_t value) override {
+    return prefs_.putUChar(key, value) == sizeof(value);
+  }
+  bool getUChar(const char* key, uint8_t* value) override {
+    if (!value || !prefs_.isKey(key)) return false;
+    *value = prefs_.getUChar(key, 0xff);
+    return true;
+  }
+
+ private:
+  Preferences prefs_;
+};
+
+PreferencesCredentialStore credentialStore;
 DNSServer dns;
 WebServer portal(80);
 WifiRuntimeState runtime = wifiInitialState(false);
@@ -33,6 +67,7 @@ char apSsid[24] = "";
 char apPassword[16] = "";
 char formNonce[17] = "";
 char statusMessage[48] = "";
+WifiCredentials activeCredentials = {};
 
 void safeCopy(char* dst, size_t dstSize, const char* src) {
   if (!dst || dstSize == 0) return;
@@ -140,8 +175,7 @@ void installHandlers() {
   handlersInstalled = true;
 }
 
-void stopPortal() {
-  if (!portalActive) return;
+void cleanupProvisioningTransport() {
   dns.stop();
   portal.stop();
   WiFi.scanDelete();
@@ -149,6 +183,10 @@ void stopPortal() {
   portalActive = false;
   apPassword[0] = 0;
   formNonce[0] = 0;
+  pendingSsid[0] = 0;
+  pendingPassword[0] = 0;
+  connectingPendingCredentials = false;
+  connectDeadlineMs = 0;
   runtime.provisioningDeadlineMs = 0;
 }
 
@@ -163,15 +201,23 @@ void beginSavedConnection() {
   safeCopy(statusMessage, sizeof(statusMessage), "Connecting to saved Wi-Fi");
 }
 
-void persistPendingCredentials() {
-  prefs.begin("codebuddy_wifi", false);
-  prefs.putString("ssid", pendingSsid);
-  prefs.putString("password", pendingPassword);
-  prefs.end();
-  safeCopy(savedSsid, sizeof(savedSsid), pendingSsid);
-  safeCopy(savedPassword, sizeof(savedPassword), pendingPassword);
+bool persistPendingCredentials() {
+  WifiCredentials candidate = {};
+  safeCopy(candidate.ssid, sizeof(candidate.ssid), pendingSsid);
+  safeCopy(candidate.password, sizeof(candidate.password), pendingPassword);
+  candidate.valid = true;
+  WifiCredentials committed = {};
+  bool saved = wifiCredentialCommit(
+    credentialStore, activeCredentials, candidate, &committed
+  );
+  if (saved) {
+    activeCredentials = committed;
+    safeCopy(savedSsid, sizeof(savedSsid), committed.ssid);
+    safeCopy(savedPassword, sizeof(savedPassword), committed.password);
+  }
   pendingSsid[0] = 0;
   pendingPassword[0] = 0;
+  return saved;
 }
 
 void maybeStartSntp(uint32_t now) {
@@ -186,11 +232,32 @@ void maybeStartSntp(uint32_t now) {
 }  // namespace
 
 void wifiManagerBegin(const char* deviceSuffix) {
-  prefs.begin("codebuddy_wifi", true);
-  prefs.getString("ssid", savedSsid, sizeof(savedSsid));
-  prefs.getString("password", savedPassword, sizeof(savedPassword));
-  prefs.end();
-  runtime = wifiInitialState(wifiSsidValid(savedSsid) && wifiPasswordValid(savedPassword));
+  WifiCredentials loaded = {};
+  activeCredentials = {};
+  savedSsid[0] = savedPassword[0] = 0;
+  if (wifiCredentialLoad(credentialStore, &loaded) &&
+      wifiSsidValid(loaded.ssid) && wifiPasswordValid(loaded.password)) {
+    activeCredentials = loaded;
+    safeCopy(savedSsid, sizeof(savedSsid), loaded.ssid);
+    safeCopy(savedPassword, sizeof(savedPassword), loaded.password);
+  } else {
+    // One-time compatibility path for firmware that stored the original two
+    // unversioned keys. The first successful change migrates to the slots.
+    Preferences legacy;
+    if (legacy.begin("codebuddy_wifi", true)) {
+      legacy.getString("ssid", savedSsid, sizeof(savedSsid));
+      legacy.getString("password", savedPassword, sizeof(savedPassword));
+      legacy.end();
+    }
+    if (wifiSsidValid(savedSsid) && wifiPasswordValid(savedPassword)) {
+      safeCopy(activeCredentials.ssid, sizeof(activeCredentials.ssid), savedSsid);
+      safeCopy(activeCredentials.password, sizeof(activeCredentials.password), savedPassword);
+      activeCredentials.slot = 0xff;
+      activeCredentials.generation = 0;
+      activeCredentials.valid = true;
+    }
+  }
+  runtime = wifiInitialState(activeCredentials.valid);
   snprintf(apSsid, sizeof(apSsid), "CodeBuddy-%s", deviceSuffix ? deviceSuffix : "SETUP");
   if (runtime.provisioned) beginSavedConnection();
   else WiFi.mode(WIFI_OFF);
@@ -203,8 +270,12 @@ bool wifiManagerStartProvisioning() {
   randomText(apPassword, 12, "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789");
   randomText(formNonce, 16, "0123456789abcdef");
   if (!WiFi.softAP(apSsid, apPassword, 1, false, 1)) {
-    safeCopy(statusMessage, sizeof(statusMessage), "Could not start setup hotspot");
-    runtime = wifiConnectFailed(runtime, millis(), esp_random());
+    bool restoreSaved = runtime.provisioned;
+    cleanupProvisioningTransport();
+    runtime = wifiProvisioningStartFailed(runtime);
+    if (restoreSaved) beginSavedConnection();
+    else WiFi.mode(WIFI_OFF);
+    safeCopy(statusMessage, sizeof(statusMessage), "Setup hotspot failed. Retry.");
     return false;
   }
   WiFi.scanNetworks(true, false, false, 300, 0);
@@ -219,20 +290,20 @@ bool wifiManagerStartProvisioning() {
 
 void wifiManagerCancelProvisioning() {
   bool hadSaved = runtime.provisioned;
-  stopPortal();
-  pendingSsid[0] = 0;
-  pendingPassword[0] = 0;
-  connectingPendingCredentials = false;
+  cleanupProvisioningTransport();
   runtime = wifiProvisioningCancel(runtime);
   if (hadSaved) beginSavedConnection();
   else WiFi.mode(WIFI_OFF);
 }
 
 void wifiManagerForget() {
-  stopPortal();
-  prefs.begin("codebuddy_wifi", false);
-  prefs.clear();
-  prefs.end();
+  cleanupProvisioningTransport();
+  Preferences cleanup;
+  if (cleanup.begin("codebuddy_wifi", false)) {
+    cleanup.clear();
+    cleanup.end();
+  }
+  activeCredentials = {};
   savedSsid[0] = savedPassword[0] = 0;
   pendingSsid[0] = pendingPassword[0] = 0;
   connectingPendingCredentials = false;
@@ -263,11 +334,16 @@ void wifiManagerPoll(bool approvalPromptVisible) {
   }
 
   if (runtime.phase == WIFI_CONNECTING && WiFi.status() == WL_CONNECTED) {
-    if (connectingPendingCredentials) persistPendingCredentials();
+    if (connectingPendingCredentials && !persistPendingCredentials()) {
+      connectingPendingCredentials = false;
+      runtime = wifiConnectFailed(runtime, now, esp_random());
+      safeCopy(statusMessage, sizeof(statusMessage), "Save failed. Re-enter Wi-Fi.");
+      return;
+    }
     runtime = wifiConnectSucceeded(runtime);
     connectingPendingCredentials = false;
     safeCopy(statusMessage, sizeof(statusMessage), "Connected");
-    stopPortal();
+    cleanupProvisioningTransport();
   } else if (runtime.phase == WIFI_CONNECTING &&
              (int32_t)(now - connectDeadlineMs) >= 0) {
     WiFi.disconnect(false, false);

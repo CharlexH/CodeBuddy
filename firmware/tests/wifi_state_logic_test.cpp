@@ -47,6 +47,17 @@ int main() {
   expect_true(state.phase == WIFI_UNPROVISIONED && !state.provisioned,
               "forget should clear provisioned state");
 
+  state = wifiPhysicalStart(wifiInitialState(true), 100);
+  state = wifiProvisioningStartFailed(state);
+  expect_true(state.phase == WIFI_CONNECTING && state.provisioned &&
+              state.provisioningDeadlineMs == 0,
+              "hotspot failure should fully reset provisioning and restore saved STA");
+  state = wifiPhysicalStart(wifiInitialState(false), 100);
+  state = wifiProvisioningStartFailed(state);
+  expect_true(state.phase == WIFI_UNPROVISIONED && !state.provisioned &&
+              state.provisioningDeadlineMs == 0,
+              "hotspot failure without saved Wi-Fi should return to Wi-Fi off state");
+
   expect_true(wifiRetryDelayMs(0, 0) >= 1000 && wifiRetryDelayMs(0, 0) <= 1250,
               "first retry should be near one second");
   expect_true(wifiRetryDelayMs(10, 999) <= 60000,

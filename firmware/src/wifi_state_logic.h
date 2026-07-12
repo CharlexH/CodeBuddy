@@ -54,6 +54,13 @@ inline WifiRuntimeState wifiProvisioningCancel(WifiRuntimeState state) {
   return state;
 }
 
+inline WifiRuntimeState wifiProvisioningStartFailed(WifiRuntimeState state) {
+  state.phase = state.provisioned ? WIFI_CONNECTING : WIFI_UNPROVISIONED;
+  state.provisioningDeadlineMs = 0;
+  state.retryAtMs = 0;
+  return state;
+}
+
 inline uint32_t wifiRetryDelayMs(uint8_t attempt, uint32_t entropy) {
   uint8_t shift = attempt > 5 ? 5 : attempt;
   uint32_t base = 1000UL << shift;
