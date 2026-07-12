@@ -51,9 +51,10 @@ inline RuntimeLandscapeRenderDecision runtimeLandscapeSchedule(
   decision.overlay = decision.repaint
       || initial
       || state->overlayVisible != overlayVisible
-      || state->overlayContentRevision != overlayContentRevision
-      || state->overlayTimeRevision != overlayTimeRevision
-      || state->overlayScrollOffset != overlayScrollOffset;
+      || (overlayVisible && (
+          state->overlayContentRevision != overlayContentRevision
+          || state->overlayTimeRevision != overlayTimeRevision
+          || state->overlayScrollOffset != overlayScrollOffset));
 
   if (decision.pet) state->lastPetRenderMs = now;
   state->initialized = true;

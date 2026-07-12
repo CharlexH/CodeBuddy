@@ -26,5 +26,13 @@ void characterClose();   // close GIF + clear loaded flag; FS stays mounted   //
 // Adaptive to actual canvas height — no padding required in source art.
 void characterSetPeek(bool peek);
 void characterRenderTo(lgfx::LovyanGFX* tgt, int cx, int cy);
+void characterSetRuntimeViewport(bool enabled, int width = 135, int height = 224);
+void characterRenderRuntimeTo(
+  lgfx::LovyanGFX* tgt,
+  int centerX,
+  int centerY,
+  int viewportWidth,
+  int viewportHeight
+);
 
 const Palette& characterPalette();

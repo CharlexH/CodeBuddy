@@ -76,6 +76,14 @@ int main() {
   expect_true(decision.overlay,
               "hiding a prompt or HUD should clear the prior overlay immediately");
 
+  RuntimeLandscapeRenderState petOnly = {};
+  decision = runtimeLandscapeSchedule(&petOnly, 0, true, false, 0, 0, 0);
+  expect_true(decision.repaint && decision.pet && decision.overlay,
+              "entering pet-only landscape should paint the complete surface once");
+  decision = runtimeLandscapeSchedule(&petOnly, 16, false, false, 99, 7, 3);
+  expect_true(!decision.repaint && !decision.pet && !decision.overlay,
+              "transcript revisions must not repaint a pet-only landscape surface");
+
   decision = runtimeLandscapeSchedule(&render, 280, true, false, 2, 1, 1);
   expect_true(decision.repaint && decision.pet && decision.overlay,
               "an orientation repaint should redraw all direct LCD layers");

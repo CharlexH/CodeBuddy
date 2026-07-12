@@ -42,16 +42,24 @@ static int         gifX = 0, gifY = 0, gifW = 0, gifH = 0;
 // in the upper 140px. No padding assumed in the source art.
 static const int   PEEK_TOP = 70;
 static bool        peekMode = false;
+static bool        runtimeViewport = false;
+static int         runtimeViewportWidth = 135;
+static int         runtimeViewportHeight = 224;
 // Draw target — defaults to the sprite; characterRenderTo() retargets to
 // M5.Lcd for the landscape clock (both inherit TFT_eSPI).
 static lgfx::LovyanGFX*   _tgt = &spr;
+static uint8_t     directScaleDivisor = 0;
+static int         directClipWidth = 0;
+static int         directClipHeight = 0;
 // Peek mode renders at half scale (2:1 nearest-neighbor in gifDrawCb) so
 // the whole pet fits the 70px window instead of cropping the top.
 static void gifPlace() {
   int outW = peekMode ? gifW / 2 : gifW;
   int outH = peekMode ? gifH / 2 : gifH;
-  gifX = (spr.width() - outW) / 2;
-  gifY = peekMode ? (PEEK_TOP - outH) / 2 : (140 - outH) / 2;
+  int viewportW = runtimeViewport ? runtimeViewportWidth : spr.width();
+  int viewportH = runtimeViewport ? runtimeViewportHeight : 140;
+  gifX = (viewportW - outW) / 2;
+  gifY = peekMode ? (PEEK_TOP - outH) / 2 : (viewportH - outH) / 2;
 }
 static uint32_t    nextFrameAt = 0;
 static uint32_t    animPauseUntil = 0;
@@ -132,23 +140,36 @@ static void gifDrawCb(GIFDRAW* d) {
     _tgt->drawPixel(x, y, (hasT && idx == t) ? pal.bg : pal16[idx]);
   };
 
-  if (peekMode) {
+  bool halfScale = directScaleDivisor == 2
+      || (directScaleDivisor == 0 && peekMode);
+  if (halfScale) {
     if (srcY & 1) return;
     int y = gifY + (srcY >> 1);
-    if (y < 0 || y >= PEEK_TOP) return;
+    int clipHeight = directScaleDivisor ? directClipHeight : PEEK_TOP;
+    int clipWidth = directScaleDivisor ? directClipWidth : spr.width();
+    if (y < 0 || y >= clipHeight) return;
     int x0 = gifX + (d->iX >> 1);
     int w  = d->iWidth >> 1;
+    if (x0 < 0) { src += (-x0) << 1; w += x0; x0 = 0; }
+    if (x0 + w > clipWidth) w = clipWidth - x0;
+    if (w <= 0) return;
     for (int i = 0; i < w; i++) put(x0 + i, y, src[i << 1]);
     return;
   }
 
   int y = gifY + srcY;
-  if (y < 0 || y >= spr.height()) return;
+  int clipHeight = directScaleDivisor
+      ? directClipHeight
+      : (runtimeViewport ? runtimeViewportHeight : spr.height());
+  int clipWidth = directScaleDivisor
+      ? directClipWidth
+      : (runtimeViewport ? runtimeViewportWidth : spr.width());
+  if (y < 0 || y >= clipHeight) return;
   int x0 = gifX + d->iX;
   int w  = d->iWidth;
   if (w > 256) w = 256;
   if (x0 < 0) { src -= x0; w += x0; x0 = 0; }
-  if (x0 + w > spr.width()) w = spr.width() - x0;
+  if (x0 + w > clipWidth) w = clipWidth - x0;
   if (w <= 0) return;
   for (int i = 0; i < w; i++) put(x0 + i, y, src[i]);
 }
@@ -277,6 +298,62 @@ void characterRenderTo(lgfx::LovyanGFX* tgt, int cx, int cy) {
   _tgt = prevT; peekMode = prevP; gifX = px; gifY = py;
 }
 
+void characterRenderRuntimeTo(
+  lgfx::LovyanGFX* tgt,
+  int centerX,
+  int centerY,
+  int viewportWidth,
+  int viewportHeight
+) {
+  if (!gifOpen) return;
+  lgfx::LovyanGFX* previousTarget = _tgt;
+  bool previousPeek = peekMode;
+  int previousX = gifX;
+  int previousY = gifY;
+  uint8_t previousDivisor = directScaleDivisor;
+  int previousClipWidth = directClipWidth;
+  int previousClipHeight = directClipHeight;
+
+  directScaleDivisor = (gifW <= 236 && gifH <= 119) ? 1 : 2;
+  directClipWidth = viewportWidth;
+  directClipHeight = viewportHeight;
+  _tgt = tgt;
+  peekMode = false;
+  int outputWidth = gifW / directScaleDivisor;
+  int outputHeight = gifH / directScaleDivisor;
+  gifX = centerX - outputWidth / 2;
+  gifY = centerY - outputHeight / 2;
+
+  uint32_t now = millis();
+  if (now >= nextFrameAt) {
+    int delayMs = 0;
+    if (!gif.playFrame(false, &delayMs)) {
+      gif.reset();
+      gif.playFrame(false, &delayMs);
+    }
+    nextFrameAt = now + (delayMs > 0 ? delayMs : 100);
+  }
+
+  _tgt = previousTarget;
+  peekMode = previousPeek;
+  gifX = previousX;
+  gifY = previousY;
+  directScaleDivisor = previousDivisor;
+  directClipWidth = previousClipWidth;
+  directClipHeight = previousClipHeight;
+}
+
+void characterSetRuntimeViewport(bool enabled, int width, int height) {
+  if (runtimeViewport == enabled
+      && (!enabled || (runtimeViewportWidth == width && runtimeViewportHeight == height))) {
+    return;
+  }
+  runtimeViewport = enabled;
+  runtimeViewportWidth = width;
+  runtimeViewportHeight = height;
+  characterInvalidate();
+}
+
 void characterSetPeek(bool peek) {
   if (peekMode == peek) return;
   peekMode = peek;
@@ -332,7 +409,7 @@ void characterSetState(uint8_t s) {
     gifW = gif.getCanvasWidth();
     gifH = gif.getCanvasHeight();
     gifPlace();
-    spr.fillSprite(pal.bg);   // bias upward, leave room for HUD
+    spr.fillSprite(pal.bg);
     nextFrameAt = 0;
     variantStartedMs = millis();
     Serial.printf("[char] %s: %dx%d @ (%d,%d) heap=%u\n",
@@ -352,9 +429,9 @@ void characterTick() {
     if (now < textNext) return;
     textNext = now + ts.delayMs;
 
-    // Clear a band around the text, not the whole sprite — keeps overlays
-    // like the approval panel and the HUD untouched.
-    int cy = peekMode ? 35 : 60;
+    // Clear a band around the text, not the whole sprite — keeps functional
+    // overlays such as the approval panel untouched.
+    int cy = peekMode ? 35 : (runtimeViewport ? runtimeViewportHeight / 2 : 60);
     spr.fillRect(0, cy - 14, spr.width(), 28, pal.bg);
 
     const char* line = ts.frames[textFrame];

@@ -11,9 +11,39 @@ struct RuntimePetLayout {
   int16_t asciiYOffset;
 };
 
+struct RuntimeGifPlacement {
+  int16_t x;
+  int16_t y;
+  uint8_t scaleDivisor;
+};
+
 inline constexpr RuntimePetLayout runtimePetLayout(bool landscape) {
   return landscape ? RuntimePetLayout{240, 119, 120, 59, 1, 18}
                    : RuntimePetLayout{135, 224, 67, 112, 2, 30};
+}
+
+inline constexpr uint8_t runtimeGifScaleDivisor(
+  bool landscape,
+  uint16_t gifWidth,
+  uint16_t gifHeight
+) {
+  return landscape && (gifWidth > 236 || gifHeight > 119) ? 2 : 1;
+}
+
+inline RuntimeGifPlacement runtimeGifPlacement(
+  bool landscape,
+  uint16_t gifWidth,
+  uint16_t gifHeight
+) {
+  RuntimePetLayout layout = runtimePetLayout(landscape);
+  uint8_t divisor = runtimeGifScaleDivisor(landscape, gifWidth, gifHeight);
+  int16_t outputWidth = gifWidth / divisor;
+  int16_t outputHeight = gifHeight / divisor;
+  return RuntimeGifPlacement{
+    (int16_t)(layout.centerX - outputWidth / 2),
+    (int16_t)(layout.centerY - outputHeight / 2),
+    divisor,
+  };
 }
 
 inline constexpr bool runtimeStatusOverlayVisible(bool inPrompt) {

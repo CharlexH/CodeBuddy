@@ -30,14 +30,16 @@ const uint16_t BUDDY_BLUE   = 0x041F;
 
 // ──────────────── shared rendering helpers ────────────────
 // Render target indirection: defaults to the sprite, but can retarget to
-// M5.Lcd for landscape clock mode (both inherit TFT_eSPI). Coords stay
-// fixed — species hardcode BUDDY_X_CENTER/BUDDY_Y_OVERLAY in their
-// particle calls, so retargeting position would only move the body.
+// M5.Lcd. Species keep authoring against the legacy 135x82 coordinate
+// system; center/top translations are applied here to both body rows and
+// ad-hoc particles so a whole pet moves as one unit.
 static lgfx::LovyanGFX* _tgt = &spr;
 // 2× on home screen, 1× in peek (PET/INFO) and landscape clock. Species
 // art is space-padded to a fixed width for alignment at 1×; at 2× we trim
 // and re-center per line so the padding doesn't push ink off-screen.
 static uint8_t _scale = 1;
+static int _centerX = BUDDY_X_CENTER;
+static int _topOffset = 0;
 
 void buddyPrintLine(const char* line, int yPx, uint16_t color, int xOff) {
   int len = strlen(line);
@@ -46,7 +48,7 @@ void buddyPrintLine(const char* line, int yPx, uint16_t color, int xOff) {
     while (len && *line == ' ')       { line++; len--; }
   }
   int w = len * BUDDY_CHAR_W * _scale;
-  int x = BUDDY_X_CENTER - w / 2 + xOff * _scale;
+  int x = _centerX - w / 2 + xOff * _scale;
   _tgt->setTextColor(color, BUDDY_BG);
   _tgt->setCursor(x, yPx);
   for (int i = 0; i < len; i++) _tgt->print(line[i]);
@@ -54,7 +56,7 @@ void buddyPrintLine(const char* line, int yPx, uint16_t color, int xOff) {
 
 void buddyPrintSprite(const char* const* lines, uint8_t nLines, int yOffset, uint16_t color, int xOff) {
   _tgt->setTextSize(_scale);
-  int yBase = BUDDY_Y_BASE * _scale - (_scale - 1) * 14;
+  int yBase = _topOffset + BUDDY_Y_BASE * _scale - (_scale - 1) * 14;
   for (uint8_t i = 0; i < nLines; i++) {
     buddyPrintLine(lines[i], yBase + (yOffset + i * BUDDY_CHAR_H) * _scale, color, xOff);
   }
@@ -63,7 +65,10 @@ void buddyPrintSprite(const char* const* lines, uint8_t nLines, int yOffset, uin
 // Species pass 1× coords (relative to BUDDY_X_CENTER / BUDDY_Y_OVERLAY);
 // transform here so all 18 species files stay scale-agnostic.
 void buddySetCursor(int x, int y) {
-  _tgt->setCursor(BUDDY_X_CENTER + (x - BUDDY_X_CENTER) * _scale, y * _scale);
+  _tgt->setCursor(
+    _centerX + (x - BUDDY_X_CENTER) * _scale,
+    _topOffset + y * _scale
+  );
 }
 void buddySetColor(uint16_t fg)   { _tgt->setTextColor(fg, BUDDY_BG); }
 void buddyPrint(const char* s)    { _tgt->setTextSize(_scale); _tgt->print(s); }
@@ -158,8 +163,19 @@ void buddySetPeek(bool peek) {
 // clearing. Advances the frame counter so animation runs even when
 // buddyTick is bypassed.
 // Landscape clock callsite — always 1×.
-void buddyRenderTo(lgfx::LovyanGFX* tgt, uint8_t personaState) {
-  uint8_t prevS = _scale; _scale = 1;
+void buddyRenderTo(
+  lgfx::LovyanGFX* tgt,
+  uint8_t personaState,
+  int centerX,
+  int topOffset,
+  uint8_t scale
+) {
+  uint8_t prevS = _scale;
+  int prevCenterX = _centerX;
+  int prevTopOffset = _topOffset;
+  _scale = scale;
+  _centerX = centerX;
+  _topOffset = topOffset;
   if (personaState >= 7) personaState = B_IDLE;
   uint32_t now = millis();
   if ((int32_t)(now - nextTickAt) >= 0) { nextTickAt = now + TICK_MS; tickCount++; }
@@ -167,10 +183,13 @@ void buddyRenderTo(lgfx::LovyanGFX* tgt, uint8_t personaState) {
   _tgt = tgt;
   const Species* sp = SPECIES_TABLE[currentSpeciesIdx];
   if (sp->states[personaState]) sp->states[personaState](tickCount);
-  _tgt = prev; _scale = prevS;
+  _tgt = prev;
+  _scale = prevS;
+  _centerX = prevCenterX;
+  _topOffset = prevTopOffset;
 }
 
-void buddyTick(uint8_t personaState) {
+static bool buddyAdvanceTick(uint8_t personaState) {
   uint32_t now = millis();
   bool ticked = false;
   if ((int32_t)(now - nextTickAt) >= 0) {
@@ -182,10 +201,16 @@ void buddyTick(uint8_t personaState) {
   if (personaState >= 7) personaState = B_IDLE;
   if (!ticked && personaState == lastDrawnState
               && currentSpeciesIdx == lastDrawnSpecies) {
-    return;
+    return false;
   }
   lastDrawnState = personaState;
   lastDrawnSpecies = currentSpeciesIdx;
+  return true;
+}
+
+void buddyTick(uint8_t personaState) {
+  if (personaState >= 7) personaState = B_IDLE;
+  if (!buddyAdvanceTick(personaState)) return;
 
   // Clear the whole render strip — at 2× the body reaches y≈126, at 1× ≈82.
   spr.fillRect(0, 0, BUDDY_CANVAS_W,
@@ -193,4 +218,35 @@ void buddyTick(uint8_t personaState) {
 
   const Species* sp = SPECIES_TABLE[currentSpeciesIdx];
   if (sp->states[personaState]) sp->states[personaState](tickCount);
+}
+
+void buddyTickRuntime(
+  uint8_t personaState,
+  int centerX,
+  int topOffset,
+  uint8_t scale,
+  int viewportWidth,
+  int viewportHeight
+) {
+  if (personaState >= 7) personaState = B_IDLE;
+  if (!buddyAdvanceTick(personaState)) return;
+
+  int canvasHeight = (BUDDY_Y_BASE + 5 * BUDDY_CHAR_H + 12) * scale;
+  if (topOffset < viewportHeight) {
+    int clearHeight = canvasHeight;
+    if (topOffset + clearHeight > viewportHeight) clearHeight = viewportHeight - topOffset;
+    if (clearHeight > 0) spr.fillRect(0, topOffset, viewportWidth, clearHeight, BUDDY_BG);
+  }
+
+  uint8_t previousScale = _scale;
+  int previousCenterX = _centerX;
+  int previousTopOffset = _topOffset;
+  _scale = scale;
+  _centerX = centerX;
+  _topOffset = topOffset;
+  const Species* sp = SPECIES_TABLE[currentSpeciesIdx];
+  if (sp->states[personaState]) sp->states[personaState](tickCount);
+  _scale = previousScale;
+  _centerX = previousCenterX;
+  _topOffset = previousTopOffset;
 }

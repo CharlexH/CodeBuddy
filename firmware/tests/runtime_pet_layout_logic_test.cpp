@@ -28,6 +28,26 @@ int main() {
   expect_true(landscape.asciiScale == 1, "landscape ASCII pet should use scale 1");
   expect_true(landscape.asciiYOffset == 18, "landscape ASCII pet should use the landscape vertical offset");
 
+  expect_true(runtimeGifScaleDivisor(false, 135, 224) == 1,
+              "portrait runtime GIFs should stay at native scale");
+  expect_true(runtimeGifScaleDivisor(true, 236, 119) == 1,
+              "a landscape GIF that fits the safe viewport should stay at native scale");
+  expect_true(runtimeGifScaleDivisor(true, 237, 119) == 2,
+              "a landscape GIF wider than the safe viewport should use half scale");
+  expect_true(runtimeGifScaleDivisor(true, 236, 120) == 2,
+              "a landscape GIF taller than the runtime viewport should use half scale");
+
+  const RuntimeGifPlacement portraitGif = runtimeGifPlacement(false, 100, 80);
+  expect_true(portraitGif.x == 17 && portraitGif.y == 72 && portraitGif.scaleDivisor == 1,
+              "portrait GIFs should be natively centered in the runtime viewport");
+  const RuntimeGifPlacement landscapeGif = runtimeGifPlacement(true, 100, 80);
+  expect_true(landscapeGif.x == 70 && landscapeGif.y == 19 && landscapeGif.scaleDivisor == 1,
+              "fitting landscape GIFs should be natively centered");
+  const RuntimeGifPlacement scaledLandscapeGif = runtimeGifPlacement(true, 240, 120);
+  expect_true(scaledLandscapeGif.x == 60 && scaledLandscapeGif.y == 29
+                  && scaledLandscapeGif.scaleDivisor == 2,
+              "oversized landscape GIFs should be half-scaled and centered");
+
   expect_true(!runtimeStatusOverlayVisible(false), "normal runtime should hide the status overlay");
   expect_true(runtimeStatusOverlayVisible(true), "approval prompts should show the status overlay");
 

@@ -6,6 +6,8 @@
 #include "clock_display_logic.h"
 #include "clock_orient_logic.h"
 #include "screen_orient_logic.h"
+#include "runtime_pet_layout_logic.h"
+#include "settings_menu_logic.h"
 #include "clock_time_logic.h"
 #include "data.h"
 #include "persona_logic.h"
@@ -63,9 +65,6 @@ uint8_t displayMode = DISP_NORMAL;
 uint8_t infoPage = 0;
 uint8_t petPage = 0;
 const uint8_t PET_PAGES = 2;
-uint8_t msgScroll = 0;
-uint16_t lastLineGen = 0;
-uint32_t hudScrollStartedMs = 0;
 char     lastPromptId[40] = "";
 uint32_t lastInteractMs = 0;
 bool     dimmed = false;
@@ -199,6 +198,14 @@ const uint8_t INFO_PAGES = 6;
 const uint8_t INFO_PG_BUTTONS = 1;
 const uint8_t INFO_PG_CREDITS = 5;
 
+static void invalidatePortraitSurface() {
+  const Palette& p = characterPalette();
+  spr.fillSprite(p.bg);
+  usageMeterRenderReset(&portraitUsageMeterRenderState);
+  characterInvalidate();
+  buddyInvalidate();
+}
+
 void applyDisplayMode() {
   bool peek = displayMode != DISP_NORMAL;
   characterSetPeek(peek);
@@ -207,8 +214,7 @@ void applyDisplayMode() {
   // own regions when they run, but when you switch FROM info/pet TO normal,
   // those functions stop running and their stale pixels stay behind. Full
   // clear is cheap and guarantees no leftovers between modes.
-  spr.fillSprite(0x0000);
-  characterInvalidate();  // redraws character on next tick (text mode path)
+  invalidatePortraitSurface();
 }
 
 const char* menuItems[] = { "settings", "turn off", "help", "about", "demo", "close" };
@@ -216,8 +222,7 @@ const uint8_t MENU_N = 6;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "reset", "back" };
-const uint8_t SETTINGS_N = 10;
+const uint8_t SETTINGS_N = settingsMenuItemCount();
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -228,26 +233,34 @@ static uint8_t  resetConfirmIdx = 0xFF;
 
 static void applySetting(uint8_t idx) {
   Settings& s = settings();
-  switch (idx) {
-    case 0:
+  switch (settingsMenuAction(idx)) {
+    case SETTINGS_BRIGHTNESS:
       brightLevel = (brightLevel + 1) % 5;
       applyBrightness();
       return;
-    case 1: s.sound = !s.sound; break;
-    case 2:
+    case SETTINGS_SOUND: s.sound = !s.sound; break;
+    case SETTINGS_BLUETOOTH:
       // BT toggle is a stored preference only — BLE stays live. Turning
       // BLE off cleanly would require tearing down the BLE stack which
       // the Arduino BLE library doesn't do reliably. If we need a
       // hard-off someday, stop advertising via BLEDevice::getAdvertising().
       s.bt = !s.bt;
       break;
-    case 3: s.wifi = !s.wifi; break;   // stored only — no WiFi stack linked
-    case 4: s.led = !s.led; break;
-    case 5: s.hud = !s.hud; break;
-    case 6: s.clockRot = (s.clockRot + 1) % 3; break;
-    case 7: nextPet(); return;
-    case 8: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 9: settingsOpen = false; characterInvalidate(); return;
+    case SETTINGS_WIFI: s.wifi = !s.wifi; break;   // stored only — no WiFi stack linked
+    case SETTINGS_LED: s.led = !s.led; break;
+    case SETTINGS_CLOCK_ROTATION: s.clockRot = (s.clockRot + 1) % 3; break;
+    case SETTINGS_PET: nextPet(); return;
+    case SETTINGS_RESET:
+      resetOpen = true;
+      resetSel = 0;
+      resetConfirmIdx = 0xFF;
+      invalidatePortraitSurface();
+      return;
+    case SETTINGS_BACK:
+      settingsOpen = false;
+      invalidatePortraitSurface();
+      return;
+    case SETTINGS_INVALID: return;
   }
   settingsSave();
 }
@@ -258,7 +271,11 @@ static void applyReset(uint8_t idx) {
   uint32_t now = millis();
   bool armed = (resetConfirmIdx == idx) && (int32_t)(now - resetConfirmUntil) < 0;
 
-  if (idx == 2) { resetOpen = false; return; }
+  if (idx == 2) {
+    resetOpen = false;
+    invalidatePortraitSurface();
+    return;
+  }
 
   if (!armed) {
     resetConfirmIdx = idx;
@@ -333,24 +350,31 @@ static void drawSettings() {
   spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
   spr.setTextSize(1);
   Settings& s = settings();
-  bool vals[] = { s.sound, s.bt, s.wifi, s.led, s.hud };
   for (int i = 0; i < SETTINGS_N; i++) {
+    SettingsMenuAction action = settingsMenuAction(i);
     bool sel = (i == settingsSel);
     spr.setTextColor(sel ? p.text : p.textDim, PANEL);
     spr.setCursor(mx + 6, my + 8 + i * 14);
     spr.print(sel ? "> " : "  ");
-    spr.print(settingsItems[i]);
+    spr.print(settingsMenuLabel(i));
     spr.setCursor(mx + mw - 36, my + 8 + i * 14);
     spr.setTextColor(p.textDim, PANEL);
-    if (i == 0) {
+    if (action == SETTINGS_BRIGHTNESS) {
       spr.printf("%u/4", brightLevel);
-    } else if (i >= 1 && i <= 5) {
-      spr.setTextColor(vals[i-1] ? GREEN : p.textDim, PANEL);
-      spr.print(vals[i-1] ? " on" : "off");
-    } else if (i == 6) {
+    } else if (action == SETTINGS_SOUND
+            || action == SETTINGS_BLUETOOTH
+            || action == SETTINGS_WIFI
+            || action == SETTINGS_LED) {
+      bool value = action == SETTINGS_SOUND ? s.sound
+          : action == SETTINGS_BLUETOOTH ? s.bt
+          : action == SETTINGS_WIFI ? s.wifi
+          : s.led;
+      spr.setTextColor(value ? GREEN : p.textDim, PANEL);
+      spr.print(value ? " on" : "off");
+    } else if (action == SETTINGS_CLOCK_ROTATION) {
       static const char* const RN[] = { "auto", "port", "land" };
       spr.print(RN[s.clockRot]);
-    } else if (i == 7) {
+    } else if (action == SETTINGS_PET) {
       uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
       uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
       spr.printf("%u/%u", pos, total);
@@ -381,7 +405,12 @@ static void drawReset() {
 
 void menuConfirm() {
   switch (menuSel) {
-    case 0: settingsOpen = true; menuOpen = false; settingsSel = 0; break;
+    case 0:
+      settingsOpen = true;
+      menuOpen = false;
+      settingsSel = 0;
+      invalidatePortraitSurface();
+      break;
     case 1: compatPowerOff(); break;
     case 2:
     case 3:
@@ -392,7 +421,7 @@ void menuConfirm() {
       characterInvalidate();
       break;
     case 4: dataSetDemo(!dataDemo()); break;
-    case 5: menuOpen = false; characterInvalidate(); break;
+    case 5: menuOpen = false; invalidatePortraitSurface(); break;
   }
 }
 
@@ -430,9 +459,6 @@ static int8_t  runtimeOrientFrames = 0;
 static int8_t  runtimeSwapFrames = 0;
 static uint8_t paintedRuntimeOrient = 0;
 static RuntimeLandscapeRenderState runtimeLandscapeRenderState = {};
-static bool    runtimeHudPrepared = false;
-static uint32_t runtimeHudContentRevision = 0;
-static uint8_t runtimeHudMaxBack = 0;
 static bool    runtimeLandscapePromptVisible = false;
 static bool    _clockHostTimeValid = false;
 static int64_t _clockHostLocalEpoch = 0;
@@ -1028,99 +1054,12 @@ void drawPet() {
   spr.printf("%u/%u", petPage + 1, PET_PAGES);
 }
 
-void drawHUD() {
-  if (tama.promptId[0]) { drawApproval(); return; }
-  const Palette& p = characterPalette();
-  const int SHOW = 3, LH = 12, WIDTH = 20;
-  const int AREA = SHOW * LH + 4;
-  spr.fillRect(0, H - AREA, W, AREA, p.bg);
-  spr.setTextSize(1);
-
-  if (tama.lineGen != lastLineGen) {
-    msgScroll = 0;
-    lastLineGen = tama.lineGen;
-    hudScrollStartedMs = millis();
-    wake();
-  }
-
-  if (tama.nLines == 0) {
-    char msgLine[48];
-    clipDisplayText(msgLine, tama.msg, WIDTH);
-    spr.setTextColor(p.text, p.bg);
-    useUtf8FontForText(spr, msgLine, &fonts::efontCN_12);
-    spr.setCursor(4, H - LH - 2);
-    spr.print(msgLine);
-    useDefaultTextFont(spr);
-    return;
-  }
-
-  // Wrap all transcript lines into a flat display buffer. Track which
-  // transcript index each display row came from, so we can dim older ones.
-  static char disp[32][48];
-  static uint8_t srcOf[32];
-  uint8_t nDisp = 0;
-  for (uint8_t i = 0; i < tama.nLines && nDisp < 32; i++) {
-    uint8_t got = utf8WrapInto(tama.lines[i], &disp[nDisp], 32 - nDisp, WIDTH);
-    for (uint8_t j = 0; j < got; j++) srcOf[nDisp + j] = i;
-    nDisp += got;
-  }
-
-  uint8_t maxBack = (nDisp > SHOW) ? (nDisp - SHOW) : 0;
-  msgScroll = utf8AutoScrollOffset(maxBack, millis() - hudScrollStartedMs);
-
-  int end = (int)nDisp - msgScroll;
-  int start = end - SHOW; if (start < 0) start = 0;
-  uint8_t newest = tama.nLines - 1;
-  for (int i = 0; start + i < end; i++) {
-    uint8_t row = start + i;
-    bool fresh = (srcOf[row] == newest) && (msgScroll == 0);
-    spr.setTextColor(fresh ? p.text : p.textDim, p.bg);
-    useUtf8FontForText(spr, disp[row], &fonts::efontCN_12);
-    spr.setCursor(4, H - AREA + 2 + i * LH);
-    spr.print(disp[row]);
-  }
-  useDefaultTextFont(spr);
-  if (msgScroll > 0) {
-    spr.setTextColor(p.body, p.bg);
-    spr.setCursor(W - 18, H - LH - 2);
-    spr.printf("-%u", msgScroll);
-  }
-}
-
 static uint32_t runtimeLandscapeHashText(uint32_t hash, const char* text) {
   if (!text) return hash ^ 0xFFU;
   for (const unsigned char* p = (const unsigned char*)text; *p; ++p) {
     hash = (hash ^ *p) * 16777619UL;
   }
   return (hash ^ 0xFFU) * 16777619UL;
-}
-
-static uint32_t runtimeHudRevision() {
-  uint32_t hash = 2166136261UL ^ tama.lineGen;
-  hash = (hash ^ tama.nLines) * 16777619UL;
-  hash = runtimeLandscapeHashText(hash, tama.msg);
-  for (uint8_t i = 0; i < tama.nLines; ++i) {
-    hash = runtimeLandscapeHashText(hash, tama.lines[i]);
-  }
-  return hash;
-}
-
-static uint8_t runtimeHudScrollOffset(uint32_t now, uint32_t revision) {
-  if (!runtimeHudPrepared || runtimeHudContentRevision != revision) {
-    char disp[32][48] = {};
-    uint8_t nDisp = 0;
-    for (uint8_t i = 0; i < tama.nLines && nDisp < 32; ++i) {
-      nDisp += utf8WrapInto(tama.lines[i], &disp[nDisp], 32 - nDisp, 36);
-    }
-    runtimeHudMaxBack = (nDisp > 3) ? (nDisp - 3) : 0;
-    runtimeHudContentRevision = revision;
-    runtimeHudPrepared = true;
-    msgScroll = 0;
-    lastLineGen = tama.lineGen;
-    hudScrollStartedMs = now;
-    wake();
-  }
-  return utf8AutoScrollOffset(runtimeHudMaxBack, now - hudScrollStartedMs);
 }
 
 static uint32_t runtimePromptRevision() {
@@ -1184,60 +1123,18 @@ static void drawLandscapeApproval(const Palette& p, uint8_t hintOffset) {
   }
 }
 
-static void drawLandscapeHUD(const Palette& p, uint8_t scrollOffset) {
-  const int LW = 240, LH = 135;
-  const int SHOW = 3, LINE_HEIGHT = 12, WIDTH = 36;
-  const int AREA = SHOW * LINE_HEIGHT + 4;
-  M5.Lcd.fillRect(0, LH - AREA, LW, AREA, p.bg);
-  M5.Lcd.setTextSize(1);
-
-  if (tama.nLines == 0) {
-    char msgLine[48];
-    clipDisplayText(msgLine, tama.msg, WIDTH);
-    M5.Lcd.setTextColor(p.text, p.bg);
-    useUtf8FontForText(M5.Lcd, msgLine, &fonts::efontCN_12);
-    M5.Lcd.setCursor(4, LH - LINE_HEIGHT - 2);
-    M5.Lcd.print(msgLine);
-    useDefaultTextFont(M5.Lcd);
-    return;
-  }
-
-  static char disp[32][48];
-  static uint8_t srcOf[32];
-  uint8_t nDisp = 0;
-  for (uint8_t i = 0; i < tama.nLines && nDisp < 32; ++i) {
-    uint8_t got = utf8WrapInto(tama.lines[i], &disp[nDisp], 32 - nDisp, WIDTH);
-    for (uint8_t j = 0; j < got; ++j) srcOf[nDisp + j] = i;
-    nDisp += got;
-  }
-
-  msgScroll = scrollOffset;
-  int end = (int)nDisp - msgScroll;
-  int start = end - SHOW;
-  if (start < 0) start = 0;
-  uint8_t newest = tama.nLines - 1;
-  for (int i = 0; start + i < end; ++i) {
-    uint8_t row = start + i;
-    bool fresh = (srcOf[row] == newest) && (msgScroll == 0);
-    M5.Lcd.setTextColor(fresh ? p.text : p.textDim, p.bg);
-    useUtf8FontForText(M5.Lcd, disp[row], &fonts::efontCN_12);
-    M5.Lcd.setCursor(4, LH - AREA + 2 + i * LINE_HEIGHT);
-    M5.Lcd.print(disp[row]);
-  }
-  useDefaultTextFont(M5.Lcd);
-  if (msgScroll > 0) {
-    M5.Lcd.setTextColor(p.body, p.bg);
-    M5.Lcd.setCursor(LW - 18, LH - LINE_HEIGHT - 2);
-    M5.Lcd.printf("-%u", msgScroll);
-  }
-}
-
 static void drawRuntimeLandscape(bool inPrompt) {
   const Palette& p = characterPalette();
+  const RuntimePetLayout layout = runtimePetLayout(true);
   uint32_t now = millis();
   M5.Lcd.setRotation(runtimeOrient);
-  bool repaint = paintedRuntimeOrient != runtimeOrient;
-  bool overlayVisible = inPrompt || settings().hud;
+  bool promptExited = runtimeNeedsFullRepaintOnPromptExit(
+    runtimeLandscapePromptVisible,
+    inPrompt
+  );
+  bool promptEntered = !runtimeLandscapePromptVisible && inPrompt;
+  bool repaint = paintedRuntimeOrient != runtimeOrient || promptEntered || promptExited;
+  bool overlayVisible = runtimeStatusOverlayVisible(inPrompt);
   uint32_t overlayContentRevision = 0;
   uint32_t overlayTimeRevision = 0;
   uint8_t overlayScrollOffset = 0;
@@ -1245,9 +1142,6 @@ static void drawRuntimeLandscape(bool inPrompt) {
     overlayContentRevision = runtimePromptRevision();
     overlayTimeRevision = (now - promptArrivedMs) / 1000;
     overlayScrollOffset = runtimePromptScrollOffset(now);
-  } else if (settings().hud) {
-    overlayContentRevision = runtimeHudRevision();
-    overlayScrollOffset = runtimeHudScrollOffset(now, overlayContentRevision);
   }
   RuntimeLandscapeRenderDecision decision = runtimeLandscapeSchedule(
     &runtimeLandscapeRenderState,
@@ -1258,11 +1152,11 @@ static void drawRuntimeLandscape(bool inPrompt) {
     overlayTimeRevision,
     overlayScrollOffset
   );
-  bool clearPrompt = runtimeLandscapePromptVisible && !inPrompt;
   if (decision.repaint) {
     M5.Lcd.fillScreen(p.bg);
     paintedRuntimeOrient = runtimeOrient;
     usageMeterRenderReset(&runtimeUsageMeterRenderState);
+    if (promptExited && !buddyMode) characterInvalidate();
   }
   UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
     &runtimeUsageMeterRenderState, 240, 135, decision.repaint || decision.overlay
@@ -1271,22 +1165,39 @@ static void drawRuntimeLandscape(bool inPrompt) {
     clearUsageMeter(M5.Lcd, 240, 135, p.bg);
   }
 
-  if (clearPrompt) M5.Lcd.fillRect(0, 47, 240, 48, p.bg);
-
-  bool renderPet = decision.pet && (!inPrompt || decision.repaint || clearPrompt);
+  bool renderPet = decision.pet && (!inPrompt || decision.repaint);
   if (renderPet && buddyMode) {
-    M5.Lcd.fillRect(0, 0, 115, 90, p.bg);
-    buddyRenderTo(&M5.Lcd, activeState);
+    if (inPrompt) {
+      M5.Lcd.fillRect(0, 0, 115, 90, p.bg);
+      buddyRenderTo(&M5.Lcd, activeState);
+    } else {
+      // The authored ASCII canvas is 135x82 at 1x. Clear only that centered
+      // box so 5fps animation updates do not wipe the full direct-LCD surface.
+      M5.Lcd.fillRect(layout.centerX - 67, layout.asciiYOffset, 135, 82, p.bg);
+      buddyRenderTo(
+        &M5.Lcd,
+        activeState,
+        layout.centerX,
+        layout.asciiYOffset,
+        layout.asciiScale
+      );
+    }
   } else if (renderPet) {
     characterSetState(activeState);
-    characterRenderTo(&M5.Lcd, 57, 45);
+    if (inPrompt) {
+      characterRenderTo(&M5.Lcd, 57, 45);
+    } else {
+      characterRenderRuntimeTo(
+        &M5.Lcd,
+        layout.centerX,
+        layout.centerY,
+        layout.viewportWidth,
+        layout.viewportHeight
+      );
+    }
   }
 
-  if (decision.overlay) {
-    if (inPrompt) drawLandscapeApproval(p, overlayScrollOffset);
-    else if (settings().hud) drawLandscapeHUD(p, overlayScrollOffset);
-    else M5.Lcd.fillRect(0, 90, 240, 45, p.bg);
-  }
+  if (decision.overlay && inPrompt) drawLandscapeApproval(p, overlayScrollOffset);
   runtimeLandscapePromptVisible = inPrompt;
   if (meterFrame.decision.draw) paintUsageMeter(M5.Lcd, meterFrame.plan);
   M5.Lcd.setRotation(0);
@@ -1396,15 +1307,14 @@ void loop() {
     responseSent = false;
     if (tama.promptId[0]) {
       Serial.printf(
-        "[prompt] show id=%s tool=%s hud=%d mode=%u\n",
-        tama.promptId, tama.promptTool, settings().hud ? 1 : 0, displayMode
+        "[prompt] show id=%s tool=%s mode=%u\n",
+        tama.promptId, tama.promptTool, displayMode
       );
       promptArrivedMs = millis();
       napping = false;
       wake();
       beep(1200, 80);   // alert chirp
-      // Jump to the approval screen no matter what was open — drawApproval
-      // only runs from drawHUD which only runs in DISP_NORMAL.
+      // Jump to the approval screen no matter what was open.
       displayMode = DISP_NORMAL;
       menuOpen = settingsOpen = resetOpen = false;
       applyDisplayMode();
@@ -1476,12 +1386,12 @@ void loop() {
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
     beep(800, 60);
-    if (resetOpen) { resetOpen = false; }
-    else if (settingsOpen) { settingsOpen = false; characterInvalidate(); }
+    if (resetOpen) { resetOpen = false; invalidatePortraitSurface(); }
+    else if (settingsOpen) { settingsOpen = false; invalidatePortraitSurface(); }
     else {
       menuOpen = !menuOpen;
       menuSel = 0;
-      if (!menuOpen) characterInvalidate();
+      if (!menuOpen) invalidatePortraitSurface();
     }
     Serial.println(menuOpen ? "menu open" : "menu close");
   }
@@ -1545,9 +1455,6 @@ void loop() {
       beep(2400, 30);
       petPage = (petPage + 1) % PET_PAGES;
       applyDisplayMode();
-    } else {
-      beep(2400, 30);
-      msgScroll = (msgScroll >= 30) ? 0 : msgScroll + 1;
     }
   }
 
@@ -1615,12 +1522,35 @@ void loop() {
     } else {
       applyDisplayMode();
       runtimeLandscapeRenderState = {};
-      runtimeHudPrepared = false;
       runtimeLandscapePromptVisible = false;
     }
     characterInvalidate();
     if (buddyMode) buddyInvalidate();
     wasLandscapeRuntime = landscapeRuntime;
+  }
+
+  static bool wasPromptVisible = false;
+  bool promptExited = runtimeNeedsFullRepaintOnPromptExit(wasPromptVisible, inPrompt);
+  const RuntimePetLayout portraitPetLayout = runtimePetLayout(false);
+  bool portraitRuntimePet = !landscapeRuntime
+      && !clocking
+      && displayMode == DISP_NORMAL
+      && !menuOpen
+      && !settingsOpen
+      && !resetOpen
+      && !inPrompt
+      && blePasskey() == 0;
+  characterSetRuntimeViewport(
+    portraitRuntimePet,
+    portraitPetLayout.viewportWidth,
+    portraitPetLayout.viewportHeight
+  );
+  if (promptExited && !landscapeRuntime) {
+    const Palette& p = characterPalette();
+    spr.fillSprite(p.bg);
+    usageMeterRenderReset(&portraitUsageMeterRenderState);
+    characterInvalidate();
+    if (buddyMode) buddyInvalidate();
   }
   if (clocking) {
     uint8_t dow = clockDow();
@@ -1646,7 +1576,18 @@ void loop() {
     // skip sprite render — face-down, powered off, or a direct-to-LCD
     // landscape surface below.
   } else if (buddyMode) {
-    buddyTick(activeState);
+    if (portraitRuntimePet) {
+      buddyTickRuntime(
+        activeState,
+        portraitPetLayout.centerX,
+        portraitPetLayout.asciiYOffset,
+        portraitPetLayout.asciiScale,
+        portraitPetLayout.viewportWidth,
+        portraitPetLayout.viewportHeight
+      );
+    } else {
+      buddyTick(activeState);
+    }
   } else if (characterLoaded()) {
     characterSetState(activeState);
     characterTick();
@@ -1695,13 +1636,13 @@ void loop() {
     else if (clocking) drawClock();
     else if (displayMode == DISP_INFO) drawInfo();
     else if (displayMode == DISP_PET) drawPet();
-    else if (settings().hud) drawHUD();
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
     if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
     spr.pushSprite(0, 0);
   }
+  wasPromptVisible = inPrompt;
 
   // Face-down nap: dim immediately, pause animations, accumulate sleep time.
   // Skipped during approval — you're holding it to read, not sleeping it.

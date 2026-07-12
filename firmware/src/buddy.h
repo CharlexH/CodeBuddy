@@ -8,8 +8,22 @@
 // dizzy, heart.
 void buddyInit();
 void buddyTick(uint8_t personaState);
+void buddyTickRuntime(
+  uint8_t personaState,
+  int centerX,
+  int topOffset,
+  uint8_t scale,
+  int viewportWidth,
+  int viewportHeight
+);
 void buddyInvalidate();
-void buddyRenderTo(lgfx::LovyanGFX* tgt, uint8_t personaState);
+void buddyRenderTo(
+  lgfx::LovyanGFX* tgt,
+  uint8_t personaState,
+  int centerX = 67,
+  int topOffset = 0,
+  uint8_t scale = 1
+);
 void buddySetSpecies(const char* name);
 void buddySetSpeciesIdx(uint8_t idx);
 void buddyNextSpecies();
