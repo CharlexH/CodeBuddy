@@ -66,20 +66,48 @@ int main() {
   UsageMeterRenderPlan meterPlan = usageMeterRenderPlan(meterUsage, 135, 240);
   expect_true(meterPlan.count == 4, "valid usage should compose two base and two fill operations");
   expectMeterRect(
-    meterPlan.rects[0], 0, 234, 135, 3, USAGE_METER_CONSUMED,
-    "five-hour lane should start flush at the top of the six-pixel meter"
+    meterPlan.rects[0], 2, 224, 131, 6, USAGE_METER_CONSUMED,
+    "five-hour bar should respect the side inset and sixteen-pixel footprint"
   );
   expectMeterRect(
-    meterPlan.rects[1], 0, 234, 97, 3, USAGE_METER_FIVE_HOUR,
+    meterPlan.rects[1], 2, 224, 94, 6, USAGE_METER_FIVE_HOUR,
     "five-hour remaining should be a bright-green left fill"
   );
   expectMeterRect(
-    meterPlan.rects[2], 0, 237, 135, 3, USAGE_METER_CONSUMED,
-    "seven-day lane should start flush at the bottom half of the meter"
+    meterPlan.rects[2], 2, 232, 131, 6, USAGE_METER_CONSUMED,
+    "seven-day bar should follow the two-pixel inter-bar gap"
   );
   expectMeterRect(
-    meterPlan.rects[3], 0, 237, 122, 3, USAGE_METER_SEVEN_DAY,
+    meterPlan.rects[3], 2, 232, 119, 6, USAGE_METER_SEVEN_DAY,
     "seven-day remaining should be a deep-green left fill"
+  );
+
+  UsageMeterRenderPlan landscapePlan = usageMeterRenderPlan(meterUsage, 240, 135);
+  expect_true(landscapePlan.count == 4, "landscape usage should use the same four drawing operations");
+  expectMeterRect(
+    landscapePlan.rects[0], 2, 119, 236, 6, USAGE_METER_CONSUMED,
+    "landscape five-hour bar should use the full inset width"
+  );
+  expectMeterRect(
+    landscapePlan.rects[1], 2, 119, 169, 6, USAGE_METER_FIVE_HOUR,
+    "landscape five-hour fill should use the inset width"
+  );
+  expectMeterRect(
+    landscapePlan.rects[2], 2, 127, 236, 6, USAGE_METER_CONSUMED,
+    "landscape seven-day bar should preserve the gap and bottom margin"
+  );
+  expectMeterRect(
+    landscapePlan.rects[3], 2, 127, 214, 6, USAGE_METER_SEVEN_DAY,
+    "landscape seven-day fill should use the inset width"
+  );
+
+  expect_true(
+    usageMeterRenderPlan(meterUsage, 4, 240).count == 0,
+    "surfaces narrower than five pixels should not render a usage meter"
+  );
+  expect_true(
+    usageMeterRenderPlan(meterUsage, 135, 15).count == 0,
+    "surfaces shorter than the sixteen-pixel footprint should not render a usage meter"
   );
 
   UsageMeterState noMeterUsage = {false, 72, 91};
@@ -88,8 +116,8 @@ int main() {
     "invalid or unavailable usage should yield no drawing operations"
   );
   expect_true(
-    usageMeterFooterInset(true, meterUsage) == USAGE_METER_HEIGHT,
-    "visible usage should reserve the meter height above approval footer text"
+    usageMeterFooterInset(true, meterUsage) == 16,
+    "visible usage should reserve the complete sixteen-pixel footprint above approval footer text"
   );
   expect_true(
     usageMeterFooterInset(false, meterUsage) == 0,
@@ -107,7 +135,7 @@ int main() {
   expect_true(portraitVisible.decision.draw && !portraitVisible.decision.clear,
               "a visible portrait meter should paint without first clearing the sprite");
   expect_true(portraitVisible.plan.count == 4,
-              "a visible portrait meter should retain its full six-pixel plan");
+              "a visible portrait meter should retain its full sixteen-pixel plan");
 
   UsageMeterRenderFrame portraitHidden = usageMeterPrepareFrame(
     &portraitState, true, noMeterUsage, 135, 240

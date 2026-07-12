@@ -184,7 +184,7 @@ static void paintUsageMeter(Canvas& canvas, const UsageMeterRenderPlan& plan) {
 
 template <typename Canvas>
 static void clearUsageMeter(Canvas& canvas, uint16_t width, uint16_t height, uint16_t color) {
-  canvas.fillRect(0, height - USAGE_METER_HEIGHT, width, USAGE_METER_HEIGHT, color);
+  canvas.fillRect(0, height - USAGE_METER_FOOTPRINT, width, USAGE_METER_FOOTPRINT, color);
 }
 
 static uint8_t usageMeterBottomInset() {

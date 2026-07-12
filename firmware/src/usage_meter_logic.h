@@ -8,8 +8,13 @@ struct UsageMeterState {
   uint8_t sevenDayRemaining;
 };
 
-static constexpr uint8_t USAGE_METER_HEIGHT = 6;
-static constexpr uint8_t USAGE_METER_LANE_HEIGHT = 3;
+static constexpr uint8_t USAGE_METER_BAR_HEIGHT = 6;
+static constexpr uint8_t USAGE_METER_GAP = 2;
+static constexpr uint8_t USAGE_METER_SIDE_INSET = 2;
+static constexpr uint8_t USAGE_METER_BOTTOM_INSET = 2;
+static constexpr uint8_t USAGE_METER_FOOTPRINT =
+  (USAGE_METER_BAR_HEIGHT * 2) + USAGE_METER_GAP + USAGE_METER_BOTTOM_INSET;
+static constexpr uint8_t USAGE_METER_MIN_WIDTH = (USAGE_METER_SIDE_INSET * 2) + 1;
 static constexpr uint16_t USAGE_METER_CONSUMED = 0x10A2;
 static constexpr uint16_t USAGE_METER_FIVE_HOUR = 0x07E0;
 static constexpr uint16_t USAGE_METER_SEVEN_DAY = 0x03A0;
@@ -83,7 +88,7 @@ inline uint16_t usageMeterFillWidth(uint16_t fullWidth, int remainingPercent) {
 inline uint8_t usageMeterFooterInset(bool connected, const UsageMeterState& state) {
   return connected && state.hasUsageLimits &&
       usageMeterValidPair(state.fiveHourRemaining, state.sevenDayRemaining)
-    ? USAGE_METER_HEIGHT
+    ? USAGE_METER_FOOTPRINT
     : 0;
 }
 
@@ -127,27 +132,40 @@ inline UsageMeterRenderPlan usageMeterRenderPlan(
   UsageMeterRenderPlan plan = {};
   if (!state.hasUsageLimits ||
       !usageMeterValidPair(state.fiveHourRemaining, state.sevenDayRemaining) ||
-      fullWidth == 0 || fullHeight < USAGE_METER_HEIGHT) {
+      fullWidth < USAGE_METER_MIN_WIDTH || fullHeight < USAGE_METER_FOOTPRINT) {
     return plan;
   }
 
-  uint16_t topY = fullHeight - USAGE_METER_HEIGHT;
-  uint16_t bottomY = topY + USAGE_METER_LANE_HEIGHT;
+  const uint16_t usableWidth = fullWidth - (USAGE_METER_SIDE_INSET * 2);
+  const uint16_t topY = fullHeight - USAGE_METER_FOOTPRINT;
+  const uint16_t bottomY = topY + USAGE_METER_BAR_HEIGHT + USAGE_METER_GAP;
   plan.count = 4;
-  plan.rects[0] = {0, topY, fullWidth, USAGE_METER_LANE_HEIGHT, USAGE_METER_CONSUMED};
-  plan.rects[1] = {
-    0,
+  plan.rects[0] = {
+    USAGE_METER_SIDE_INSET,
     topY,
-    usageMeterFillWidth(fullWidth, state.fiveHourRemaining),
-    USAGE_METER_LANE_HEIGHT,
+    usableWidth,
+    USAGE_METER_BAR_HEIGHT,
+    USAGE_METER_CONSUMED,
+  };
+  plan.rects[1] = {
+    USAGE_METER_SIDE_INSET,
+    topY,
+    usageMeterFillWidth(usableWidth, state.fiveHourRemaining),
+    USAGE_METER_BAR_HEIGHT,
     USAGE_METER_FIVE_HOUR,
   };
-  plan.rects[2] = {0, bottomY, fullWidth, USAGE_METER_LANE_HEIGHT, USAGE_METER_CONSUMED};
-  plan.rects[3] = {
-    0,
+  plan.rects[2] = {
+    USAGE_METER_SIDE_INSET,
     bottomY,
-    usageMeterFillWidth(fullWidth, state.sevenDayRemaining),
-    USAGE_METER_LANE_HEIGHT,
+    usableWidth,
+    USAGE_METER_BAR_HEIGHT,
+    USAGE_METER_CONSUMED,
+  };
+  plan.rects[3] = {
+    USAGE_METER_SIDE_INSET,
+    bottomY,
+    usageMeterFillWidth(usableWidth, state.sevenDayRemaining),
+    USAGE_METER_BAR_HEIGHT,
     USAGE_METER_SEVEN_DAY,
   };
   return plan;
