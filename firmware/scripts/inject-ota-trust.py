@@ -76,6 +76,47 @@ def _read_public_file(path: Path) -> bytes:
         os.close(descriptor)
 
 
+def _verify_ca_snapshot(ca_bytes: bytes) -> None:
+    try:
+        _run(["x509", "-checkend", "0", "-noout"], input_bytes=ca_bytes)
+    except RuntimeError as exc:
+        raise RuntimeError("OTA local CA certificate is expired or not yet valid") from exc
+
+    directory = Path(tempfile.mkdtemp(prefix="code-buddy-ota-ca-"))
+    certificate = directory / "ca.pem"
+    directory.chmod(0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    descriptor = -1
+    try:
+        descriptor = os.open(certificate, flags, 0o600)
+        os.fchmod(descriptor, 0o600)
+        remaining = memoryview(ca_bytes)
+        while remaining:
+            try:
+                written = os.write(descriptor, remaining)
+            except InterruptedError:
+                continue
+            if written <= 0:
+                raise OSError("write returned without making progress")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        try:
+            _run(["verify", "-CAfile", str(certificate), str(certificate)])
+        except RuntimeError as exc:
+            raise RuntimeError("OTA local CA certificate is not validly self-signed") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        certificate.unlink(missing_ok=True)
+        directory.rmdir()
+
+
 def _normalized_material(public_dir: Path) -> Tuple[bytes, bytes, str, str]:
     if public_dir.is_symlink() or not public_dir.is_dir():
         raise RuntimeError("OTA public trust directory is missing or unsafe")
@@ -92,6 +133,7 @@ def _normalized_material(public_dir: Path) -> Tuple[bytes, bytes, str, str]:
     ca_details = _run(["x509", "-noout", "-text"], input_bytes=ca_bytes)
     if b"CA:TRUE" not in ca_details or b"prime256v1" not in ca_details:
         raise RuntimeError("OTA local CA must be a P-256 CA certificate")
+    _verify_ca_snapshot(ca_bytes)
 
     public_pem = _run(
         ["pkey", "-pubin", "-pubout", "-outform", "PEM"],

@@ -50,6 +50,17 @@ int main() {
   expect_true(strcmp(settingsMenuLabel(99), "") == 0,
               "out-of-range settings rows should have no visible label");
 
+  expect_true(otaUpdateCommandLineCount() == 2,
+              "formal firmware update command should wrap onto two lines");
+  expect_true(strcmp(otaUpdateCommandLine(0), "code-buddy") == 0,
+              "first OTA command line should use the formal executable");
+  expect_true(strcmp(otaUpdateCommandLine(1), "firmware update") == 0,
+              "second OTA command line should use the formal subcommand");
+  for (uint8_t i = 0; i < otaUpdateCommandLineCount(); ++i) {
+    expect_true(strlen(otaUpdateCommandLine(i)) <= 18,
+                "OTA command lines must fit the 124px panel at 6px per glyph");
+  }
+
   expect_true(wifiMenuItemCount(false) == 2,
               "unprovisioned Wi-Fi menu should expose setup and back");
   expect_true(wifiMenuAction(false, 0) == WIFI_MENU_SETUP,

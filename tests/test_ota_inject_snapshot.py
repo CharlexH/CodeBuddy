@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import os
 import subprocess
+import stat
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,99 @@ def _openssl(arguments: list[str], contents: bytes) -> bytes:
         check=True,
         capture_output=True,
     ).stdout
+
+
+def _write_ca_extensions(path: Path) -> None:
+    path.write_text(
+        "basicConstraints=critical,CA:TRUE\n"
+        "keyUsage=critical,keyCertSign,cRLSign\n"
+        "subjectKeyIdentifier=hash\n"
+        "authorityKeyIdentifier=keyid,issuer\n"
+    )
+
+
+def _replace_with_non_self_signed_ca(trust, signer, tmp_path: Path) -> None:
+    request = tmp_path / "not-self-signed.csr"
+    extensions = tmp_path / "ca-extensions.cnf"
+    _write_ca_extensions(extensions)
+    subprocess.run(
+        [
+            "openssl", "req", "-new", "-key", str(trust.local_ca_private_key),
+            "-out", str(request), "-subj", "/CN=Explicit Invalid OTA CA",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "openssl", "x509", "-req", "-in", str(request),
+            "-CA", str(signer.local_ca_certificate),
+            "-CAkey", str(signer.local_ca_private_key), "-CAcreateserial",
+            "-out", str(trust.local_ca_certificate), "-days", "30",
+            "-extfile", str(extensions),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _replace_with_expired_ca(trust, tmp_path: Path) -> None:
+    request = tmp_path / "expired.csr"
+    current = tmp_path / "current.pem"
+    config = tmp_path / "ca.cnf"
+    database = tmp_path / "index.txt"
+    new_certs = tmp_path / "newcerts"
+    serial = tmp_path / "serial"
+    new_certs.mkdir()
+    database.write_text("")
+    serial.write_text("1000\n")
+    subprocess.run(
+        [
+            "openssl", "req", "-new", "-key", str(trust.local_ca_private_key),
+            "-out", str(request), "-subj", "/CN=Explicit Expired OTA CA",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-new", "-sha256",
+            "-key", str(trust.local_ca_private_key), "-out", str(current),
+            "-days", "1", "-subj", "/CN=Explicit Expired OTA CA",
+            "-addext", "basicConstraints=critical,CA:TRUE",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    config.write_text(
+        "[ ca ]\n"
+        "default_ca = local\n"
+        "[ local ]\n"
+        f"database = {database}\n"
+        f"new_certs_dir = {new_certs}\n"
+        f"certificate = {current}\n"
+        f"private_key = {trust.local_ca_private_key}\n"
+        f"serial = {serial}\n"
+        "default_md = sha256\n"
+        "policy = policy\n"
+        "x509_extensions = v3_ca\n"
+        "[ policy ]\n"
+        "commonName = supplied\n"
+        "[ v3_ca ]\n"
+        "basicConstraints = critical,CA:TRUE\n"
+        "keyUsage = critical,keyCertSign,cRLSign\n"
+        "subjectKeyIdentifier = hash\n"
+        "authorityKeyIdentifier = keyid:always\n"
+    )
+    subprocess.run(
+        [
+            "openssl", "ca", "-batch", "-selfsign", "-config", str(config),
+            "-in", str(request), "-out", str(trust.local_ca_certificate),
+            "-startdate", "20200101000000Z", "-enddate", "20210101000000Z",
+        ],
+        check=True,
+        capture_output=True,
+    )
 
 
 def test_public_files_are_opened_once_and_path_swaps_do_not_change_snapshot(
@@ -111,8 +205,49 @@ def test_all_openssl_parsing_uses_the_captured_file_bytes(
     inject_module._normalized_material(trust.public_dir)
 
     assert calls
-    assert all(input_bytes in captured for _, input_bytes in calls)
+    parse_calls = [call for call in calls if call[0][0] != "verify"]
+    assert all(input_bytes in captured for _, input_bytes in parse_calls)
     assert all(str(trust.public_dir) not in " ".join(arguments) for arguments, _ in calls)
+
+
+def test_ca_self_verification_uses_only_a_private_temp_snapshot(
+    inject_module, trust, monkeypatch
+):
+    ca_bytes = trust.local_ca_certificate.read_bytes()
+    original_run = inject_module._run
+    observed = []
+
+    def observing_run(arguments, *, input_bytes=None):
+        if arguments[0] == "verify":
+            ca_file = Path(arguments[arguments.index("-CAfile") + 1])
+            target = Path(arguments[-1])
+            observed.append((ca_file, target))
+            assert ca_file == target
+            assert ca_file.read_bytes() == ca_bytes
+            assert stat.S_IMODE(ca_file.stat().st_mode) == 0o600
+            assert stat.S_IMODE(ca_file.parent.stat().st_mode) == 0o700
+        return original_run(arguments, input_bytes=input_bytes)
+
+    monkeypatch.setattr(inject_module, "_run", observing_run)
+
+    inject_module._normalized_material(trust.public_dir)
+
+    assert len(observed) == 1
+
+
+def test_explicit_expired_ca_is_rejected(inject_module, trust, tmp_path):
+    _replace_with_expired_ca(trust, tmp_path)
+
+    with pytest.raises(RuntimeError, match="expired|valid"):
+        inject_module._normalized_material(trust.public_dir)
+
+
+def test_explicit_non_self_signed_ca_is_rejected(inject_module, trust, tmp_path):
+    signer = generate_ota_trust(tmp_path / "signer")
+    _replace_with_non_self_signed_ca(trust, signer, tmp_path)
+
+    with pytest.raises(RuntimeError, match="self|invalid"):
+        inject_module._normalized_material(trust.public_dir)
 
 
 def test_symlinked_public_file_is_rejected(inject_module, trust):

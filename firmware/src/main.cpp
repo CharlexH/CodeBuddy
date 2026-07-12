@@ -485,7 +485,7 @@ static void drawWifiStatus() {
 
 static void drawOtaReceiveWindow() {
   const Palette& p = characterPalette();
-  int mw = 124, mh = 112;
+  int mw = 124, mh = 124;
   int mx = (W - mw) / 2, my = (H - mh) / 2;
   spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
   spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
@@ -495,14 +495,15 @@ static void drawOtaReceiveWindow() {
   spr.setTextColor(p.textDim, PANEL);
   spr.setCursor(mx + 7, my + 30); spr.print("Run on your Mac:");
   spr.setTextColor(p.body, PANEL);
-  spr.setCursor(mx + 7, my + 47); spr.print("code-buddy update");
+  spr.setCursor(mx + 7, my + 47); spr.print(otaUpdateCommandLine(0));
+  spr.setCursor(mx + 7, my + 60); spr.print(otaUpdateCommandLine(1));
   spr.setTextColor(p.textDim, PANEL);
   uint32_t now = millis();
   uint32_t remaining = otaOfferWindowActive(tama.otaOffer, now)
     ? (tama.otaOffer.windowDeadlineMs - now + 999) / 1000 : 0;
-  spr.setCursor(mx + 7, my + 67);
+  spr.setCursor(mx + 7, my + 78);
   spr.printf("Window: %lus", (unsigned long)remaining);
-  spr.setCursor(mx + 7, my + 83);
+  spr.setCursor(mx + 7, my + 94);
   spr.print(tama.otaOffer.pending ? "Request received" : "Waiting for Mac");
   drawMenuHints(p, mx, mw, my + mh - 12, "", "Cancel");
 }

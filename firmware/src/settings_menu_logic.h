@@ -72,3 +72,11 @@ inline const char* wifiMenuLabel(bool provisioned, uint8_t index) {
       : action == WIFI_MENU_BACK ? "back"
       : "";
 }
+
+inline constexpr uint8_t otaUpdateCommandLineCount() { return 2; }
+
+inline constexpr const char* otaUpdateCommandLine(uint8_t index) {
+  return index == 0 ? "code-buddy"
+      : index == 1 ? "firmware update"
+      : "";
+}
