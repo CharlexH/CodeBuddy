@@ -59,6 +59,28 @@ int main() {
                   && scaledLandscapeGif.scaleDivisor == 2,
               "oversized landscape GIFs should be half-scaled and centered");
 
+  RuntimeDirectFrameDecision directFrame = runtimeDirectFrameDecision(
+    false, true, 0, 100, 100
+  );
+  expect_true(directFrame.render && directFrame.clear,
+              "a due direct GIF frame should clear the viewport before rendering");
+  directFrame = runtimeDirectFrameDecision(false, true, 0, 99, 100);
+  expect_true(!directFrame.render && !directFrame.clear,
+              "a direct GIF frame that is not due should not clear the viewport");
+  directFrame = runtimeDirectFrameDecision(true, false, 2, 100, 100);
+  expect_true(directFrame.render && directFrame.clear,
+              "a due text-mode frame should render without an open GIF");
+  directFrame = runtimeDirectFrameDecision(true, false, 0, 100, 100);
+  expect_true(!directFrame.render && !directFrame.clear,
+              "a text-mode state without frames should leave the viewport unchanged");
+  directFrame = runtimeDirectFrameDecision(false, false, 0, 100, 100);
+  expect_true(!directFrame.render && !directFrame.clear,
+              "an unavailable direct character should leave the viewport unchanged");
+
+  const RuntimeTextPlacement landscapeText = runtimeTextPlacement(5, 120, 59);
+  expect_true(landscapeText.x == 90 && landscapeText.y == 51,
+              "landscape text-mode frames should be centered at the runtime pet center");
+
   expect_true(!runtimeStatusOverlayVisible(false), "normal runtime should hide the status overlay");
   expect_true(runtimeStatusOverlayVisible(true), "approval prompts should show the status overlay");
 

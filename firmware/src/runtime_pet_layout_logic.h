@@ -24,6 +24,16 @@ struct RuntimePetClearRect {
   uint16_t height;
 };
 
+struct RuntimeDirectFrameDecision {
+  bool render;
+  bool clear;
+};
+
+struct RuntimeTextPlacement {
+  int16_t x;
+  int16_t y;
+};
+
 inline constexpr RuntimePetLayout runtimePetLayout(bool landscape) {
   return landscape ? RuntimePetLayout{240, 119, 120, 59, 1, 18}
                    : RuntimePetLayout{135, 224, 67, 112, 2, 30};
@@ -55,6 +65,30 @@ inline RuntimeGifPlacement runtimeGifPlacement(
     (int16_t)(layout.centerX - outputWidth / 2),
     (int16_t)(layout.centerY - outputHeight / 2),
     divisor,
+  };
+}
+
+inline RuntimeDirectFrameDecision runtimeDirectFrameDecision(
+  bool textMode,
+  bool gifOpen,
+  uint8_t textFrameCount,
+  uint32_t now,
+  uint32_t nextFrameAt
+) {
+  bool available = textMode ? textFrameCount > 0 : gifOpen;
+  bool due = (int32_t)(now - nextFrameAt) >= 0;
+  bool render = available && due;
+  return RuntimeDirectFrameDecision{render, render};
+}
+
+inline constexpr RuntimeTextPlacement runtimeTextPlacement(
+  uint8_t characterCount,
+  int16_t centerX,
+  int16_t centerY
+) {
+  return RuntimeTextPlacement{
+    (int16_t)(centerX - characterCount * 12 / 2),
+    (int16_t)(centerY - 8),
   };
 }
 

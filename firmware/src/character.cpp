@@ -3,6 +3,7 @@
 #include <LittleFS.h>
 #include <AnimatedGIF.h>
 #include <ArduinoJson.h>
+#include "runtime_pet_layout_logic.h"
 
 extern TFT_eSprite spr;
 
@@ -305,7 +306,37 @@ void characterRenderRuntimeTo(
   int viewportWidth,
   int viewportHeight
 ) {
-  if (!gifOpen) return;
+  uint8_t textFrameCount = 0;
+  if (textMode && curState < N_STATES) textFrameCount = textStates[curState].nFrames;
+  uint32_t now = millis();
+  RuntimeDirectFrameDecision decision = runtimeDirectFrameDecision(
+    textMode,
+    gifOpen,
+    textFrameCount,
+    now,
+    textMode ? textNext : nextFrameAt
+  );
+  if (!decision.render) return;
+
+  if (decision.clear) tgt->fillRect(0, 0, viewportWidth, viewportHeight, pal.bg);
+
+  if (textMode) {
+    TextState& state = textStates[curState];
+    textNext = now + state.delayMs;
+    const char* line = state.frames[textFrame];
+    RuntimeTextPlacement placement = runtimeTextPlacement(
+      strlen(line),
+      centerX,
+      centerY
+    );
+    tgt->setTextColor(pal.body, pal.bg);
+    tgt->setTextSize(2);
+    tgt->setCursor(placement.x, placement.y);
+    tgt->print(line);
+    textFrame = (textFrame + 1) % state.nFrames;
+    return;
+  }
+
   lgfx::LovyanGFX* previousTarget = _tgt;
   bool previousPeek = peekMode;
   int previousX = gifX;
@@ -324,15 +355,12 @@ void characterRenderRuntimeTo(
   gifX = centerX - outputWidth / 2;
   gifY = centerY - outputHeight / 2;
 
-  uint32_t now = millis();
-  if (now >= nextFrameAt) {
-    int delayMs = 0;
-    if (!gif.playFrame(false, &delayMs)) {
-      gif.reset();
-      gif.playFrame(false, &delayMs);
-    }
-    nextFrameAt = now + (delayMs > 0 ? delayMs : 100);
+  int delayMs = 0;
+  if (!gif.playFrame(false, &delayMs)) {
+    gif.reset();
+    gif.playFrame(false, &delayMs);
   }
+  nextFrameAt = now + (delayMs > 0 ? delayMs : 100);
 
   _tgt = previousTarget;
   peekMode = previousPeek;
