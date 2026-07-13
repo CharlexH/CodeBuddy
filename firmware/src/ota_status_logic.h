@@ -105,6 +105,10 @@ struct OtaStatusProjection {
   const char* error;
 };
 
+inline constexpr OtaStatusPhase otaStatusConfirmationPhase(bool automatic) {
+  return automatic ? OTA_STATUS_ACCEPTED : OTA_STATUS_AWAIT_CONFIRM;
+}
+
 inline OtaStatusProjection otaStatusProjectUpdate(
   OtaUpdatePhase phase,
   bool bootCommitted,

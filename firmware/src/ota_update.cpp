@@ -10,6 +10,7 @@
 
 #include "ota_manifest.h"
 #include "ota_policy_logic.h"
+#include "ota_status.h"
 #include "ota_trust.h"
 
 namespace {
@@ -740,6 +741,7 @@ void arm(OtaOfferState* offer) {
     runtime.inputs.automaticPolicy
   );
   runtime.automatic = policy.automatic;
+  if (policy.requiresConfirmation) otaStatusAwaitConfirmation();
   runtime.confirmRequested = false;
   runtime.cancelRequested = false;
   runtime.terminalSinceMs = 0;

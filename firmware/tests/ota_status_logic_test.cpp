@@ -14,6 +14,11 @@ int main() {
   expect(!otaStatusNonceValid("short"), "short nonce is rejected");
   expect(!otaStatusNonceValid("abcdefghijklmnopqrstuvw!"), "punctuation is rejected");
 
+  expect(otaStatusConfirmationPhase(false) == OTA_STATUS_AWAIT_CONFIRM,
+         "Ask policy reports an explicit confirmation wait");
+  expect(otaStatusConfirmationPhase(true) == OTA_STATUS_ACCEPTED,
+         "Direct policy must never project await-confirm");
+
   OtaStatusCadence cadence = otaStatusCadenceInitial();
   expect(otaStatusShouldEmit(&cadence, OTA_STATUS_AWAIT_CONFIRM, 0, ""),
          "first phase emits");

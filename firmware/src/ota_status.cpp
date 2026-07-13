@@ -36,6 +36,10 @@ void writeStatus(
 }
 
 OtaStatusPhase phaseForView(const OtaUpdateView& view, const char** error) {
+  if (view.phase == OTA_PHASE_CONFIRM) {
+    *error = "";
+    return otaStatusConfirmationPhase(view.automatic);
+  }
   if (view.authenticated && view.phase < OTA_PHASE_DOWNLOAD) {
     *error = "";
     return OTA_STATUS_AUTHENTICATED;
@@ -57,6 +61,10 @@ void otaStatusBindOffer(const OtaOfferState& offer) {
   writeStatus(
     activeNonce, activeGeneration, OTA_STATUS_OFFER_RECEIVED, 0, "", true
   );
+}
+
+void otaStatusAwaitConfirmation() {
+  if (!activeGeneration || !activeNonce[0]) return;
   writeStatus(
     activeNonce, activeGeneration, OTA_STATUS_AWAIT_CONFIRM, 0, "", true
   );
