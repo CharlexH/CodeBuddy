@@ -5,6 +5,7 @@ import os
 import struct
 import subprocess
 import sys
+import stat
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from codex_buddy.ota_release import (
     require_monotonic_version,
     sign_manifest,
     verify_manifest_signature,
+    cleanup_ota_release,
 )
 from codex_buddy.ota_trust import bootstrap_ota_trust, generate_ota_trust
 
@@ -562,6 +564,46 @@ def test_release_bundle_binds_firmware_digest_size_and_has_no_private_material(t
         trust.manifest_public_key,
     )
     assert not any("PRIVATE KEY" in path.read_text(errors="ignore") for path in release.output_dir.iterdir())
+
+
+@pytest.mark.parametrize("use_private_tmp", [False, True])
+def test_release_never_changes_existing_parent_permissions_or_inode(
+    tmp_path, use_private_tmp
+):
+    trust = generate_ota_trust(tmp_path / "ota")
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_versioned_esp32s3_image("1.2.3"))
+    if use_private_tmp:
+        parent = Path("/private/tmp")
+        output = parent / f"codebuddy-{tmp_path.name}-release"
+    else:
+        parent = tmp_path / "existing-project-parent"
+        parent.mkdir(mode=0o755)
+        parent.chmod(0o755)
+        output = parent / "release"
+    before = parent.stat()
+    release = None
+    try:
+        release = _build_ota_release(
+            image_path=image,
+            output_dir=output,
+            version="1.2.3",
+            current_version="1.2.2",
+            chip="esp32s3",
+            artifact_url=ONE_TIME_URL,
+            signing_private_key=trust.manifest_private_key,
+            expected_signing_public_key=trust.manifest_public_key,
+        )
+        after = parent.stat()
+        assert after.st_ino == before.st_ino
+        assert stat.S_IMODE(after.st_mode) == stat.S_IMODE(before.st_mode)
+        generation_root = parent / f".{output.name}.generations"
+        assert stat.S_IMODE(generation_root.stat().st_mode) == 0o700
+        assert stat.S_IMODE(Path(release.generation_dir).stat().st_mode) == 0o700
+    finally:
+        if release is not None:
+            cleanup_ota_release(release)
+        (parent / f".{output.name}.build.lock").unlink(missing_ok=True)
 
 
 def test_release_rechecks_image_against_inspected_size_hash_and_version(tmp_path):

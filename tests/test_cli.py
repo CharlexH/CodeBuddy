@@ -2,7 +2,11 @@ import argparse
 import asyncio
 import io
 import json
+import os
 import re
+import signal
+import subprocess
+import sys
 from typing import Optional
 
 import pytest
@@ -407,7 +411,7 @@ def test_firmware_update_reports_sanitized_agent_progress(monkeypatch, tmp_path,
     assert "secret-nonce" not in output
 
 
-def test_firmware_update_sends_cancel_on_keyboard_interrupt(monkeypatch, tmp_path):
+def test_firmware_update_sends_cancel_on_keyboard_interrupt(monkeypatch, tmp_path, capsys):
     requests: list[dict] = []
     image = tmp_path / "firmware.bin"
     image.write_bytes(b"explicit-test-image")
@@ -421,7 +425,7 @@ def test_firmware_update_sends_cancel_on_keyboard_interrupt(monkeypatch, tmp_pat
             return {"ok": True, "ota": {"nonce": "n", "phase": "preparing", "terminal": False}}
         if payload["cmd"] == "ota_status":
             raise KeyboardInterrupt
-        return {"ok": True}
+        return {"ok": True, "cancel_applied": True}
 
     monkeypatch.setattr(cli, "_ensure_agent_running", fake_ensure)
     monkeypatch.setattr(cli, "_agent_request", fake_request)
@@ -434,6 +438,7 @@ def test_firmware_update_sends_cancel_on_keyboard_interrupt(monkeypatch, tmp_pat
 
     assert result == 130
     assert requests[-1] == {"cmd": "ota_cancel", "nonce": "n"}
+    assert "cancelled on Code Buddy" in capsys.readouterr().err
 
 
 def test_firmware_update_task_cancellation_shields_bounded_device_cancel(
@@ -473,12 +478,92 @@ def test_firmware_update_task_cancellation_shields_bounded_device_cancel(
         )
         await status_started.wait()
         task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        return requests
+        result = await task
+        return requests, result
 
-    requests = asyncio.run(exercise())
+    requests, result = asyncio.run(exercise())
+    assert result == 130
     assert requests[-1] == {"cmd": "ota_cancel", "nonce": "n"}
+
+
+def test_firmware_update_does_not_claim_unconfirmed_cancel(monkeypatch, tmp_path, capsys):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(b"explicit-test-image")
+
+    async def fake_ensure(_):
+        return None
+
+    async def fake_request(_, payload):
+        if payload["cmd"] == "ota_begin":
+            return {
+                "ok": True,
+                "ota": {"nonce": "n", "phase": "preparing", "terminal": False},
+            }
+        if payload["cmd"] == "ota_status":
+            raise KeyboardInterrupt
+        return {
+            "ok": True,
+            "cancel_applied": False,
+            "ota": {"phase": "boot-committed"},
+        }
+
+    monkeypatch.setattr(cli, "_ensure_agent_running", fake_ensure)
+    monkeypatch.setattr(cli, "_agent_request", fake_request)
+
+    result = asyncio.run(
+        cli._firmware_update(
+            argparse.Namespace(state_path=tmp_path / "state.json", firmware=image)
+        )
+    )
+
+    assert result == 130
+    error = capsys.readouterr().err
+    assert "already committed" in error
+    assert "cancelled on Code Buddy" not in error
+
+
+def test_firmware_update_real_sigint_exits_130_and_requests_cancel(tmp_path):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(b"explicit-test-image")
+    marker = tmp_path / "cancel-requested"
+    script = """
+import asyncio, os, signal, sys
+from pathlib import Path
+from codex_buddy import cli
+
+marker = Path(sys.argv[1])
+image = Path(sys.argv[2])
+
+async def ensure(_):
+    return None
+
+async def request(_, payload):
+    if payload["cmd"] == "ota_begin":
+        return {"ok": True, "ota": {"nonce": "n", "phase": "preparing", "terminal": False}}
+    if payload["cmd"] == "ota_status":
+        os.kill(os.getpid(), signal.SIGINT)
+        await asyncio.sleep(10)
+    if payload["cmd"] == "ota_cancel":
+        marker.write_text("requested")
+        return {"ok": True, "cancel_applied": True}
+    raise AssertionError(payload)
+
+cli._ensure_agent_running = ensure
+cli._agent_request = request
+raise SystemExit(cli.main(["firmware", "update", "--firmware", str(image)]))
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(cli.Path(__file__).resolve().parents[1] / "src")
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(marker), str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert completed.returncode == 130
+    assert marker.read_text() == "requested"
+    assert "Traceback" not in completed.stderr
 
 
 def test_firmware_update_missing_installed_default_fails_before_agent_request(

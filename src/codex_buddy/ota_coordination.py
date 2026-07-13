@@ -36,6 +36,11 @@ class OtaAgentSession:
     accepted: bool = False
     irreversible: bool = False
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    cancel_result: Optional[asyncio.Future[bool]] = field(
+        default=None, init=False, repr=False
+    )
+    cancel_sent: bool = field(default=False, init=False)
+    cancel_complete: asyncio.Event = field(default_factory=asyncio.Event)
 
     def public_payload(self, *, include_identity: bool = True) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -68,6 +73,7 @@ class OtaCoordinator:
         confirm_timeout: float = 180.0,
         install_timeout: float = 600.0,
         reconnect_interval: float = 5.0,
+        cancel_timeout: float = 1.5,
     ) -> None:
         self._get_ble = get_ble
         self._is_ble_connected = is_ble_connected
@@ -79,30 +85,73 @@ class OtaCoordinator:
         self._confirm_timeout = confirm_timeout
         self._install_timeout = install_timeout
         self._reconnect_interval = reconnect_interval
+        self._cancel_timeout = cancel_timeout
 
     async def cancel(self, session: OtaAgentSession) -> bool:
+        if session.phase == "cancelled" and session.cancel_complete.is_set():
+            return True
         if session.terminal or session.irreversible or session.phase in {
             "boot-committed", "restarting", "boot-health"
         }:
             return False
+        if session.cancel_result is None or session.cancel_result.done():
+            session.cancel_result = asyncio.get_running_loop().create_future()
         session.cancel_event.set()
-        ble = self._get_ble()
-        if ble is not None and self._is_ble_connected():
-            with contextlib.suppress(Exception):
-                await ble.send_json(
-                    {
-                        "cmd": "ota_cancel",
-                        "nonce": session.nonce,
-                        "generation": session.generation,
-                    }
-                )
+        try:
+            applied = await asyncio.wait_for(
+                asyncio.shield(session.cancel_result),
+                timeout=self._cancel_timeout,
+            )
+        except asyncio.TimeoutError:
+            return False
+        if not applied:
+            return False
+        try:
+            await asyncio.wait_for(
+                session.cancel_complete.wait(), timeout=self._cancel_timeout
+            )
+        except asyncio.TimeoutError:
+            return False
         return True
+
+    @staticmethod
+    def _finish_cancel_request(session: OtaAgentSession, applied: bool) -> None:
+        pending = session.cancel_result
+        session.cancel_sent = False
+        session.cancel_event.clear()
+        if applied:
+            session.phase = "cancelled"
+            session.error = "cancelled"
+            session.terminal = True
+            session.success = False
+        if pending is not None and not pending.done():
+            pending.set_result(applied)
+
+    async def _send_cancel_request(self, session: OtaAgentSession) -> None:
+        if not session.cancel_event.is_set() or session.cancel_sent:
+            return
+        ble = self._get_ble()
+        if ble is None or not self._is_ble_connected():
+            self._finish_cancel_request(session, False)
+            return
+        try:
+            await ble.send_json(
+                {
+                    "cmd": "ota_cancel",
+                    "nonce": session.nonce,
+                    "generation": session.generation,
+                }
+            )
+        except Exception:
+            self._finish_cancel_request(session, False)
+            return
+        session.cancel_sent = True
+        session.cancel_event.clear()
 
     async def _receive(self, session: OtaAgentSession, *, timeout: float):
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            if session.cancel_event.is_set():
-                raise asyncio.CancelledError
+            await self._send_cancel_request(session)
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise asyncio.TimeoutError
@@ -111,15 +160,24 @@ class OtaCoordinator:
                 await asyncio.sleep(min(0.1, remaining))
                 continue
             try:
-                raw = await ble.recv_json(timeout=min(1.0, remaining))
+                raw = await ble.recv_json(timeout=min(0.05, remaining))
             except asyncio.TimeoutError:
                 continue
             try:
-                return parse_ota_status(
+                status = parse_ota_status(
                     raw, nonce=session.nonce, generation=session.generation
                 )
             except OtaProtocolError:
                 continue
+            if session.cancel_sent and (
+                status.cancel_applied
+                or status.phase in {
+                    "boot-committed", "restarting", "boot-health", "running",
+                    "rejected", "busy", "error",
+                }
+            ):
+                self._finish_cancel_request(session, status.cancel_applied)
+            return status
 
     async def _probe(self, session: OtaAgentSession) -> None:
         ble = self._get_ble()
@@ -280,9 +338,14 @@ class OtaCoordinator:
             session.terminal = True
         except Exception as exc:
             code = str(exc) if str(exc) in _DEVICE_ERRORS else "download"
-            session.phase, session.error = "error", code
+            session.phase = "cancelled" if code == "cancelled" else "error"
+            session.error = code
             session.terminal = True
         finally:
             if server is not None:
                 with contextlib.suppress(Exception):
                     await server.close()
+            if session.cancel_result is not None and not session.cancel_result.done():
+                self._finish_cancel_request(session, False)
+            if session.phase == "cancelled" and session.terminal:
+                session.cancel_complete.set()

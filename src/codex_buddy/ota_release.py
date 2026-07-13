@@ -318,15 +318,23 @@ def _write_all(descriptor: int, contents: bytes) -> None:
 def _require_real_directory(directory: Path, *, create: bool) -> None:
     if os.path.lexists(directory) and directory.is_symlink():
         raise ValueError(f"directory must not be a symlink: {directory}")
-    if create:
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    created = False
+    if create and not os.path.lexists(directory):
+        try:
+            directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+            created = True
+        except FileExistsError:
+            # A concurrent publisher may have created the same directory. It
+            # is validated below, but it is not ours to chmod.
+            pass
     try:
         metadata = directory.lstat()
     except FileNotFoundError as exc:
         raise ValueError(f"directory does not exist: {directory}") from exc
     if not stat.S_ISDIR(metadata.st_mode):
         raise ValueError(f"path must be a directory: {directory}")
-    directory.chmod(0o700)
+    if created:
+        directory.chmod(0o700)
 
 
 @contextmanager

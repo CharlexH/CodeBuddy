@@ -15,7 +15,16 @@ from codex_buddy.ota_release import OtaImageInfo
 NONCE = "n" * 24
 
 
-def _status(phase, *, version="0.1.5", percent=0, health="ordinary", error="", nonce=NONCE):
+def _status(
+    phase,
+    *,
+    version="0.1.5",
+    percent=0,
+    health="ordinary",
+    error="",
+    nonce=NONCE,
+    cancel_applied=False,
+):
     return {
         "cmd": "ota_status",
         "nonce": nonce,
@@ -25,7 +34,7 @@ def _status(phase, *, version="0.1.5", percent=0, health="ordinary", error="", n
         "version": version,
         "health": health,
         "error": error,
-        "cancel_applied": False,
+        "cancel_applied": cancel_applied,
     }
 
 
@@ -375,3 +384,177 @@ def test_cancel_reports_noop_once_boot_is_committed(tmp_path):
     assert applied is False
     assert session.cancel_event.is_set() is False
     assert ble.sent == []
+
+
+def test_cancel_is_terminal_only_after_device_applies_it(tmp_path):
+    async def exercise():
+        ble = _Ble(
+            [
+                _status("running", version="0.1.4", health="valid"),
+                _status("offer-received", version="0.1.4"),
+            ]
+        )
+        trust = SimpleNamespace(
+            manifest_private_key=tmp_path / "private.pem",
+            manifest_public_key=tmp_path / "public.pem",
+        )
+
+        async def send_json(payload):
+            await _Ble.send_json(ble, payload)
+            if payload.get("cmd") == "ota_cancel":
+                ble.statuses.put_nowait(
+                    _status("cancelled", error="cancelled", cancel_applied=True)
+                )
+
+        ble.send_json = send_json
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            cancel_timeout=0.5,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.5", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        run = asyncio.create_task(coordinator.run(session, image))
+        while session.phase != "await-confirm":
+            await asyncio.sleep(0)
+        applied = await coordinator.cancel(session)
+        await run
+        return applied, session, ble, _Server.instances[-1]
+
+    applied, session, ble, server = asyncio.run(exercise())
+    assert applied is True, (
+        session.phase,
+        session.error,
+        session.terminal,
+        session.cancel_sent,
+        session.cancel_result,
+        session.cancel_complete.is_set(),
+        ble.sent,
+    )
+    assert session.phase == "cancelled"
+    assert session.error == "cancelled"
+    assert session.terminal is True and session.success is False
+    assert len([item for item in ble.sent if item.get("cmd") == "ota_cancel"]) == 1
+    assert server.closed is True
+
+
+def test_cancel_rejected_at_boot_commit_keeps_irreversible_session_running(tmp_path):
+    async def exercise():
+        ble = _Ble(
+            [
+                _status("running", version="0.1.4", health="valid"),
+                _status("offer-received", version="0.1.4"),
+            ]
+        )
+        trust = SimpleNamespace(
+            manifest_private_key=tmp_path / "private.pem",
+            manifest_public_key=tmp_path / "public.pem",
+        )
+
+        async def send_json(payload):
+            await _Ble.send_json(ble, payload)
+            if payload.get("cmd") == "ota_cancel":
+                ble.statuses.put_nowait(_status("boot-committed", percent=100))
+                ble.statuses.put_nowait(
+                    _status("running", percent=100, health="valid")
+                )
+
+        ble.send_json = send_json
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            cancel_timeout=0.1,
+            reconnect_interval=0,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.5", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        run = asyncio.create_task(coordinator.run(session, image))
+        while session.phase != "await-confirm":
+            await asyncio.sleep(0)
+        applied = await coordinator.cancel(session)
+        assert applied is False
+        assert session.phase != "cancelled" and session.error != "cancelled"
+        await run
+        return session
+
+    session = asyncio.run(exercise())
+    assert session.irreversible is True
+    assert session.success is True and session.terminal is True
+
+
+@pytest.mark.parametrize("failure", ["send", "timeout"])
+def test_cancel_send_or_ack_failure_is_unconfirmed_and_run_continues(tmp_path, failure):
+    async def exercise():
+        ble = _Ble(
+            [
+                _status("running", version="0.1.4", health="valid"),
+                _status("offer-received", version="0.1.4"),
+            ]
+        )
+        release_statuses = asyncio.Event()
+        trust = SimpleNamespace(
+            manifest_private_key=tmp_path / "private.pem",
+            manifest_public_key=tmp_path / "public.pem",
+        )
+
+        async def send_json(payload):
+            await _Ble.send_json(ble, payload)
+            if payload.get("cmd") == "ota_cancel":
+                if failure == "send":
+                    raise NativeBleHelperError("cancel send failed")
+                return
+            if payload.get("cmd") == "ota_status" and release_statuses.is_set():
+                ble.statuses.put_nowait(_status("boot-committed", percent=100))
+                ble.statuses.put_nowait(
+                    _status("running", percent=100, health="valid")
+                )
+
+        ble.send_json = send_json
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            cancel_timeout=0.02,
+            reconnect_interval=0,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.5", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        run = asyncio.create_task(coordinator.run(session, image))
+        while session.phase != "await-confirm":
+            await asyncio.sleep(0)
+        applied = await coordinator.cancel(session)
+        assert applied is False
+        assert session.phase != "cancelled" and session.error != "cancelled"
+        release_statuses.set()
+        await ble.send_json({"cmd": "ota_status"})
+        await run
+        return session
+
+    session = asyncio.run(exercise())
+    assert session.success is True

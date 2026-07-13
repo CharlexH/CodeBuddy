@@ -16,6 +16,44 @@ constexpr size_t OTA_UPDATE_HTTP_HEADER_MAX_BYTES = 1024;
 constexpr uint32_t OTA_UPDATE_RESTART_RETRY_MS = 100;
 constexpr uint8_t OTA_UPDATE_RESTART_API_ATTEMPTS = 3;
 
+struct OtaDisplayMetadata {
+  bool visible;
+  uint32_t sizeBytes;
+  char version[OTA_VERSION_MAX_BYTES];
+};
+
+inline OtaDisplayMetadata otaDisplayMetadataInitial() {
+  OtaDisplayMetadata metadata = {};
+  return metadata;
+}
+
+inline bool otaDisplayMetadataCapture(
+  OtaDisplayMetadata* metadata,
+  const char* version,
+  uint32_t sizeBytes
+) {
+  if (!metadata || !version || !sizeBytes) return false;
+  size_t length = strnlen(version, OTA_VERSION_MAX_BYTES);
+  if (!length || length >= OTA_VERSION_MAX_BYTES) return false;
+  memset(metadata, 0, sizeof(*metadata));
+  memcpy(metadata->version, version, length);
+  metadata->sizeBytes = sizeBytes;
+  metadata->visible = true;
+  return true;
+}
+
+inline void otaDisplayMetadataPreserveForBootCommit(
+  OtaDisplayMetadata* metadata
+) {
+  // Deliberately retain only the non-sensitive version and image size. URLs,
+  // tokens, signatures, and digests remain in the scrubbed transport state.
+  (void) metadata;
+}
+
+inline void otaDisplayMetadataClear(OtaDisplayMetadata* metadata) {
+  if (metadata) memset(metadata, 0, sizeof(*metadata));
+}
+
 enum OtaUpdateGate : uint8_t {
   OTA_GATE_READY = 0,
   OTA_GATE_NO_OFFER,

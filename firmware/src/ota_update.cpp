@@ -54,6 +54,7 @@ struct OtaRuntime {
   bool offerConsumed;
   OtaUpdateRuntimeInputs inputs;
   OtaManifestDescriptor descriptor;
+  OtaDisplayMetadata display;
   uint8_t manifest[OTA_MANIFEST_MAX_BYTES];
   size_t manifestLength;
   uint8_t signature[OTA_SIGNATURE_MAX_BYTES];
@@ -521,6 +522,12 @@ OtaUpdateActionResult otaAction(
       if (!otaDecodeSha256(runtime.descriptor.sha256, runtime.expectedDigest))
         return otaActionFailure(OTA_UPDATE_FAILURE_MANIFEST);
       runtime.machine.imageSize = runtime.descriptor.sizeBytes;
+      if (!otaDisplayMetadataCapture(
+            &runtime.display,
+            runtime.descriptor.version,
+            runtime.descriptor.sizeBytes
+          ))
+        return otaActionFailure(OTA_UPDATE_FAILURE_VERSION);
       mbedtls_platform_zeroize(runtime.manifest, sizeof(runtime.manifest));
       mbedtls_platform_zeroize(runtime.signature, sizeof(runtime.signature));
       return otaActionComplete();
@@ -654,6 +661,7 @@ OtaUpdateActionResult otaAction(
       runtime.machine.restartAttempts = 0;
       runtime.machine.nextRestartAttemptMs = millis();
       setStatus("Restarting");
+      otaDisplayMetadataPreserveForBootCommit(&runtime.display);
       // The boot selection is committed and must never be treated as a
       // cancellable transaction again. Scrub endpoint tokens now; restart
       // needs only the latched pure-machine state.
@@ -718,6 +726,9 @@ void arm(OtaOfferState* offer) {
   runtime.machine.actionContext = &runtime;
   runtime.machine.chunkSize = OTA_UPDATE_CHUNK_BYTES;
   runtime.sourceOffer = offer;
+  otaDisplayMetadataClear(&runtime.display);
+  if (offer)
+    otaDisplayMetadataCapture(&runtime.display, offer->version, offer->sizeBytes);
   otaOfferReset(&runtime.offer);
   runtime.offerConsumed = false;
   runtime.active = true;
@@ -761,7 +772,10 @@ void otaUpdatePoll(OtaOfferState* offer, const OtaUpdateRuntimeInputs& inputs) {
   runtime.inputs = inputs;
   if (otaUpdateTerminal(runtime.machine)) {
     if (!runtime.terminalSinceMs) cleanupTerminal();
-    if (millis() - runtime.terminalSinceMs > 2500) runtime.active = false;
+    if (millis() - runtime.terminalSinceMs > 2500) {
+      runtime.active = false;
+      otaDisplayMetadataClear(&runtime.display);
+    }
     return;
   }
 
@@ -833,20 +847,17 @@ OtaUpdateView otaUpdateView() {
   view.phase = runtime.machine.phase;
   view.failure = runtime.machine.failure;
   view.cancellable = otaUpdateCancellationAllowed(runtime.active, runtime.machine);
-  view.sizeBytes = runtime.machine.imageSize;
+  view.sizeBytes = runtime.display.visible
+    ? runtime.display.sizeBytes : runtime.machine.imageSize;
   view.percent = otaUpdateOverallProgress(
     runtime.machine.phase,
     runtime.machine.receivedBytes,
     runtime.machine.readbackBytes,
     runtime.machine.imageSize
   );
-  if (view.authenticated) {
-    strncpy(view.version, runtime.descriptor.version, sizeof(view.version) - 1);
+  if (runtime.display.visible) {
+    strncpy(view.version, runtime.display.version, sizeof(view.version) - 1);
     view.version[sizeof(view.version) - 1] = 0;
-  } else if (runtime.sourceOffer) {
-    strncpy(view.version, runtime.sourceOffer->version, sizeof(view.version) - 1);
-    view.version[sizeof(view.version) - 1] = 0;
-    view.sizeBytes = runtime.sourceOffer->sizeBytes;
   }
   strncpy(view.status, runtime.status, sizeof(view.status) - 1);
   view.status[sizeof(view.status) - 1] = 0;

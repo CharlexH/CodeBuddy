@@ -263,7 +263,9 @@ def _default_firmware_image() -> Path:
     )
 
 
-async def _request_ota_cancel_bounded(state_path: Path, nonce: str) -> None:
+async def _request_ota_cancel_bounded(
+    state_path: Path, nonce: str
+) -> dict[str, object] | None:
     request = asyncio.create_task(
         asyncio.wait_for(
             _agent_request(
@@ -274,11 +276,30 @@ async def _request_ota_cancel_bounded(state_path: Path, nonce: str) -> None:
         )
     )
     try:
-        await asyncio.shield(request)
+        response = await asyncio.shield(request)
     except (Exception, asyncio.CancelledError):
         # The inner task remains bounded by wait_for even if a second signal
         # cancels this CLI while the best-effort device cancellation is sent.
-        pass
+        return None
+    return response if isinstance(response, dict) else None
+
+
+def _print_ota_interrupt_result(response: dict[str, object] | None) -> None:
+    if response is not None and response.get("cancel_applied") is True:
+        print("Firmware update cancelled on Code Buddy.", file=sys.stderr)
+        return
+    ota = response.get("ota") if response is not None else None
+    phase = ota.get("phase") if isinstance(ota, dict) else None
+    if phase in {"boot-committed", "restarting", "boot-health"}:
+        print(
+            "Firmware is already committed; the update continues on Code Buddy.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "Cancellation was not confirmed; the update may still be continuing on Code Buddy.",
+            file=sys.stderr,
+        )
 
 
 async def _firmware_update(args: argparse.Namespace) -> int:
@@ -324,13 +345,16 @@ async def _firmware_update(args: argparse.Namespace) -> int:
             )
             ota = response["ota"]
     except asyncio.CancelledError:
+        response = None
         if "nonce" in locals():
-            await _request_ota_cancel_bounded(args.state_path, nonce)
-        raise
+            response = await _request_ota_cancel_bounded(args.state_path, nonce)
+        _print_ota_interrupt_result(response)
+        return 130
     except KeyboardInterrupt:
+        response = None
         if "nonce" in locals():
-            await _request_ota_cancel_bounded(args.state_path, nonce)
-        print("Firmware update cancelled.", file=sys.stderr)
+            response = await _request_ota_cancel_bounded(args.state_path, nonce)
+        _print_ota_interrupt_result(response)
         return 130
     except (AgentClientError, KeyError, TypeError, ValueError, OSError) as exc:
         message = str(exc)
@@ -615,7 +639,7 @@ def _agent_sessions(state_path):
         return None
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "default":
@@ -649,3 +673,11 @@ def main(argv: list[str] | None = None) -> int:
         return _service_status(args)
     parser.error(f"unknown command: {args.command}")
     return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        return 130

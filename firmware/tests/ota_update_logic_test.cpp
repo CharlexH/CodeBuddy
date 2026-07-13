@@ -811,6 +811,28 @@ static void testTerminalScrubPreservesOnlyOutcome() {
          "terminal scrub must remove lengths, handles, and callback pointers");
 }
 
+static void testDisplayMetadataPersistsUntilUiLeaves() {
+  OtaDisplayMetadata display = otaDisplayMetadataInitial();
+  expect(!display.visible && display.version[0] == 0 && display.sizeBytes == 0,
+         "display metadata begins empty");
+  expect(otaDisplayMetadataCapture(&display, "0.1.5", 123456),
+         "confirmed offer metadata is captured");
+  expect(display.visible && strcmp(display.version, "0.1.5") == 0 &&
+           display.sizeBytes == 123456,
+         "offer metadata remains visible before authentication");
+  expect(otaDisplayMetadataCapture(&display, "0.1.5", 123456),
+         "authenticated manifest refreshes the same display metadata");
+  expect(strcmp(display.version, "0.1.5") == 0 && display.sizeBytes == 123456,
+         "manifest metadata survives authentication");
+  otaDisplayMetadataPreserveForBootCommit(&display);
+  expect(display.visible && strcmp(display.version, "0.1.5") == 0 &&
+           display.sizeBytes == 123456,
+         "boot commit does not scrub non-sensitive display metadata");
+  otaDisplayMetadataClear(&display);
+  expect(!display.visible && display.version[0] == 0 && display.sizeBytes == 0,
+         "metadata clears only when the OTA UI leaves");
+}
+
 static void testCancellationApplicabilityAndFailureMapping() {
   OtaUpdateMachine update = otaUpdateMachineInitial();
   expect(otaUpdateCancellationAllowed(true, update),
@@ -880,6 +902,7 @@ int main() {
   testAsyncOpenRemainsResponsiveAndPreBegin();
   testBootCommitIgnoresAllCancellationAndGateChanges();
   testTerminalScrubPreservesOnlyOutcome();
+  testDisplayMetadataPersistsUntilUiLeaves();
   testCancellationApplicabilityAndFailureMapping();
   puts("ota update logic tests passed");
   return 0;
