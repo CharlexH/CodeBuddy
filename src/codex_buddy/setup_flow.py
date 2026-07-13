@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
+from importlib import resources
 from pathlib import Path
 
 from . import runtime
 from .ble_transport import _native_helper_app_path
+from .ota_release import inspect_esp32s3_application_image
 from .state_store import PersistedState
 
 SETUP_VERSION = 1
@@ -79,18 +82,54 @@ def ensure_helper_app_installed(destination: Path | None = None) -> Path:
     return destination
 
 
-def ensure_firmware_artifact_installed(source: Path, destination: Path | None = None) -> Path:
+def bundled_firmware_resource():
+    return resources.files("codex_buddy").joinpath(
+        "firmware", "code-buddy-sticks3-app.bin"
+    )
+
+
+def ensure_firmware_artifact_installed(
+    source: Path | None = None, destination: Path | None = None
+) -> Path:
     destination = runtime.default_firmware_path() if destination is None else Path(destination)
-    source = Path(source)
-    if source.is_symlink() or not source.is_file():
-        return destination
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + ".tmp")
-    temporary.unlink(missing_ok=True)
-    shutil.copyfile(source, temporary, follow_symlinks=False)
-    temporary.chmod(0o644)
-    os.replace(temporary, destination)
-    return destination
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        if source is None:
+            resource = bundled_firmware_resource()
+            try:
+                source_handle = resource.open("rb")
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    "bundled firmware application image is missing from the Python package"
+                ) from exc
+        else:
+            source = Path(source)
+            if source.is_symlink():
+                raise ValueError(
+                    f"firmware image must be a regular non-symlink file: {source}"
+                )
+            if not source.is_file():
+                raise FileNotFoundError(f"firmware application image is missing: {source}")
+            source_handle = source.open("rb")
+        with source_handle:
+            with os.fdopen(descriptor, "wb", closefd=True) as destination_handle:
+                descriptor = -1
+                shutil.copyfileobj(source_handle, destination_handle, length=1024 * 1024)
+                destination_handle.flush()
+                os.fsync(destination_handle.fileno())
+        temporary.chmod(0o600)
+        inspect_esp32s3_application_image(temporary)
+        temporary.chmod(0o644)
+        os.replace(temporary, destination)
+        return destination
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def is_setup_complete(state: PersistedState) -> bool:

@@ -43,6 +43,7 @@ def _public_key_der_sha256(path: Path) -> str:
 
 
 def _esp32s3_image(payload: bytes = b"firmware-payload") -> bytes:
+    payload += b"\x00" * (-len(payload) % 4)
     header = bytearray(24)
     header[0] = 0xE9
     header[1] = 1
@@ -51,18 +52,37 @@ def _esp32s3_image(payload: bytes = b"firmware-payload") -> bytes:
     header[4:8] = struct.pack("<I", 0x40377B4C)
     header[8] = 0xEE
     header[12:14] = struct.pack("<H", 9)
-    header[23] = 0
-    return bytes(header) + struct.pack("<II", 0x3C0E0020, len(payload)) + payload + b"\xef"
+    header[23] = 1
+    image = bytes(header) + struct.pack("<II", 0x3C0E0020, len(payload)) + payload
+    checksum = 0xEF
+    for value in payload:
+        checksum ^= value
+    checksum_offset = (len(image) + 16) & ~15
+    image += b"\x00" * (checksum_offset - 1 - len(image)) + bytes([checksum])
+    return image + hashlib.sha256(image).digest()
 
 
-def _versioned_esp32s3_image(version: str = "1.2.3") -> bytes:
+def _versioned_esp32s3_image(
+    version: str = "1.2.3", payload: bytes = b"application-payload"
+) -> bytes:
     app_desc = bytearray(256)
     app_desc[0:4] = struct.pack("<I", 0xABCD5432)
     encoded = version.encode("ascii")
     app_desc[16 : 16 + len(encoded)] = encoded
     app_desc[16 + len(encoded)] = 0
     app_desc[48:58] = b"CodeBuddy\0"
-    return _esp32s3_image(bytes(app_desc) + b"application-payload")
+    return _esp32s3_image(bytes(app_desc) + payload)
+
+
+def _build_ota_release(**kwargs):
+    if "expected_size_bytes" not in kwargs or "expected_sha256" not in kwargs:
+        try:
+            contents = Path(kwargs["image_path"]).read_bytes()
+        except OSError:
+            contents = b""
+        kwargs.setdefault("expected_size_bytes", len(contents))
+        kwargs.setdefault("expected_sha256", hashlib.sha256(contents).hexdigest())
+    return build_ota_release(**kwargs)
 
 
 def test_inspect_application_image_reads_exact_embedded_semver(tmp_path):
@@ -109,6 +129,32 @@ def test_inspect_application_image_rejects_symlink_and_permissive_private_file(t
     private.chmod(0o666)
     with pytest.raises(ValueError, match="permissions"):
         inspect_esp32s3_application_image(private)
+
+
+@pytest.mark.parametrize("mutation", ["trailing", "truncated", "padding", "checksum", "hash"])
+def test_inspect_application_image_rejects_noncanonical_or_corrupt_trailer(
+    tmp_path, mutation
+):
+    contents = bytearray(_versioned_esp32s3_image())
+    segment_length = struct.unpack_from("<I", contents, 28)[0]
+    segments_end = 32 + segment_length
+    hash_offset = (segments_end + 16) & ~15
+    checksum_offset = hash_offset - 1
+    if mutation == "trailing":
+        contents.extend(b"garbage")
+    elif mutation == "truncated":
+        contents.pop()
+    elif mutation == "padding":
+        contents[segments_end] = 1
+    elif mutation == "checksum":
+        contents[checksum_offset] ^= 1
+    elif mutation == "hash":
+        contents[hash_offset] ^= 1
+    image = tmp_path / f"{mutation}.bin"
+    image.write_bytes(contents)
+
+    with pytest.raises(ValueError, match="application image"):
+        inspect_esp32s3_application_image(image)
 
 
 def test_manifest_has_exact_deterministic_canonical_bytes():
@@ -382,9 +428,9 @@ def test_release_bundle_binds_firmware_digest_size_and_has_no_private_material(t
     trust = generate_ota_trust(tmp_path / "ota")
     image = tmp_path / "source" / "firmware input.bin"
     image.parent.mkdir()
-    image.write_bytes(_esp32s3_image(b"firmware-payload\x00\xff"))
+    image.write_bytes(_versioned_esp32s3_image("1.2.3", b"firmware-payload\x00\xff"))
 
-    release = build_ota_release(
+    release = _build_ota_release(
         image_path=image,
         output_dir=tmp_path / "release",
         version="1.2.3",
@@ -419,13 +465,35 @@ def test_release_bundle_binds_firmware_digest_size_and_has_no_private_material(t
     assert not any("PRIVATE KEY" in path.read_text(errors="ignore") for path in release.output_dir.iterdir())
 
 
+def test_release_rechecks_image_against_inspected_size_hash_and_version(tmp_path):
+    trust = generate_ota_trust(tmp_path / "ota")
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_versioned_esp32s3_image("1.2.3"))
+    inspected = inspect_esp32s3_application_image(image)
+    image.write_bytes(_versioned_esp32s3_image("1.2.3", b"x" * 19))
+
+    with pytest.raises(ValueError, match="changed after inspection"):
+        _build_ota_release(
+            image_path=image,
+            output_dir=tmp_path / "release",
+            version=inspected.version,
+            current_version="1.2.2",
+            chip="esp32s3",
+            artifact_url=ONE_TIME_URL,
+            signing_private_key=trust.manifest_private_key,
+            expected_signing_public_key=trust.manifest_public_key,
+            expected_size_bytes=inspected.size_bytes,
+            expected_sha256=inspected.sha256,
+        )
+
+
 def test_release_refuses_output_inside_private_trust_directory(tmp_path):
     trust = generate_ota_trust(tmp_path / "ota")
     image = tmp_path / "firmware.bin"
-    image.write_bytes(_esp32s3_image())
+    image.write_bytes(_versioned_esp32s3_image("1.2.3"))
 
     with pytest.raises(ValueError, match="private"):
-        build_ota_release(
+        _build_ota_release(
             image_path=image,
             output_dir=trust.private_dir / "release",
             version="1.2.3",
@@ -444,7 +512,7 @@ def test_release_rejects_private_key_and_symlink_as_firmware(tmp_path):
 
     for image in (trust.manifest_private_key, image_symlink):
         with pytest.raises(ValueError, match="firmware image"):
-            build_ota_release(
+            _build_ota_release(
                 image_path=image,
                 output_dir=tmp_path / f"release-{image.name}",
                 version="1.2.3",
@@ -458,14 +526,14 @@ def test_release_rejects_private_key_and_symlink_as_firmware(tmp_path):
 
 def test_release_rejects_non_esp32s3_application_image(tmp_path):
     trust = generate_ota_trust(tmp_path / "ota")
-    wrong_chip = bytearray(_esp32s3_image())
+    wrong_chip = bytearray(_versioned_esp32s3_image("1.2.3"))
     wrong_chip[12:14] = struct.pack("<H", 2)
 
     for number, contents in enumerate((b"not firmware", bytes(wrong_chip), b"\xe9" * 32)):
         image = tmp_path / f"invalid-{number}.bin"
         image.write_bytes(contents)
         with pytest.raises(ValueError, match="ESP32-S3 application image"):
-            build_ota_release(
+            _build_ota_release(
                 image_path=image,
                 output_dir=tmp_path / f"release-{number}",
                 version="1.2.3",
@@ -480,7 +548,7 @@ def test_release_rejects_non_esp32s3_application_image(tmp_path):
 def test_atomic_writes_handle_short_os_writes(tmp_path, monkeypatch):
     trust = generate_ota_trust(tmp_path / "ota")
     image = tmp_path / "firmware.bin"
-    image.write_bytes(_esp32s3_image(b"short-write" * 100))
+    image.write_bytes(_versioned_esp32s3_image("1.2.3", b"short-write" * 100))
     real_write = os.write
 
     def short_write(descriptor, contents):
@@ -488,7 +556,7 @@ def test_atomic_writes_handle_short_os_writes(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "write", short_write)
 
-    release = build_ota_release(
+    release = _build_ota_release(
         image_path=image,
         output_dir=tmp_path / "release",
         version="1.2.3",
@@ -512,11 +580,13 @@ def test_interleaved_builds_publish_immutable_complete_generations(tmp_path):
     images = []
     for number in range(2):
         image = tmp_path / f"firmware-{number}.bin"
-        image.write_bytes(_esp32s3_image(bytes([number]) * 4096))
+        image.write_bytes(
+            _versioned_esp32s3_image(f"1.2.{number + 3}", bytes([number]) * 4096)
+        )
         images.append(image)
 
     def build(number):
-        return build_ota_release(
+        return _build_ota_release(
             image_path=images[number],
             output_dir=tmp_path / "release",
             version=f"1.2.{number + 3}",
@@ -550,7 +620,7 @@ def test_interleaved_builds_publish_immutable_complete_generations(tmp_path):
 def test_release_rejects_rsa_signing_key(tmp_path):
     trust = generate_ota_trust(tmp_path / "ota")
     image = tmp_path / "firmware.bin"
-    image.write_bytes(_esp32s3_image())
+    image.write_bytes(_versioned_esp32s3_image("1.2.3"))
     rsa_key = tmp_path / "rsa-key.pem"
     subprocess.run(
         ["openssl", "genrsa", "-out", str(rsa_key), "2048"],
@@ -560,7 +630,7 @@ def test_release_rejects_rsa_signing_key(tmp_path):
     rsa_key.chmod(0o600)
 
     with pytest.raises(ValueError, match="P-256"):
-        build_ota_release(
+        _build_ota_release(
             image_path=image,
             output_dir=tmp_path / "release",
             version="1.2.3",
@@ -576,10 +646,10 @@ def test_release_rejects_p256_key_not_bound_to_expected_public_key(tmp_path):
     trust = generate_ota_trust(tmp_path / "ota")
     other = generate_ota_trust(tmp_path / "other")
     image = tmp_path / "firmware.bin"
-    image.write_bytes(_esp32s3_image())
+    image.write_bytes(_versioned_esp32s3_image("1.2.3"))
 
     with pytest.raises(ValueError, match="expected firmware public key"):
-        build_ota_release(
+        _build_ota_release(
             image_path=image,
             output_dir=tmp_path / "release",
             version="1.2.3",
@@ -594,12 +664,12 @@ def test_release_rejects_p256_key_not_bound_to_expected_public_key(tmp_path):
 def test_release_rejects_signing_key_symlink_or_permissive_mode(tmp_path):
     trust = generate_ota_trust(tmp_path / "ota")
     image = tmp_path / "firmware.bin"
-    image.write_bytes(_esp32s3_image())
+    image.write_bytes(_versioned_esp32s3_image("1.2.3"))
     signing_symlink = tmp_path / "signing-key.pem"
     signing_symlink.symlink_to(trust.manifest_private_key)
 
     with pytest.raises(ValueError, match="regular non-symlink"):
-        build_ota_release(
+        _build_ota_release(
             image_path=image,
             output_dir=tmp_path / "release-symlink",
             version="1.2.3",
@@ -612,7 +682,7 @@ def test_release_rejects_signing_key_symlink_or_permissive_mode(tmp_path):
 
     trust.manifest_private_key.chmod(0o640)
     with pytest.raises(ValueError, match="0600"):
-        build_ota_release(
+        _build_ota_release(
             image_path=image,
             output_dir=tmp_path / "release-mode",
             version="1.2.3",
@@ -627,9 +697,9 @@ def test_release_rejects_signing_key_symlink_or_permissive_mode(tmp_path):
 def test_release_accepts_protected_managed_p256_pair(tmp_path):
     trust = generate_ota_trust(tmp_path / "ota")
     image = tmp_path / "firmware.bin"
-    image.write_bytes(_esp32s3_image())
+    image.write_bytes(_versioned_esp32s3_image("1.2.3"))
 
-    release = build_ota_release(
+    release = _build_ota_release(
         image_path=image,
         output_dir=tmp_path / "release",
         version="1.2.3",

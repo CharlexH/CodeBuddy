@@ -449,6 +449,8 @@ def test_tls_server_is_one_shot_and_removes_leaf_material(tmp_path):
         session_dir = server.session_dir
         assert session_dir is not None
         assert not session_dir.exists()
+        assert not server.release.output_dir.exists()
+        assert not server.release.generation_dir.exists()
         with pytest.raises((ConnectionRefusedError, OSError)):
             await asyncio.open_connection(offer.host, offer.port)
         with pytest.raises(RuntimeError, match="already been started"):

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Deque, Optional
 
+from . import runtime
 from .ble_transport import BleBuddyTransport
 from .bridge import ManagedSessionBridge
 from .catalog import SessionCatalog, SessionPrompt, SessionRecord
@@ -29,7 +30,9 @@ from .ota_protocol import valid_ota_nonce
 from .ota_release import (
     OtaImageInfo,
     build_ota_release,
+    cleanup_ota_image_snapshot,
     inspect_esp32s3_application_image,
+    snapshot_ota_image,
 )
 from .ota_server import OtaHttpsServer
 from .ota_trust import require_existing_ota_trust
@@ -223,15 +226,17 @@ class BuddyAgent:
         self._launch_sequence = 0
         self._ota_session_lock: Optional[asyncio.Lock] = None
         self._ota_session_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._ota_claim_loop: Optional[asyncio.AbstractEventLoop] = None
         self._ota_session_active = False
         self._ota_image_inspector = ota_image_inspector
+        self._ota_snapshot_root = runtime.ota_snapshots_dir()
         self._ota_nonce_factory = ota_nonce_factory
         self._ota_state: Optional[OtaAgentSession] = None
         self._ota_task: Optional[asyncio.Task[None]] = None
         self._ota_coordinator = OtaCoordinator(
             get_ble=lambda: self._ble,
             is_ble_connected=lambda: self._ble_connected,
-            ota_session=self.ota_session,
+            ota_session=self._claimed_ota_session,
             trust_loader=ota_trust_loader,
             server_factory=ota_server_factory,
             release_builder=ota_release_builder,
@@ -258,10 +263,42 @@ class BuddyAgent:
     async def ota_session(self):
         async with self._ota_lock_for_running_loop():
             self._ota_session_active = True
+            self._ota_claim_loop = asyncio.get_running_loop()
             try:
                 yield
             finally:
                 self._ota_session_active = False
+                self._ota_claim_loop = None
+
+    async def _claim_ota_session(self) -> None:
+        if self._ota_session_active:
+            raise RuntimeError("a firmware update is already active")
+        lock = self._ota_lock_for_running_loop()
+        if lock.locked():
+            raise RuntimeError("a firmware update is already active")
+        await lock.acquire()
+        self._ota_session_active = True
+        self._ota_claim_loop = asyncio.get_running_loop()
+
+    def _release_claimed_ota_session(self) -> None:
+        loop = asyncio.get_running_loop()
+        if not self._ota_session_active or self._ota_claim_loop is not loop:
+            raise RuntimeError("OTA session release attempted from another event loop")
+        lock = self._ota_session_lock
+        if lock is None or not lock.locked():
+            raise RuntimeError("OTA session lock is not held")
+        self._ota_session_active = False
+        self._ota_claim_loop = None
+        lock.release()
+
+    @contextlib.asynccontextmanager
+    async def _claimed_ota_session(self):
+        if (
+            not self._ota_session_active
+            or self._ota_claim_loop is not asyncio.get_running_loop()
+        ):
+            raise RuntimeError("OTA session was not atomically claimed")
+        yield
 
     async def run(self) -> None:
         if self._stopped is not None:
@@ -419,21 +456,35 @@ class BuddyAgent:
         raw_path = payload.get("firmware")
         if not isinstance(raw_path, str) or not raw_path or len(raw_path) > 4096 or "\x00" in raw_path:
             raise ValueError("firmware application image path is invalid")
-        inspected = self._ota_image_inspector(Path(raw_path).expanduser())
-        nonce = self._ota_nonce_factory()
-        # build_ota_offer performs the same nonce/generation bounds used by the
-        # device parser before any network endpoint is created.
-        if not valid_ota_nonce(nonce):
-            raise RuntimeError("OTA nonce generator returned an invalid value")
-        session = OtaAgentSession(
-            nonce=nonce,
-            generation=1,
-            image_path=inspected.path,
-            version=inspected.version,
-        )
-        self._ota_state = session
-        self._ota_task = asyncio.create_task(self._run_ota_update(session, inspected))
-        return {"ok": True, "ota": session.public_payload()}
+        await self._claim_ota_session()
+        snapshot: Optional[Path] = None
+        try:
+            snapshot = snapshot_ota_image(
+                Path(raw_path).expanduser(), self._ota_snapshot_root
+            )
+            inspected = self._ota_image_inspector(snapshot)
+            nonce = self._ota_nonce_factory()
+            # build_ota_offer performs the same nonce/generation bounds used by the
+            # device parser before any network endpoint is created.
+            if not valid_ota_nonce(nonce):
+                raise RuntimeError("OTA nonce generator returned an invalid value")
+            session = OtaAgentSession(
+                nonce=nonce,
+                generation=1,
+                image_path=inspected.path,
+                version=inspected.version,
+            )
+            self._ota_state = session
+            self._ota_task = asyncio.create_task(
+                self._run_ota_update(session, inspected)
+            )
+            return {"ok": True, "ota": session.public_payload()}
+        except BaseException:
+            if snapshot is not None:
+                with contextlib.suppress(Exception):
+                    cleanup_ota_image_snapshot(snapshot)
+            self._release_claimed_ota_session()
+            raise
 
     def _ota_command_status(self, payload: dict[str, object]) -> dict[str, object]:
         session = self._ota_state
@@ -455,7 +506,12 @@ class BuddyAgent:
     async def _run_ota_update(
         self, session: OtaAgentSession, inspected: OtaImageInfo
     ) -> None:
-        await self._ota_coordinator.run(session, inspected)
+        try:
+            await self._ota_coordinator.run(session, inspected)
+        finally:
+            with contextlib.suppress(Exception):
+                cleanup_ota_image_snapshot(inspected.path)
+            self._release_claimed_ota_session()
 
     async def _readonly_loop(self) -> None:
         while not self._stop_requested:

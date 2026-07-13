@@ -152,6 +152,8 @@ class OtaCoordinator:
                         artifact_url=firmware_url,
                         signing_private_key=trust.manifest_private_key,
                         expected_signing_public_key=trust.manifest_public_key,
+                        expected_size_bytes=inspected.size_bytes,
+                        expected_sha256=inspected.sha256,
                     )
 
                 server = self._server_factory(

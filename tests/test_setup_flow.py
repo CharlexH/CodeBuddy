@@ -1,8 +1,28 @@
 import os
+import hashlib
+import struct
 from pathlib import Path
+
+import pytest
 
 from codex_buddy import setup_flow
 from codex_buddy.state_store import BridgeStateStore, PersistedState
+
+
+def _application_image(version: str = "0.1.4") -> bytes:
+    descriptor = bytearray(256)
+    descriptor[:4] = struct.pack("<I", 0xABCD5432)
+    descriptor[16 : 16 + len(version)] = version.encode("ascii")
+    header = bytearray(24)
+    header[0], header[1], header[2], header[3], header[23] = 0xE9, 1, 2, 0x3F, 1
+    header[12:14] = struct.pack("<H", 9)
+    image = bytes(header) + struct.pack("<II", 0x3C0E0020, len(descriptor)) + descriptor
+    checksum = 0xEF
+    for value in descriptor:
+        checksum ^= value
+    checksum_offset = (len(image) + 16) & ~15
+    image += b"\0" * (checksum_offset - 1 - len(image)) + bytes([checksum])
+    return image + hashlib.sha256(image).digest()
 
 
 def test_migrate_legacy_state_moves_old_state_file(tmp_path):
@@ -80,14 +100,41 @@ def test_is_setup_complete_rejects_missing_required_state():
 def test_install_firmware_artifact_copies_release_app_image_without_following_symlink(tmp_path):
     source = tmp_path / "dist" / "code-buddy-sticks3-app.bin"
     source.parent.mkdir()
-    source.write_bytes(b"app-image")
+    source.write_bytes(_application_image())
     destination = tmp_path / "runtime" / "firmware.bin"
 
     assert setup_flow.ensure_firmware_artifact_installed(source, destination) == destination
-    assert destination.read_bytes() == b"app-image"
+    assert destination.read_bytes() == source.read_bytes()
     assert destination.stat().st_mode & 0o022 == 0
 
+    original = destination.read_bytes()
     source.unlink()
     source.symlink_to(tmp_path / "secret")
-    assert setup_flow.ensure_firmware_artifact_installed(source, destination) == destination
-    assert destination.read_bytes() == b"app-image"
+    with pytest.raises(ValueError, match="non-symlink"):
+        setup_flow.ensure_firmware_artifact_installed(source, destination)
+    assert destination.read_bytes() == original
+
+
+def test_install_firmware_artifact_fails_closed_when_source_is_missing(tmp_path):
+    destination = tmp_path / "runtime" / "firmware.bin"
+    destination.parent.mkdir()
+    destination.write_bytes(b"previous-known-good")
+
+    with pytest.raises(FileNotFoundError, match="firmware"):
+        setup_flow.ensure_firmware_artifact_installed(
+            tmp_path / "missing-app.bin", destination
+        )
+
+    assert destination.read_bytes() == b"previous-known-good"
+
+
+def test_install_firmware_artifact_reads_the_bundled_package_resource(tmp_path):
+    destination = tmp_path / "runtime" / "firmware.bin"
+
+    installed = setup_flow.ensure_firmware_artifact_installed(
+        destination=destination
+    )
+
+    assert installed == destination
+    assert destination.read_bytes() == setup_flow.bundled_firmware_resource().read_bytes()
+    assert destination.stat().st_mode & 0o022 == 0

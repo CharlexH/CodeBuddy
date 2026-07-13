@@ -161,9 +161,10 @@ def test_agent_ota_commands_are_exclusive_cancel_and_release_snapshot_suspension
     image.write_bytes(b"firmware")
 
     def inspect(path):
-        assert path == image
+        assert path != image
+        assert path.read_bytes() == b"firmware"
         return OtaImageInfo(
-            path=image,
+            path=path,
             version="0.1.5",
             size_bytes=8,
             sha256=hashlib.sha256(b"firmware").hexdigest(),
@@ -178,20 +179,20 @@ def test_agent_ota_commands_are_exclusive_cancel_and_release_snapshot_suspension
             ota_image_inspector=inspect,
             ota_nonce_factory=lambda: "n" * 24,
         )
+        agent._ota_snapshot_root = tmp_path / "snapshots"
         agent._ble = _CapturingBle()
         agent._ble_connected = True
 
         async def fake_run(session, inspected):
-            async with agent.ota_session():
-                entered.set()
-                session.phase = "await-confirm"
-                await session.cancel_event.wait()
-                cancelled.set()
-                session.phase = "cancelled"
-                session.terminal = True
-                session.success = False
+            entered.set()
+            session.phase = "await-confirm"
+            await session.cancel_event.wait()
+            cancelled.set()
+            session.phase = "cancelled"
+            session.terminal = True
+            session.success = False
 
-        agent._run_ota_update = fake_run
+        agent._ota_coordinator.run = fake_run
         first = await agent._handle_command(
             {"cmd": "ota_begin", "firmware": str(image)}
         )
@@ -211,6 +212,118 @@ def test_agent_ota_commands_are_exclusive_cancel_and_release_snapshot_suspension
 
     first = asyncio.run(exercise())
     assert first["ota"]["nonce"] == "n" * 24
+
+
+def test_ota_begin_claims_exclusive_state_before_immediate_launch(tmp_path):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(b"original-firmware")
+
+    async def exercise():
+        release = asyncio.Event()
+        agent = BuddyAgent(
+            tmp_path / "state.json",
+            watcher=None,
+            ota_image_inspector=lambda path: OtaImageInfo(
+                path=path,
+                version="0.1.5",
+                size_bytes=path.stat().st_size,
+                sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            ),
+            ota_nonce_factory=lambda: "n" * 24,
+        )
+        agent._ota_snapshot_root = tmp_path / "snapshots"
+        agent._ble = _CapturingBle()
+        agent._ble_connected = True
+
+        async def fake_coordinate(session, inspected):
+            await release.wait()
+            session.terminal = True
+
+        agent._ota_coordinator.run = fake_coordinate
+        await agent._handle_command({"cmd": "ota_begin", "firmware": str(image)})
+        assert agent.ota_session_active is True
+        with pytest.raises(Exception, match="firmware update is active"):
+            await agent._handle_command({"cmd": "launch", "workdir": str(tmp_path)})
+        release.set()
+        await agent._ota_task
+        assert agent.ota_session_active is False
+
+    asyncio.run(exercise())
+
+
+def test_ota_begin_uses_private_snapshot_when_original_path_is_replaced(tmp_path):
+    image = tmp_path / "firmware.bin"
+    original = b"original-firmware"
+    image.write_bytes(original)
+
+    async def exercise():
+        continue_run = asyncio.Event()
+        observed = {}
+        agent = BuddyAgent(
+            tmp_path / "state.json",
+            watcher=None,
+            ota_image_inspector=lambda path: OtaImageInfo(
+                path=path,
+                version="0.1.5",
+                size_bytes=path.stat().st_size,
+                sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            ),
+            ota_nonce_factory=lambda: "n" * 24,
+        )
+        agent._ota_snapshot_root = tmp_path / "snapshots"
+        agent._ble = _CapturingBle()
+        agent._ble_connected = True
+
+        async def fake_coordinate(session, inspected):
+            await continue_run.wait()
+            observed["path"] = inspected.path
+            observed["contents"] = inspected.path.read_bytes()
+            session.terminal = True
+
+        agent._ota_coordinator.run = fake_coordinate
+        await agent._handle_command({"cmd": "ota_begin", "firmware": str(image)})
+        image.write_bytes(b"replacement-attacker-content")
+        continue_run.set()
+        await agent._ota_task
+        return observed
+
+    observed = asyncio.run(exercise())
+    assert observed["path"] != image
+    assert observed["contents"] == original
+    assert not observed["path"].exists()
+
+
+def test_ota_begin_inspection_failure_cleans_snapshot_and_releases_claim(tmp_path):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(b"invalid-firmware")
+    snapshots = tmp_path / "snapshots"
+    agent = BuddyAgent(
+        tmp_path / "state.json",
+        watcher=None,
+        ota_image_inspector=lambda _: (_ for _ in ()).throw(ValueError("invalid image")),
+    )
+    agent._ota_snapshot_root = snapshots
+    agent._ble = _CapturingBle()
+    agent._ble_connected = True
+
+    with pytest.raises(ValueError, match="invalid image"):
+        asyncio.run(
+            agent._handle_command({"cmd": "ota_begin", "firmware": str(image)})
+        )
+
+    assert agent.ota_session_active is False
+    assert snapshots.is_dir()
+    assert list(snapshots.iterdir()) == []
+
+
+def test_ota_claim_from_closed_event_loop_fails_closed_on_another_loop(tmp_path):
+    agent = BuddyAgent(tmp_path / "state.json", watcher=None)
+    asyncio.run(agent._claim_ota_session())
+
+    with pytest.raises(RuntimeError, match="already active|another event loop"):
+        asyncio.run(agent._claim_ota_session())
+
+    assert agent.ota_session_active is True
 
 
 def test_agent_rejects_ota_when_approval_is_pending(tmp_path):

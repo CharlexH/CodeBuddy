@@ -200,10 +200,15 @@ async def _setup(args: argparse.Namespace, *, repair: bool = False) -> int:
         print(f"Native BLE helper is unavailable: {exc}", file=sys.stderr)
         print("Run `code-buddy repair` after the helper bundle is available.", file=sys.stderr)
         return 1
-    setup_flow.ensure_firmware_artifact_installed(
-        Path(__file__).resolve().parents[2]
-        / "dist" / "firmware" / "code-buddy-sticks3-app.bin"
-    )
+    try:
+        setup_flow.ensure_firmware_artifact_installed()
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        print(f"Bundled firmware is unavailable: {exc}", file=sys.stderr)
+        print(
+            "Reinstall Code Buddy with its firmware package, then run `code-buddy repair`.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         real_codex_path = setup_flow.resolve_real_codex_path(
@@ -253,12 +258,14 @@ def _default_firmware_image() -> Path:
     installed = runtime.default_firmware_path()
     if installed.is_file() and not installed.is_symlink():
         return installed
-    return Path(__file__).resolve().parents[2] / "dist" / "firmware" / "code-buddy-sticks3-app.bin"
+    raise FileNotFoundError(
+        "installed firmware application image is missing; run `code-buddy repair`"
+    )
 
 
 async def _firmware_update(args: argparse.Namespace) -> int:
-    image = Path(args.firmware).expanduser() if args.firmware else _default_firmware_image()
     try:
+        image = Path(args.firmware).expanduser() if args.firmware else _default_firmware_image()
         await _ensure_agent_running(args.state_path)
         response = await _agent_request(
             args.state_path,

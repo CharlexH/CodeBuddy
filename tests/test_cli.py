@@ -262,6 +262,9 @@ def test_setup_records_current_path_for_codex_subprocesses(tmp_path, monkeypatch
     monkeypatch.setattr(cli.setup_flow, "migrate_legacy_state", lambda: False)
     monkeypatch.setattr(cli.setup_flow, "ensure_helper_app_installed", lambda: helper_path)
     monkeypatch.setattr(
+        cli.setup_flow, "ensure_firmware_artifact_installed", lambda: tmp_path / "firmware.bin"
+    )
+    monkeypatch.setattr(
         cli.setup_flow,
         "resolve_real_codex_path",
         lambda shim_dir, *, saved_path="": cli.Path("/usr/local/bin/codex"),
@@ -281,6 +284,36 @@ def test_setup_records_current_path_for_codex_subprocesses(tmp_path, monkeypatch
     assert exit_code == 0
     assert saved.real_codex_path == "/usr/local/bin/codex"
     assert saved.codex_launch_path == "/custom/node/bin:/usr/bin:/bin"
+
+
+def test_setup_fails_before_pairing_when_bundled_firmware_is_missing(
+    tmp_path, monkeypatch, capsys
+):
+    helper_path = tmp_path / "helper" / "CodeBuddyBLEHelper.app"
+    helper_path.mkdir(parents=True)
+    pairing_calls = []
+
+    async def unexpected_pair(*args):
+        pairing_calls.append(args)
+        raise AssertionError("pairing must not start without bundled firmware")
+
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    monkeypatch.setattr(cli.setup_flow, "migrate_legacy_state", lambda: False)
+    monkeypatch.setattr(cli.setup_flow, "ensure_helper_app_installed", lambda: helper_path)
+    monkeypatch.setattr(
+        cli.setup_flow,
+        "ensure_firmware_artifact_installed",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("package firmware missing")),
+    )
+    monkeypatch.setattr(cli, "_resolve_selected_device", unexpected_pair)
+
+    result = asyncio.run(
+        cli._setup(argparse.Namespace(state_path=tmp_path / "state.json"), repair=True)
+    )
+
+    assert result == 1
+    assert pairing_calls == []
+    assert "Reinstall Code Buddy" in capsys.readouterr().err
 
 
 def test_status_prefers_live_agent_status(monkeypatch, capsys):
@@ -376,6 +409,8 @@ def test_firmware_update_reports_sanitized_agent_progress(monkeypatch, tmp_path,
 
 def test_firmware_update_sends_cancel_on_keyboard_interrupt(monkeypatch, tmp_path):
     requests: list[dict] = []
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(b"explicit-test-image")
 
     async def fake_ensure(_):
         return None
@@ -393,12 +428,35 @@ def test_firmware_update_sends_cancel_on_keyboard_interrupt(monkeypatch, tmp_pat
 
     result = asyncio.run(
         cli._firmware_update(
-            argparse.Namespace(state_path=tmp_path / "state.json", firmware=None)
+            argparse.Namespace(state_path=tmp_path / "state.json", firmware=image)
         )
     )
 
     assert result == 130
     assert requests[-1] == {"cmd": "ota_cancel", "nonce": "n"}
+
+
+def test_firmware_update_missing_installed_default_fails_before_agent_request(
+    monkeypatch, tmp_path, capsys
+):
+    requests = []
+
+    async def unexpected_request(*args):
+        requests.append(args)
+        raise AssertionError("agent must not be contacted without installed firmware")
+
+    monkeypatch.setattr(cli.runtime, "default_firmware_path", lambda: tmp_path / "missing.bin")
+    monkeypatch.setattr(cli, "_agent_request", unexpected_request)
+
+    result = asyncio.run(
+        cli._firmware_update(
+            argparse.Namespace(state_path=tmp_path / "state.json", firmware=None)
+        )
+    )
+
+    assert result == 1
+    assert requests == []
+    assert "code-buddy repair" in capsys.readouterr().err
 
 
 def test_version_flag_reports_project_version(capsys):

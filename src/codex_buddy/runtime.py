@@ -59,6 +59,10 @@ def ota_sessions_dir() -> Path:
     return ota_private_dir() / "sessions"
 
 
+def ota_snapshots_dir() -> Path:
+    return ota_private_dir() / "snapshots"
+
+
 def firmware_dir() -> Path:
     return runtime_root() / "firmware"
 

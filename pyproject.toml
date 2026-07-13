@@ -25,7 +25,11 @@ code-buddy = "codex_buddy.cli:main"
 package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
-codex_buddy = ["native_ble_helper/*.plist", "native_ble_helper/*.swift"]
+codex_buddy = [
+  "native_ble_helper/*.plist",
+  "native_ble_helper/*.swift",
+  "firmware/*.bin",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

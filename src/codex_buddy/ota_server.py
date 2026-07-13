@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Mapping, Optional
 
-from .ota_release import OtaRelease
+from .ota_release import OtaRelease, cleanup_ota_release
 from .ota_trust import OtaTrustPaths
 from .runtime import ota_sessions_dir
 
@@ -498,8 +498,11 @@ class OtaHttpsServer:
             )
         except BaseException:
             reservation.close()
+            if release is not None:
+                cleanup_ota_release(release)
             raise
         self.release = release
+        self._release_cleaned = False
         self._reservation = reservation
         self._trust = trust
         self._session_root = session_root
@@ -623,6 +626,9 @@ class OtaHttpsServer:
             self._material = None
             if material is not None:
                 material.cleanup()
+            if not self._release_cleaned:
+                cleanup_ota_release(self.release)
+                self._release_cleaned = True
 
     async def __aenter__(self) -> "OtaHttpsServer":
         await self.start()

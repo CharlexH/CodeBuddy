@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FIRMWARE_DIR="$ROOT/firmware"
 BUILD_DIR="$FIRMWARE_DIR/.pio/build/m5stack-sticks3"
 DIST_DIR="$ROOT/dist/firmware"
+PACKAGE_FIRMWARE_DIR="$ROOT/src/codex_buddy/firmware"
 
 VERSION="${1:-$(
   python3 - <<'PY' "$ROOT/pyproject.toml"
@@ -92,6 +93,7 @@ fi
 OUTPUT="$DIST_DIR/code-buddy-sticks3-v${VERSION}-full.bin"
 APP_OUTPUT="$DIST_DIR/code-buddy-sticks3-v${VERSION}-app.bin"
 DEFAULT_APP_OUTPUT="$DIST_DIR/code-buddy-sticks3-app.bin"
+PACKAGE_APP_OUTPUT="$PACKAGE_FIRMWARE_DIR/code-buddy-sticks3-app.bin"
 
 for artifact in \
   "$BUILD_DIR/bootloader.bin" \
@@ -124,6 +126,14 @@ PY
   0x8000 "$BUILD_DIR/partitions.bin" \
   0xe000 "$BOOT_APP0" \
   0x10000 "$BUILD_DIR/firmware.bin"
+
+mkdir -p "$PACKAGE_FIRMWARE_DIR"
+PACKAGE_TEMP="$PACKAGE_APP_OUTPUT.tmp.$$"
+trap 'rm -f "$PACKAGE_TEMP"' EXIT
+cp "$APP_OUTPUT" "$PACKAGE_TEMP"
+chmod 0644 "$PACKAGE_TEMP"
+mv -f "$PACKAGE_TEMP" "$PACKAGE_APP_OUTPUT"
+trap - EXIT
 
 echo "$OUTPUT"
 echo "$APP_OUTPUT"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -383,21 +384,52 @@ def _validate_esp32s3_application_image(contents: bytes) -> None:
         or speed not in (0, 1, 2, 0x0F)
         or flash_size > 7
         or chip_id != 9
-        or hash_appended not in (0, 1)
+        or hash_appended != 1
+        or len(contents) > _OTA_SLOT_CAPACITY_BYTES
     ):
         raise ValueError("firmware must be an ESP32-S3 application image")
 
     offset = 24
-    for _ in range(segment_count):
+    checksum = 0xEF
+    first_load_address = None
+    first_data_length = None
+    for segment_index in range(segment_count):
         if offset + 8 > len(contents):
             raise ValueError("firmware must be an ESP32-S3 application image")
-        _, data_length = struct.unpack_from("<II", contents, offset)
+        load_address, data_length = struct.unpack_from("<II", contents, offset)
         offset += 8
-        if data_length == 0 or data_length > len(contents) - offset:
+        if (
+            data_length == 0
+            or data_length % 4 != 0
+            or data_length > 16 * 1024 * 1024
+            or data_length > len(contents) - offset
+        ):
             raise ValueError("firmware must be an ESP32-S3 application image")
+        if segment_index == 0:
+            first_load_address = load_address
+            first_data_length = data_length
+        for value in contents[offset : offset + data_length]:
+            checksum ^= value
         offset += data_length
-    minimum_trailer = 1 + (32 if hash_appended else 0)
-    if len(contents) - offset < minimum_trailer:
+    if (
+        first_load_address is None
+        or not 0x3C000000 <= first_load_address < 0x3E000000
+        or first_data_length is None
+        or first_data_length < 256
+    ):
+        raise ValueError("firmware application descriptor is missing or invalid")
+
+    hash_offset = (offset + 16) & ~15
+    checksum_offset = hash_offset - 1
+    expected_length = hash_offset + 32
+    if len(contents) != expected_length:
+        raise ValueError("firmware must be an ESP32-S3 application image")
+    if any(contents[offset:checksum_offset]):
+        raise ValueError("firmware must be an ESP32-S3 application image")
+    if contents[checksum_offset] != checksum:
+        raise ValueError("firmware must be an ESP32-S3 application image")
+    expected_digest = hashlib.sha256(contents[:hash_offset]).digest()
+    if not hmac.compare_digest(contents[hash_offset:], expected_digest):
         raise ValueError("firmware must be an ESP32-S3 application image")
 
 
@@ -439,6 +471,12 @@ def inspect_esp32s3_application_image(image_path: Path) -> OtaImageInfo:
     if mode & 0o022:
         raise ValueError("firmware image permissions must not be group/world writable")
     contents = image_path.read_bytes()
+    return _inspect_esp32s3_application_contents(contents, image_path=image_path)
+
+
+def _inspect_esp32s3_application_contents(
+    contents: bytes, *, image_path: Path
+) -> OtaImageInfo:
     _validate_esp32s3_application_image(contents)
     version = _embedded_application_version(contents)
     return OtaImageInfo(
@@ -447,6 +485,77 @@ def inspect_esp32s3_application_image(image_path: Path) -> OtaImageInfo:
         size_bytes=len(contents),
         sha256=hashlib.sha256(contents).hexdigest(),
     )
+
+
+def snapshot_ota_image(source: Path, snapshot_root: Path) -> Path:
+    source = Path(source).expanduser()
+    snapshot_root = Path(snapshot_root)
+    _require_real_directory(snapshot_root, create=True)
+    snapshot_dir = Path(tempfile.mkdtemp(prefix=".snapshot-", dir=snapshot_root))
+    snapshot_dir.chmod(0o700)
+    snapshot = snapshot_dir / "firmware.bin"
+    source_descriptor = -1
+    destination_descriptor = -1
+    try:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            source_descriptor = os.open(source, flags)
+        except OSError as exc:
+            raise ValueError(
+                f"firmware image must be a regular non-symlink file: {source}"
+            ) from exc
+        metadata = os.fstat(source_descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(
+                f"firmware image must be a regular non-symlink file: {source}"
+            )
+        if stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise ValueError("firmware image permissions must not be group/world writable")
+        if metadata.st_size <= 0 or metadata.st_size > _OTA_SLOT_CAPACITY_BYTES:
+            raise ValueError("firmware image size exceeds the firmware OTA slot")
+
+        destination_descriptor = os.open(
+            snapshot,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o400,
+        )
+        remaining = metadata.st_size
+        while remaining:
+            chunk = os.read(source_descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise ValueError("firmware image changed while creating OTA snapshot")
+            _write_all(destination_descriptor, chunk)
+            remaining -= len(chunk)
+        if os.read(source_descriptor, 1):
+            raise ValueError("firmware image changed while creating OTA snapshot")
+        os.fsync(destination_descriptor)
+        os.close(destination_descriptor)
+        destination_descriptor = -1
+        snapshot.chmod(0o400)
+        _fsync_directory(snapshot_dir)
+        return snapshot
+    except BaseException:
+        shutil.rmtree(snapshot_dir, ignore_errors=True)
+        raise
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+
+
+def cleanup_ota_image_snapshot(image_path: Path) -> None:
+    image_path = Path(image_path)
+    parent = image_path.parent
+    if image_path.name != "firmware.bin" or not parent.name.startswith(".snapshot-"):
+        raise ValueError("refusing to clean an unrecognized OTA snapshot path")
+    if parent.is_symlink():
+        raise ValueError("OTA snapshot directory must not be a symlink")
+    shutil.rmtree(parent, ignore_errors=False)
 
 
 def _validate_signing_pair(
@@ -557,6 +666,27 @@ def _publish_release_generation(
             shutil.rmtree(staging)
 
 
+def cleanup_ota_release(release: OtaRelease) -> None:
+    output_dir = Path(release.output_dir)
+    generation_dir = Path(release.generation_dir)
+    generation_root = output_dir.parent / f".{output_dir.name}.generations"
+    try:
+        generation_dir.resolve().relative_to(generation_root.resolve())
+    except ValueError as exc:
+        raise ValueError("refusing to clean an unrecognized OTA release generation") from exc
+    if output_dir.is_symlink():
+        try:
+            points_to_generation = output_dir.resolve() == generation_dir.resolve()
+        except OSError:
+            points_to_generation = False
+        if points_to_generation:
+            output_dir.unlink()
+    if generation_dir.exists():
+        shutil.rmtree(generation_dir)
+    if generation_root.is_dir() and not any(generation_root.iterdir()):
+        generation_root.rmdir()
+
+
 def build_ota_release(
     *,
     image_path: Path,
@@ -567,6 +697,8 @@ def build_ota_release(
     artifact_url: str,
     signing_private_key: Path,
     expected_signing_public_key: Path,
+    expected_size_bytes: int,
+    expected_sha256: str,
 ) -> OtaRelease:
     image_path = Path(image_path)
     output_dir = Path(output_dir)
@@ -593,12 +725,20 @@ def build_ota_release(
         raise ValueError("release output must not be inside the private trust directory")
 
     image_bytes = image_path.read_bytes()
-    _validate_esp32s3_application_image(image_bytes)
+    inspected = _inspect_esp32s3_application_contents(
+        image_bytes, image_path=image_path
+    )
+    if (
+        inspected.version != version
+        or inspected.size_bytes != expected_size_bytes
+        or inspected.sha256 != expected_sha256
+    ):
+        raise ValueError("firmware image changed after inspection")
     manifest_bytes = canonical_manifest_bytes(
         version=version,
         chip=chip,
-        size_bytes=len(image_bytes),
-        sha256=hashlib.sha256(image_bytes).hexdigest(),
+        size_bytes=expected_size_bytes,
+        sha256=expected_sha256,
         artifact_url=artifact_url,
     )
     signature_bytes = sign_manifest(manifest_bytes, signing_private_key)
