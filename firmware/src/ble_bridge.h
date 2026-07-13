@@ -15,6 +15,10 @@
 // snapshots) are written via bleWrite() and chunked to the negotiated MTU.
 
 void bleInit(const char* deviceName);
+// True once the NUS service has started and the advertising start request has
+// completed. A client connection is deliberately not required for boot health.
+bool bleReady();
+bool bleStartupFailed();
 bool bleConnected();
 // True once link-level auth has completed for the current session.
 // The current validation path keeps NUS open, so this remains false

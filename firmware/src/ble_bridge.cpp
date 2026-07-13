@@ -29,6 +29,8 @@ static volatile bool      connected = false;
 static volatile bool      secure = false;
 static volatile uint32_t  passkey = 0;
 static volatile uint16_t  mtu = 23;
+static volatile bool      ready = false;
+static volatile bool      startupFailed = false;
 
 static void formatAddr(const uint8_t* addr, char* out, size_t outSize) {
   if (!addr || outSize < 18) {
@@ -44,6 +46,11 @@ static void formatAddr(const uint8_t* addr, char* out, size_t outSize) {
 static void gapLog(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param) {
   char addr[18] = {0};
   switch (event) {
+    case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
+      ready = param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS;
+      startupFailed = !ready;
+      Serial.printf("[ble] advertising %s\n", ready ? "ready" : "FAILED");
+      break;
     case ESP_GAP_BLE_SEC_REQ_EVT:
       formatAddr(param->ble_security.ble_req.bd_addr, addr, sizeof(addr));
       Serial.printf("[ble] gap SEC_REQ from %s\n", addr);
@@ -137,7 +144,10 @@ class SecCallbacks : public BLESecurityCallbacks {
 };
 
 void bleInit(const char* deviceName) {
+  ready = false;
+  startupFailed = false;
   BLEDevice::init(deviceName);
+  BLEDevice::setCustomGapHandler(gapLog);
   // Request the biggest MTU we can get. macOS negotiates to 185 typically.
   BLEDevice::setMTU(517);
 
@@ -170,9 +180,11 @@ void bleInit(const char* deviceName) {
   adv->setMinPreferred(0x06);   // iOS-friendly connection interval
   adv->setMaxPreferred(0x12);
   BLEDevice::startAdvertising();
-  Serial.printf("[ble] advertising as '%s'\n", deviceName);
+  Serial.printf("[ble] advertising requested as '%s'\n", deviceName);
 }
 
+bool bleReady()     { return ready; }
+bool bleStartupFailed() { return startupFailed; }
 bool bleConnected() { return connected; }
 bool bleSecure()    { return secure; }
 uint32_t blePasskey() { return passkey; }

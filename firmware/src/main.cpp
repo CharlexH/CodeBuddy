@@ -10,6 +10,7 @@
 #include "runtime_pet_layout_logic.h"
 #include "settings_menu_logic.h"
 #include "wifi_manager.h"
+#include "ota_boot_health.h"
 #include "ota_update.h"
 #include "clock_time_logic.h"
 #include "data.h"
@@ -1484,6 +1485,11 @@ static void drawRuntimeLandscape(bool inPrompt) {
 }
 
 void setup() {
+  // The rollback supervisor starts before every fallible board/application
+  // initialiser. It remains completely inert unless the bootloader reports
+  // that this exact running image is PENDING_VERIFY.
+  otaBootHealthArmEarly(millis());
+
   auto cfg = M5.config();
   cfg.output_power = true;
   cfg.internal_imu = true;
@@ -1497,7 +1503,21 @@ void setup() {
   M5.Lcd.setRotation(0);
   M5.Imu.Init();
   M5.Beep.begin();
+  uint32_t buttonProbeStart = millis();
+  M5.update();
+  uint32_t buttonAUpdated = M5.BtnA.getUpdateMsec();
+  uint32_t buttonBUpdated = M5.BtnB.getUpdateMsec();
+  bool buttonsReadable = buttonAUpdated == buttonBUpdated &&
+    static_cast<int32_t>(buttonAUpdated - buttonProbeStart) >= 0 &&
+    millis() - buttonAUpdated < 100;
+  if (buttonsReadable) otaBootHealthReady(OTA_BOOT_READY_BUTTONS);
+  else otaBootHealthCriticalFailure(OTA_BOOT_REASON_BUTTONS);
+  otaBootHealthPoll(millis());
+
   startBt();
+  if (bleReady()) otaBootHealthReady(OTA_BOOT_READY_BLE);
+  else if (bleStartupFailed()) otaBootHealthCriticalFailure(OTA_BOOT_REASON_BLE);
+  otaBootHealthPoll(millis());
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);   // off
   applyBrightness();
@@ -1509,8 +1529,20 @@ void setup() {
   buddyInit();
 
   // BLE stays always-on; s.bt is stored as a preference only.
-  spr.createSprite(W, H);
+  void* spriteBuffer = spr.createSprite(W, H);
+  bool displayUsable = M5.getDisplayCount() > 0 && spriteBuffer &&
+    M5.Lcd.width() == W && M5.Lcd.height() == H;
+  if (displayUsable) otaBootHealthReady(OTA_BOOT_READY_DISPLAY);
+  else otaBootHealthCriticalFailure(OTA_BOOT_REASON_DISPLAY);
+  otaBootHealthPoll(millis());
+
   characterInit(nullptr);  // scan /characters/ for whatever is installed
+  // A missing custom character is healthy because the built-in ASCII buddy is
+  // the explicit fallback. The filesystem itself must have mounted/recovered.
+  bool storageUsable = LittleFS.totalBytes() > 0;
+  if (storageUsable) otaBootHealthReady(OTA_BOOT_READY_STORAGE);
+  else otaBootHealthCriticalFailure(OTA_BOOT_REASON_STORAGE);
+  otaBootHealthPoll(millis());
   gifAvailable = characterLoaded();
   // species NVS: 0..N-1 = ASCII species, 0xFF = use GIF (also the default,
   // so a fresh install lands on the GIF). With no GIF installed, 0xFF falls
@@ -1546,10 +1578,19 @@ void setup() {
   }
 
   Serial.printf("buddy: %s\n", buddyMode ? "ASCII mode" : "GIF character loaded");
+  otaBootHealthLogStatus();
+  otaBootHealthPoll(millis());
 }
 
 void loop() {
+  // First safe point: timeouts and previously latched failures win before any
+  // normal application work. A rollback path never returns.
+  otaBootHealthPoll(millis());
   M5.update();
+  // Advertising readiness is asynchronous. The GAP callback, rather than the
+  // void startAdvertising() request, is the concrete health signal.
+  if (bleReady()) otaBootHealthReady(OTA_BOOT_READY_BLE);
+  else if (bleStartupFailed()) otaBootHealthCriticalFailure(OTA_BOOT_REASON_BLE);
   t++;
   uint32_t now = millis();
 
@@ -1670,6 +1711,8 @@ void loop() {
     }
 
     drawValidationScreen(inPrompt);
+    otaBootHealthReady(OTA_BOOT_READY_EVENT_LOOP);
+    otaBootHealthPoll(millis());
     delay(16);
     return;
   }
@@ -2088,5 +2131,10 @@ void loop() {
     screenOff = true;
   }
 
+  // Last safe point: only now has one real event/render iteration completed.
+  // This is the final required health bit, so a pending image cannot be marked
+  // valid merely because setup() returned.
+  otaBootHealthReady(OTA_BOOT_READY_EVENT_LOOP);
+  otaBootHealthPoll(millis());
   delay(screenOff ? 100 : 16);
 }

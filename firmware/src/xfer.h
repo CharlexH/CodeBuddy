@@ -73,6 +73,7 @@ void ownerSet(const char* name);
 const char* ownerName();
 #include "stats.h"
 #include "board_compat.h"
+#include "ota_boot_health.h"
 
 inline bool xferCommand(JsonDocument& doc) {
   const char* cmd = doc["cmd"];
@@ -117,12 +118,13 @@ inline bool xferCommand(JsonDocument& doc) {
     int vBus = compatVbusVoltageMv();
     int pct = (vBat - 3200) / 10;
     if (pct < 0) pct = 0; if (pct > 100) pct = 100;
-    char b[320];
+    char b[512];
     int len = snprintf(b, sizeof(b),
       "{\"ack\":\"status\",\"ok\":true,\"n\":0,\"data\":{"
       "\"name\":\"%s\",\"owner\":\"%s\",\"sec\":%s,"
       "\"bat\":{\"pct\":%d,\"mV\":%d,\"mA\":%d,\"usb\":%s},"
       "\"sys\":{\"up\":%lu,\"heap\":%u,\"fsFree\":%lu,\"fsTotal\":%lu},"
+      "\"otaBoot\":{\"state\":\"%s\",\"rollback\":\"%s\"},"
       "\"stats\":{\"appr\":%u,\"deny\":%u,\"vel\":%u,\"nap\":%lu,\"lvl\":%u}"
       "}}\n",
       petName(), ownerName(), bleSecure() ? "true" : "false",
@@ -130,11 +132,15 @@ inline bool xferCommand(JsonDocument& doc) {
       millis() / 1000, ESP.getFreeHeap(),
       (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()),
       (unsigned long)LittleFS.totalBytes(),
+      otaBootHealthStatusLabel(), otaBootHealthLastRollbackReason(),
       stats().approvals, stats().denials, statsMedianVelocity(),
       (unsigned long)stats().napSeconds, stats().level
     );
-    Serial.write(b, len);
-    bleWrite((const uint8_t*)b, len);
+    if (len < 0) return true;
+    size_t outputLen = static_cast<size_t>(len);
+    if (outputLen >= sizeof(b)) outputLen = sizeof(b) - 1;
+    Serial.write((const uint8_t*)b, outputLen);
+    bleWrite((const uint8_t*)b, outputLen);
     return true;
   }
 
