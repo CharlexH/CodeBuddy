@@ -20,6 +20,7 @@ int main() {
     SETTINGS_LED,
     SETTINGS_CLOCK_ROTATION,
     SETTINGS_PET,
+    SETTINGS_AUTO_OTA,
     SETTINGS_OTA_UPDATE,
     SETTINGS_RESET,
     SETTINGS_BACK,
@@ -32,13 +33,14 @@ int main() {
     "led",
     "clock rot",
     "ascii pet",
+    "auto ota",
     "ota update",
     "reset",
     "back",
   };
 
-  expect_true(settingsMenuItemCount() == 10,
-              "settings should expose a physical OTA receive action");
+  expect_true(settingsMenuItemCount() == 11,
+              "settings should expose OTA policy and physical receive actions");
   for (uint8_t i = 0; i < settingsMenuItemCount(); ++i) {
     expect_true(settingsMenuAction(i) == expected[i],
                 "settings actions should retain their intended order");
@@ -49,6 +51,10 @@ int main() {
               "out-of-range settings rows should not dispatch an action");
   expect_true(strcmp(settingsMenuLabel(99), "") == 0,
               "out-of-range settings rows should have no visible label");
+  expect_true(!otaAutomaticDefault(),
+              "factory/default OTA policy must remain Ask");
+  expect_true(strcmp(otaAutomaticNvsKey(), "s_aota") == 0,
+              "automatic OTA policy must use the stable NVS key");
 
   expect_true(otaUpdateCommandLineCount() == 2,
               "formal firmware update command should wrap onto two lines");

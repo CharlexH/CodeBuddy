@@ -11,12 +11,16 @@ struct OtaUiPlan {
 };
 
 inline OtaUiPlan otaUiPlan(
-  bool visible, bool confirm, bool irreversible, bool cancellable
+  bool visible,
+  bool confirm,
+  bool automatic,
+  bool irreversible,
+  bool cancellable
 ) {
   OtaUiPlan plan = {};
   if (!visible) return plan;
   plan.readOnly = irreversible || !cancellable;
-  plan.showInstall = confirm && cancellable && !irreversible;
+  plan.showInstall = confirm && !automatic && cancellable && !irreversible;
   plan.showCancel = cancellable && !irreversible;
   return plan;
 }

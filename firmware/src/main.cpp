@@ -270,6 +270,7 @@ static void applySetting(uint8_t idx) {
     case SETTINGS_LED: s.led = !s.led; break;
     case SETTINGS_CLOCK_ROTATION: s.clockRot = (s.clockRot + 1) % 3; break;
     case SETTINGS_PET: nextPet(); return;
+    case SETTINGS_AUTO_OTA: s.autoOta = !s.autoOta; break;
     case SETTINGS_OTA_UPDATE:
       if (!wifiManagerProvisioned()) {
         settingsOpen = false;
@@ -409,6 +410,9 @@ static void drawSettings() {
           : s.led;
       spr.setTextColor(value ? GREEN : p.textDim, PANEL);
       spr.print(value ? " on" : "off");
+    } else if (action == SETTINGS_AUTO_OTA) {
+      spr.setTextColor(s.autoOta ? GREEN : p.textDim, PANEL);
+      spr.print(s.autoOta ? " on" : "off");
     } else if (action == SETTINGS_CLOCK_ROTATION) {
       static const char* const RN[] = { "auto", "port", "land" };
       spr.print(RN[s.clockRot]);
@@ -503,7 +507,7 @@ static void drawOtaReceiveWindow() {
   if (update.visible) {
     OtaUiPlan plan = otaUiPlan(
       update.visible, update.phase == OTA_PHASE_CONFIRM,
-      update.bootCommitted, update.cancellable
+      update.automatic, update.bootCommitted, update.cancellable
     );
     spr.setCursor(mx + 7, my + 29);
     spr.print(update.status[0] ? update.status : "Preparing update");
@@ -1681,8 +1685,18 @@ void loop() {
   otaInputs.externalPower = compatVbusVoltageMv() > 4000;
   otaInputs.batteryKnown = batteryVoltageMv >= 2500 && batteryVoltageMv <= 5000;
   otaInputs.batteryPercent = static_cast<uint8_t>(batteryPercent);
+  otaInputs.automaticPolicy = settings().autoOta;
   otaUpdatePoll(&tama.otaOffer, otaInputs);
-  otaStatusPoll(otaUpdateView());
+  OtaUpdateView updateView = otaUpdateView();
+  if (updateView.visible && !otaReceiveScreen) {
+    // A verified signed offer is a deliberate Mac-side action. Bring its
+    // confirmation/progress surface forward without requiring menu navigation.
+    displayMode = DISP_NORMAL;
+    menuOpen = settingsOpen = wifiMenuOpen = wifiStatusOpen = resetOpen = false;
+    otaReceiveScreen = true;
+    applyDisplayMode();
+  }
+  otaStatusPoll(updateView);
   if (otaUpdateActive()) {
     napping = false;
     wake();

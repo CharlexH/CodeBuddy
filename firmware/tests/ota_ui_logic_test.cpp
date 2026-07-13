@@ -6,11 +6,13 @@
 static int expect(bool value, int code) { return value ? 0 : code; }
 
 int main() {
-  OtaUiPlan confirm = otaUiPlan(true, true, false, true);
+  OtaUiPlan confirm = otaUiPlan(true, true, false, false, true);
   if (int code = expect(confirm.showInstall && confirm.showCancel && !confirm.readOnly, 1)) return code;
-  OtaUiPlan download = otaUiPlan(true, false, false, true);
+  OtaUiPlan direct = otaUiPlan(true, true, true, false, true);
+  if (int code = expect(!direct.showInstall && direct.showCancel && !direct.readOnly, 6)) return code;
+  OtaUiPlan download = otaUiPlan(true, false, true, false, true);
   if (int code = expect(!download.showInstall && download.showCancel && !download.readOnly, 2)) return code;
-  OtaUiPlan committed = otaUiPlan(true, false, true, false);
+  OtaUiPlan committed = otaUiPlan(true, false, true, true, false);
   if (int code = expect(!committed.showInstall && !committed.showCancel && committed.readOnly, 3)) return code;
   char size[16] = {};
   otaFormatReadableSize(1234, size, sizeof(size));

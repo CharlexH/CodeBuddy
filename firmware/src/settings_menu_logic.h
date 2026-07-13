@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "ota_policy_logic.h"
 
 enum SettingsMenuAction : uint8_t {
   SETTINGS_BRIGHTNESS,
@@ -10,6 +11,7 @@ enum SettingsMenuAction : uint8_t {
   SETTINGS_LED,
   SETTINGS_CLOCK_ROTATION,
   SETTINGS_PET,
+  SETTINGS_AUTO_OTA,
   SETTINGS_OTA_UPDATE,
   SETTINGS_RESET,
   SETTINGS_BACK,
@@ -25,7 +27,7 @@ enum WifiMenuAction : uint8_t {
   WIFI_MENU_INVALID,
 };
 
-inline constexpr uint8_t settingsMenuItemCount() { return 10; }
+inline constexpr uint8_t settingsMenuItemCount() { return 11; }
 
 inline constexpr SettingsMenuAction settingsMenuAction(uint8_t index) {
   return index < settingsMenuItemCount()
@@ -41,6 +43,7 @@ inline constexpr const char* settingsMenuLabel(uint8_t index) {
       : index == SETTINGS_LED ? "led"
       : index == SETTINGS_CLOCK_ROTATION ? "clock rot"
       : index == SETTINGS_PET ? "ascii pet"
+      : index == SETTINGS_AUTO_OTA ? "auto ota"
       : index == SETTINGS_OTA_UPDATE ? "ota update"
       : index == SETTINGS_RESET ? "reset"
       : index == SETTINGS_BACK ? "back"

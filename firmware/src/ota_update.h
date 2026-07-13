@@ -17,6 +17,7 @@ struct OtaUpdateRuntimeInputs {
   bool externalPower;
   bool batteryKnown;
   uint8_t batteryPercent;
+  bool automaticPolicy;
 };
 
 struct OtaUpdateView {
@@ -26,6 +27,7 @@ struct OtaUpdateView {
   bool terminal;
   bool error;
   bool cancellable;
+  bool automatic;
   uint8_t percent;
   uint32_t sizeBytes;
   OtaUpdatePhase phase;

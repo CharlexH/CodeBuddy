@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <Preferences.h>
+#include "ota_policy_logic.h"
 
 // Header-only with file-static state: include from exactly one translation
 // unit (main.cpp). Including from a second .cpp produces duplicate symbols.
@@ -182,10 +183,13 @@ struct Settings {
   bool wifi;     // legacy preference retained for settings-layout compatibility
   bool led;
   bool hud;
+  bool autoOta;     // false=Ask, true=Direct for verified signed offers only
   uint8_t clockRot;  // 0=auto 1=portrait 2=landscape
 };
 
-static Settings _settings = { true, true, false, true, true, 0 };
+static Settings _settings = {
+  true, true, false, true, true, otaAutomaticDefault(), 0
+};
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
@@ -194,6 +198,9 @@ inline void settingsLoad() {
   _settings.wifi  = _prefs.getBool("s_wifi",false);
   _settings.led   = _prefs.getBool("s_led", true);
   _settings.hud      = _prefs.getBool("s_hud", true);
+  _settings.autoOta  = _prefs.getBool(
+    otaAutomaticNvsKey(), otaAutomaticDefault()
+  );
   _settings.clockRot = _prefs.getUChar("s_crot", 0);
   if (_settings.clockRot > 2) _settings.clockRot = 0;
   _prefs.end();
@@ -206,6 +213,7 @@ inline void settingsSave() {
   _prefs.putBool("s_wifi",_settings.wifi);
   _prefs.putBool("s_led", _settings.led);
   _prefs.putBool("s_hud", _settings.hud);
+  _prefs.putBool(otaAutomaticNvsKey(), _settings.autoOta);
   _prefs.putUChar("s_crot", _settings.clockRot);
   _prefs.end();
 }

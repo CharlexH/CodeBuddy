@@ -9,6 +9,7 @@
 #include <stdio.h>
 
 #include "ota_manifest.h"
+#include "ota_policy_logic.h"
 #include "ota_trust.h"
 
 namespace {
@@ -70,6 +71,7 @@ struct OtaRuntime {
   OtaHttpRequest request;
   bool confirmRequested;
   bool cancelRequested;
+  bool automatic;
   bool active;
   uint32_t terminalSinceMs;
   char status[24];
@@ -732,6 +734,12 @@ void arm(OtaOfferState* offer) {
   otaOfferReset(&runtime.offer);
   runtime.offerConsumed = false;
   runtime.active = true;
+  OtaOfferPolicy policy = otaOfferPolicy(
+    offer && offer->pending,
+    offer && offer->signedAuthorized,
+    runtime.inputs.automaticPolicy
+  );
+  runtime.automatic = policy.automatic;
   runtime.confirmRequested = false;
   runtime.cancelRequested = false;
   runtime.terminalSinceMs = 0;
@@ -741,11 +749,12 @@ void arm(OtaOfferState* offer) {
   runtime.target = nullptr;
   runtime.handle = 0;
   memset(&runtime.descriptor, 0, sizeof(runtime.descriptor));
-  setStatus("Press A to install");
+  setStatus(runtime.automatic ? "Preparing update" : "Press A to install");
 }
 
-bool consumeOfferAfterPhysicalConfirmation() {
+bool consumeOfferAfterAuthorization(bool automatic) {
   OtaOfferState* offer = runtime.sourceOffer;
+  if (automatic && (!offer || !offer->signedAuthorized)) return false;
   uint8_t batteryPercent = runtime.inputs.batteryKnown
     ? runtime.inputs.batteryPercent : 0;
   bool allowed = otaOfferExecutionAllowed(
@@ -765,11 +774,11 @@ bool consumeOfferAfterPhysicalConfirmation() {
 }  // namespace
 
 void otaUpdatePoll(OtaOfferState* offer, const OtaUpdateRuntimeInputs& inputs) {
+  runtime.inputs = inputs;
   if (!runtime.active) {
     if (offer && offer->pending) arm(offer);
     return;
   }
-  runtime.inputs = inputs;
   if (otaUpdateTerminal(runtime.machine)) {
     if (!runtime.terminalSinceMs) cleanupTerminal();
     if (millis() - runtime.terminalSinceMs > 2500) {
@@ -781,8 +790,8 @@ void otaUpdatePoll(OtaOfferState* offer, const OtaUpdateRuntimeInputs& inputs) {
 
   bool confirm = false;
   bool cancel = runtime.cancelRequested;
-  if (runtime.confirmRequested) {
-    if (consumeOfferAfterPhysicalConfirmation()) {
+  if (runtime.confirmRequested || runtime.automatic) {
+    if (consumeOfferAfterAuthorization(runtime.automatic)) {
       runtime.offerConsumed = true;
       confirm = true;
       setStatus("Preparing update");
@@ -847,6 +856,7 @@ OtaUpdateView otaUpdateView() {
   view.phase = runtime.machine.phase;
   view.failure = runtime.machine.failure;
   view.cancellable = otaUpdateCancellationAllowed(runtime.active, runtime.machine);
+  view.automatic = runtime.automatic;
   view.sizeBytes = runtime.display.visible
     ? runtime.display.sizeBytes : runtime.machine.imageSize;
   view.percent = otaUpdateOverallProgress(

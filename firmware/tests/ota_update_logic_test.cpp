@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "ota_update_logic.h"
+#include "ota_policy_logic.h"
 
 static void expect(bool value, const char* message) {
   if (!value) {
@@ -25,6 +26,27 @@ static OtaUpdateInputs ready() {
   in.batteryKnown = true;
   in.batteryPercent = 100;
   return in;
+}
+
+static void testSignedOfferPolicy() {
+  OtaOfferPolicy none = otaOfferPolicy(false, false, false);
+  expect(!none.wake && !none.automatic && !none.requiresConfirmation,
+         "no pending offer must not open an OTA surface");
+
+  OtaOfferPolicy legacyAsk = otaOfferPolicy(true, false, true);
+  expect(!legacyAsk.wake && !legacyAsk.automatic &&
+           !legacyAsk.requiresConfirmation,
+         "legacy unsigned offers must never gain Direct behavior");
+
+  OtaOfferPolicy signedAsk = otaOfferPolicy(true, true, false);
+  expect(signedAsk.wake && !signedAsk.automatic &&
+           signedAsk.requiresConfirmation,
+         "verified signed Ask offers should wake directly to A/B");
+
+  OtaOfferPolicy signedDirect = otaOfferPolicy(true, true, true);
+  expect(signedDirect.wake && signedDirect.automatic &&
+           !signedDirect.requiresConfirmation,
+         "verified signed Direct offers should wake and auto-authorize");
 }
 
 static void testReadinessAndPowerGates() {
@@ -888,6 +910,7 @@ static void testCancellationApplicabilityAndFailureMapping() {
 }
 
 int main() {
+  testSignedOfferPolicy();
   testReadinessAndPowerGates();
   testCoordinationEndsOnlyAfterAuthentication();
   testBoundedReadinessWaitAndWrap();
