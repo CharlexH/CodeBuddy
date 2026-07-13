@@ -12,6 +12,7 @@
 #include "wifi_manager.h"
 #include "ota_boot_health.h"
 #include "ota_update.h"
+#include "ota_ui_logic.h"
 #include "clock_time_logic.h"
 #include "data.h"
 #include "persona_logic.h"
@@ -500,26 +501,38 @@ static void drawOtaReceiveWindow() {
   spr.print(update.visible ? "OTA UPDATE" : "OTA READY");
   spr.setTextColor(p.textDim, PANEL);
   if (update.visible) {
+    OtaUiPlan plan = otaUiPlan(
+      update.visible, update.phase == OTA_PHASE_CONFIRM,
+      update.bootCommitted, update.cancellable
+    );
     spr.setCursor(mx + 7, my + 29);
     spr.print(update.status[0] ? update.status : "Preparing update");
-    if (update.authenticated && update.version[0]) {
+    if (update.version[0]) {
       spr.setCursor(mx + 7, my + 45);
       spr.printf("Version: %.12s", update.version);
+    }
+    if (update.sizeBytes) {
+      char readableSize[16] = {};
+      otaFormatReadableSize(update.sizeBytes, readableSize, sizeof(readableSize));
+      spr.setCursor(mx + 7, my + 57);
+      spr.printf("Size: %s", readableSize);
     }
     if (update.phase >= OTA_PHASE_DOWNLOAD &&
         update.phase <= OTA_PHASE_FINAL_GATE) {
       int barW = mw - 14;
-      spr.drawRect(mx + 7, my + 66, barW, 8, p.textDim);
+      spr.drawRect(mx + 7, my + 72, barW, 8, p.textDim);
       int fill = (barW - 2) * update.percent / 100;
-      if (fill > 0) spr.fillRect(mx + 8, my + 67, fill, 6, p.body);
-      spr.setCursor(mx + 7, my + 80);
+      if (fill > 0) spr.fillRect(mx + 8, my + 73, fill, 6, p.body);
+      spr.setCursor(mx + 7, my + 84);
       spr.printf("%u%%", update.percent);
     } else if (!update.authenticated) {
-      spr.setCursor(mx + 7, my + 54);
+      spr.setCursor(mx + 7, my + 72);
       spr.print("Signed Mac update");
     }
-    bool confirm = update.phase == OTA_PHASE_CONFIRM;
-    drawMenuHints(p, mx, mw, my + mh - 12, confirm ? "Install" : "", "Cancel");
+    drawMenuHints(
+      p, mx, mw, my + mh - 12,
+      plan.showInstall ? "Install" : "", plan.showCancel ? "Cancel" : ""
+    );
   } else {
     spr.setCursor(mx + 7, my + 30); spr.print("Run on your Mac:");
     spr.setTextColor(p.body, PANEL);
@@ -1747,7 +1760,7 @@ void loop() {
     beep(800, 60);
     if (otaReceiveScreen) {
       if (otaUpdateActive()) {
-        otaUpdateCancel();
+        if (otaUpdateView().cancellable) otaUpdateCancel();
       } else {
         otaOfferCancel(&tama.otaOffer);
         otaReceiveScreen = false;
@@ -1834,7 +1847,7 @@ void loop() {
     } else if (otaReceiveScreen) {
       beep(600, 40);
       if (otaUpdateActive()) {
-        otaUpdateCancel();
+        if (otaUpdateView().cancellable) otaUpdateCancel();
       } else {
         otaOfferCancel(&tama.otaOffer);
         otaReceiveScreen = false;

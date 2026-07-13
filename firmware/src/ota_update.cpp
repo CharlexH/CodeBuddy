@@ -832,6 +832,8 @@ OtaUpdateView otaUpdateView() {
   view.error = runtime.machine.phase == OTA_PHASE_ERROR;
   view.phase = runtime.machine.phase;
   view.failure = runtime.machine.failure;
+  view.cancellable = otaUpdateCancellationAllowed(runtime.active, runtime.machine);
+  view.sizeBytes = runtime.machine.imageSize;
   view.percent = otaUpdateOverallProgress(
     runtime.machine.phase,
     runtime.machine.receivedBytes,
@@ -841,6 +843,10 @@ OtaUpdateView otaUpdateView() {
   if (view.authenticated) {
     strncpy(view.version, runtime.descriptor.version, sizeof(view.version) - 1);
     view.version[sizeof(view.version) - 1] = 0;
+  } else if (runtime.sourceOffer) {
+    strncpy(view.version, runtime.sourceOffer->version, sizeof(view.version) - 1);
+    view.version[sizeof(view.version) - 1] = 0;
+    view.sizeBytes = runtime.sourceOffer->sizeBytes;
   }
   strncpy(view.status, runtime.status, sizeof(view.status) - 1);
   view.status[sizeof(view.status) - 1] = 0;

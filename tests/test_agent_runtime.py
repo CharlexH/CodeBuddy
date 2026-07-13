@@ -172,6 +172,27 @@ def test_startup_cleanup_refuses_snapshot_symlink_escape(tmp_path):
     assert marker.read_bytes() == b"do-not-delete"
 
 
+def test_startup_cleanup_refuses_symlink_in_snapshot_root_ancestor(tmp_path):
+    outside = tmp_path / "outside"
+    snapshots = outside / "snapshots"
+    snapshot = snapshots / ".snapshot-dead"
+    snapshot.mkdir(parents=True)
+    marker = snapshot / "firmware.bin"
+    marker.write_bytes(b"must-survive")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "ota-link").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        cleanup_stale_ota_runtime(
+            snapshots_root=runtime / "ota-link" / "snapshots",
+            sessions_root=runtime / "sessions",
+            releases_root=runtime / "releases",
+        )
+
+    assert marker.read_bytes() == b"must-survive"
+
+
 def test_startup_cleanup_refuses_temporary_release_pointer_escape(tmp_path):
     releases = tmp_path / "releases"
     generations = releases / ".current.generations"

@@ -205,10 +205,20 @@ class OtaCoordinator:
 
                 deadline = asyncio.get_running_loop().time() + self._install_timeout
                 awaiting_restart_health = session.irreversible
+                recovering_transport = False
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
                         raise asyncio.TimeoutError
+                    if recovering_transport:
+                        try:
+                            await self._probe(session)
+                        except (NativeBleHelperError, RuntimeError):
+                            await asyncio.sleep(
+                                max(0, min(self._reconnect_interval, remaining))
+                            )
+                            continue
+                        recovering_transport = False
                     if awaiting_restart_health:
                         with contextlib.suppress(Exception):
                             await self._probe(session)
@@ -226,8 +236,10 @@ class OtaCoordinator:
                             session, timeout=receive_timeout
                         )
                     except NativeBleHelperError:
-                        if awaiting_restart_health or session.irreversible:
-                            awaiting_restart_health = True
+                        if accepted or session.accepted or session.irreversible:
+                            if session.irreversible:
+                                awaiting_restart_health = True
+                            recovering_transport = True
                             await asyncio.sleep(
                                 max(0, min(self._reconnect_interval, remaining))
                             )

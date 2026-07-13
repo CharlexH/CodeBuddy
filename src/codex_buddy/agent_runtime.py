@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import errno
+import contextlib
 import fcntl
 import os
-import shutil
 import stat
 from pathlib import Path
+from pathlib import PurePath
 from typing import Iterable, Optional
 
 
@@ -62,140 +63,193 @@ class AgentProcessLock:
             os.close(descriptor)
 
 
-def _real_directory_or_missing(path: Path) -> bool:
-    if not os.path.lexists(path):
-        return False
-    if path.is_symlink():
-        raise ValueError(f"managed OTA root must not be a symlink: {path}")
-    try:
-        metadata = path.lstat()
-    except OSError as exc:
-        raise ValueError(f"cannot inspect managed OTA root: {path}") from exc
-    if not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError(f"managed OTA root must be a directory: {path}")
-    return True
+_DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
-def _require_real_directory(path: Path, *, description: str) -> None:
-    if path.is_symlink():
-        raise ValueError(f"{description} must not be a symlink")
+def _open_real_directory(path: Path) -> Optional[int]:
+    """Open an existing directory without following any path component."""
+
+    absolute = Path(os.path.abspath(path))
+    descriptor = os.open(os.path.sep, _DIRECTORY_FLAGS)
     try:
-        metadata = path.lstat()
+        for component in absolute.parts[1:]:
+            try:
+                next_descriptor = os.open(
+                    component, _DIRECTORY_FLAGS, dir_fd=descriptor
+                )
+            except FileNotFoundError:
+                os.close(descriptor)
+                return None
+            except OSError as exc:
+                raise ValueError(
+                    f"managed OTA root ancestor must not be a symlink: {path}"
+                ) from exc
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(descriptor)
+        raise
+
+
+def _metadata(descriptor: int, name: str, *, description: str) -> os.stat_result:
+    try:
+        return os.stat(name, dir_fd=descriptor, follow_symlinks=False)
     except OSError as exc:
         raise ValueError(f"cannot inspect {description}") from exc
-    if not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError(f"{description} must be a real directory")
 
 
-def _require_regular_files(directory: Path, allowed: Iterable[str], *, exact: bool) -> None:
+def _open_child_directory(descriptor: int, name: str, *, description: str) -> int:
+    try:
+        return os.open(name, _DIRECTORY_FLAGS, dir_fd=descriptor)
+    except OSError as exc:
+        raise ValueError(f"{description} must be a real directory, not a symlink") from exc
+
+
+def _require_regular_files(
+    descriptor: int, allowed: Iterable[str], *, exact: bool
+) -> None:
     allowed_names = set(allowed)
-    children = list(directory.iterdir())
-    names = {child.name for child in children}
+    names = set(os.listdir(descriptor))
     if (exact and names != allowed_names) or (not exact and not names <= allowed_names):
-        raise ValueError(f"unexpected node in managed OTA residue: {directory}")
-    for child in children:
-        if child.is_symlink():
-            raise ValueError(f"managed OTA residue child must not be a symlink: {child}")
-        try:
-            metadata = child.lstat()
-        except OSError as exc:
-            raise ValueError(f"cannot inspect managed OTA residue: {child}") from exc
+        raise ValueError("unexpected node in managed OTA residue")
+    for name in names:
+        metadata = _metadata(descriptor, name, description="managed OTA residue")
         if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError(f"managed OTA residue child must be a regular file: {child}")
+            raise ValueError("managed OTA residue child must be a regular file, not a symlink")
 
 
-def _require_release_staging_files(directory: Path) -> None:
+def _require_release_staging_files(descriptor: int) -> None:
     canonical = {
         "firmware.bin",
         "manifest.json",
         "manifest.sig",
         ".verification-public.pem",
     }
-    for child in directory.iterdir():
+    for name in os.listdir(descriptor):
         is_atomic_temporary = any(
-            child.name.startswith(f".{name}.") and len(child.name) > len(name) + 2
-            for name in canonical
+            name.startswith(f".{canonical_name}.") and
+            len(name) > len(canonical_name) + 2
+            for canonical_name in canonical
         )
-        if child.name not in canonical and not is_atomic_temporary:
-            raise ValueError(f"unexpected node in managed OTA residue: {directory}")
-        if child.is_symlink() or not stat.S_ISREG(child.lstat().st_mode):
-            raise ValueError(f"managed OTA residue child must be a regular file: {child}")
+        if name not in canonical and not is_atomic_temporary:
+            raise ValueError("unexpected node in managed OTA residue")
+        if not stat.S_ISREG(
+            _metadata(descriptor, name, description="managed OTA release residue").st_mode
+        ):
+            raise ValueError("managed OTA residue child must be a regular file, not a symlink")
 
 
-def _contained_symlink(path: Path, root: Path) -> None:
-    if not path.is_symlink():
-        raise ValueError(f"managed OTA pointer must be a symlink: {path}")
-    target = Path(os.readlink(path))
+def _contained_symlink(descriptor: int, name: str) -> None:
+    metadata = _metadata(descriptor, name, description="managed OTA pointer")
+    if not stat.S_ISLNK(metadata.st_mode):
+        raise ValueError("managed OTA pointer must be a symlink")
+    target = PurePath(os.readlink(name, dir_fd=descriptor))
     if target.is_absolute():
         raise ValueError("managed OTA pointer symlink must be relative")
-    resolved_root = root.resolve()
-    resolved_target = (path.parent / target).resolve(strict=False)
-    try:
-        resolved_target.relative_to(resolved_root)
-    except ValueError as exc:
-        raise ValueError("managed OTA pointer symlink escapes its controlled root") from exc
+    if not target.parts or target.parts[0] != ".current.generations" or ".." in target.parts:
+        raise ValueError("managed OTA pointer symlink escapes its controlled root")
 
 
-def _snapshot_cleanup_targets(root: Path) -> list[Path]:
-    if not _real_directory_or_missing(root):
+def _snapshot_cleanup_targets(root: Optional[int]) -> list[str]:
+    if root is None:
         return []
-    targets: list[Path] = []
-    for child in root.iterdir():
-        if not child.name.startswith(".snapshot-"):
-            raise ValueError(f"unexpected node in managed OTA snapshot root: {child}")
-        _require_real_directory(child, description="OTA snapshot directory")
-        _require_regular_files(child, {"firmware.bin"}, exact=True)
-        targets.append(child)
+    targets: list[str] = []
+    for name in os.listdir(root):
+        if not name.startswith(".snapshot-"):
+            raise ValueError("unexpected node in managed OTA snapshot root")
+        child = _open_child_directory(root, name, description="OTA snapshot directory")
+        try:
+            _require_regular_files(child, {"firmware.bin"}, exact=True)
+        finally:
+            os.close(child)
+        targets.append(name)
     return targets
 
 
-def _session_cleanup_targets(root: Path) -> list[Path]:
-    if not _real_directory_or_missing(root):
+def _session_cleanup_targets(root: Optional[int]) -> list[str]:
+    if root is None:
         return []
-    targets: list[Path] = []
+    targets: list[str] = []
     allowed = {"leaf-key.pem", "leaf-cert.pem", "leaf.csr", "leaf-extensions.cnf"}
-    for child in root.iterdir():
-        if not child.name.startswith("https-"):
-            raise ValueError(f"unexpected node in managed OTA session root: {child}")
-        _require_real_directory(child, description="OTA TLS session directory")
-        _require_regular_files(child, allowed, exact=False)
-        targets.append(child)
+    for name in os.listdir(root):
+        if not name.startswith("https-"):
+            raise ValueError("unexpected node in managed OTA session root")
+        child = _open_child_directory(root, name, description="OTA TLS session directory")
+        try:
+            _require_regular_files(child, allowed, exact=False)
+        finally:
+            os.close(child)
+        targets.append(name)
     return targets
 
 
-def _release_cleanup_targets(root: Path) -> tuple[list[Path], list[Path]]:
-    if not _real_directory_or_missing(root):
+def _release_cleanup_targets(root: Optional[int]) -> tuple[list[str], list[str]]:
+    if root is None:
         return [], []
-    generation_root = root / ".current.generations"
-    directories: list[Path] = []
-    pointers: list[Path] = []
-    for child in root.iterdir():
-        if child.name == ".current.generations":
-            _require_real_directory(child, description="OTA release generation root")
-        elif child.name == ".current.build.lock":
-            if child.is_symlink() or not stat.S_ISREG(child.lstat().st_mode):
+    directories: list[str] = []
+    pointers: list[str] = []
+    generation_descriptor: Optional[int] = None
+    for name in os.listdir(root):
+        if name == ".current.generations":
+            generation_descriptor = _open_child_directory(
+                root, name, description="OTA release generation root"
+            )
+        elif name == ".current.build.lock":
+            if not stat.S_ISREG(_metadata(root, name, description="OTA release build lock").st_mode):
                 raise ValueError("OTA release build lock must be a regular file")
-        elif child.name == "current":
-            _contained_symlink(child, generation_root)
-        elif child.name.startswith(".current.current-"):
-            _contained_symlink(child, generation_root)
-            pointers.append(child)
+        elif name == "current":
+            _contained_symlink(root, name)
+        elif name.startswith(".current.current-"):
+            _contained_symlink(root, name)
+            pointers.append(name)
         else:
-            raise ValueError(f"unexpected node in managed OTA release root: {child}")
+            raise ValueError("unexpected node in managed OTA release root")
 
-    if generation_root.exists():
-        for generation in generation_root.iterdir():
-            _require_real_directory(generation, description="OTA release generation")
-            if generation.name.startswith(".staging-"):
-                _require_release_staging_files(generation)
-                directories.append(generation)
-            else:
-                _require_regular_files(
-                    generation,
+    if generation_descriptor is not None:
+        try:
+            for name in os.listdir(generation_descriptor):
+                generation = _open_child_directory(
+                    generation_descriptor, name, description="OTA release generation"
+                )
+                try:
+                    if name.startswith(".staging-"):
+                        _require_release_staging_files(generation)
+                        directories.append(name)
+                    else:
+                        _require_regular_files(
+                            generation,
                     {"firmware.bin", "manifest.json", "manifest.sig"},
                     exact=True,
-                )
+                        )
+                finally:
+                    os.close(generation)
+        finally:
+            os.close(generation_descriptor)
     return directories, pointers
+
+
+def _remove_tree(parent: int, name: str) -> None:
+    directory = _open_child_directory(parent, name, description="managed OTA cleanup target")
+    original = os.fstat(directory)
+    try:
+        for child_name in os.listdir(directory):
+            child = _metadata(directory, child_name, description="managed OTA cleanup child")
+            if stat.S_ISLNK(child.st_mode):
+                raise ValueError("managed OTA cleanup child must not be a symlink")
+            if stat.S_ISDIR(child.st_mode):
+                _remove_tree(directory, child_name)
+            elif stat.S_ISREG(child.st_mode):
+                os.unlink(child_name, dir_fd=directory)
+            else:
+                raise ValueError("managed OTA cleanup child has unsupported type")
+        current = _metadata(parent, name, description="managed OTA cleanup target")
+        if (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino):
+            raise ValueError("managed OTA cleanup target changed during cleanup")
+        os.rmdir(name, dir_fd=parent)
+    finally:
+        os.close(directory)
 
 
 def cleanup_stale_ota_runtime(
@@ -203,11 +257,43 @@ def cleanup_stale_ota_runtime(
 ) -> None:
     """Remove only structurally recognized crash residue from controlled OTA roots."""
 
-    snapshot_targets = _snapshot_cleanup_targets(Path(snapshots_root))
-    session_targets = _session_cleanup_targets(Path(sessions_root))
-    release_directories, release_pointers = _release_cleanup_targets(Path(releases_root))
-    # Validation is deliberately completed before the first deletion.
-    for directory in snapshot_targets + session_targets + release_directories:
-        shutil.rmtree(directory)
-    for pointer in release_pointers:
-        pointer.unlink()
+    roots = [
+        _open_real_directory(Path(snapshots_root)),
+        _open_real_directory(Path(sessions_root)),
+        _open_real_directory(Path(releases_root)),
+    ]
+    snapshots, sessions, releases = roots
+    try:
+        snapshot_targets = _snapshot_cleanup_targets(snapshots)
+        session_targets = _session_cleanup_targets(sessions)
+        release_directories, release_pointers = _release_cleanup_targets(releases)
+        # Validation is deliberately completed before the first deletion.
+        if snapshots is not None:
+            for name in snapshot_targets:
+                _remove_tree(snapshots, name)
+        if sessions is not None:
+            for name in session_targets:
+                _remove_tree(sessions, name)
+        if releases is not None:
+            generations = None
+            if release_directories:
+                generations = _open_child_directory(
+                    releases, ".current.generations", description="OTA release generation root"
+                )
+            try:
+                for name in release_directories:
+                    assert generations is not None
+                    _remove_tree(generations, name)
+            finally:
+                if generations is not None:
+                    os.close(generations)
+            for name in release_pointers:
+                if not stat.S_ISLNK(
+                    _metadata(releases, name, description="managed OTA pointer").st_mode
+                ):
+                    raise ValueError("managed OTA pointer changed during cleanup")
+                os.unlink(name, dir_fd=releases)
+    finally:
+        for descriptor in roots:
+            if descriptor is not None:
+                os.close(descriptor)

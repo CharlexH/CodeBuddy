@@ -143,3 +143,61 @@ def test_install_firmware_artifact_reads_the_bundled_package_resource(tmp_path):
     assert installed == destination
     assert destination.read_bytes() == setup_flow.bundled_firmware_resource().read_bytes()
     assert destination.stat().st_mode & 0o022 == 0
+
+
+def _fake_helper_app(root: Path, marker: bytes) -> Path:
+    app = root / "CodeBuddyBLEHelper.app"
+    executable = app / "Contents" / "MacOS" / "CodeBuddyBLEHelper"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(marker)
+    executable.chmod(0o755)
+    (app / "Contents" / "Info.plist").write_text("plist", encoding="utf-8")
+    return app
+
+
+def test_helper_install_refreshes_existing_app_atomically(tmp_path, monkeypatch):
+    destination = _fake_helper_app(tmp_path / "installed", b"old")
+    source = _fake_helper_app(tmp_path / "built", b"new")
+    monkeypatch.setattr(setup_flow, "build_bundled_native_helper", lambda: source)
+    monkeypatch.setattr(setup_flow.subprocess, "run", lambda *args, **kwargs: None)
+
+    assert setup_flow.ensure_helper_app_installed(destination) == destination
+
+    assert (destination / "Contents" / "MacOS" / "CodeBuddyBLEHelper").read_bytes() == b"new"
+
+
+def test_helper_install_failure_preserves_previous_known_good_app(tmp_path, monkeypatch):
+    destination = _fake_helper_app(tmp_path / "installed", b"old")
+
+    def fail():
+        raise RuntimeError("swift build failed")
+
+    monkeypatch.setattr(setup_flow, "build_bundled_native_helper", fail)
+
+    with pytest.raises(RuntimeError, match="swift build failed"):
+        setup_flow.ensure_helper_app_installed(destination)
+
+    assert (destination / "Contents" / "MacOS" / "CodeBuddyBLEHelper").read_bytes() == b"old"
+
+
+def test_helper_install_replace_failure_restores_previous_app(tmp_path, monkeypatch):
+    destination = _fake_helper_app(tmp_path / "installed", b"old")
+    source = _fake_helper_app(tmp_path / "built", b"new")
+    monkeypatch.setattr(setup_flow, "build_bundled_native_helper", lambda: source)
+    monkeypatch.setattr(setup_flow.subprocess, "run", lambda *args, **kwargs: None)
+    real_replace = setup_flow.os.replace
+    calls = 0
+
+    def fail_staging_replace(source_path, destination_path):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated atomic install failure")
+        return real_replace(source_path, destination_path)
+
+    monkeypatch.setattr(setup_flow.os, "replace", fail_staging_replace)
+
+    with pytest.raises(OSError, match="atomic install failure"):
+        setup_flow.ensure_helper_app_installed(destination)
+
+    assert (destination / "Contents" / "MacOS" / "CodeBuddyBLEHelper").read_bytes() == b"old"

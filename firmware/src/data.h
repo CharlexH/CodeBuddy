@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include "ble_bridge.h"
 #include "clock_time_logic.h"
+#include "data_log_logic.h"
 #include "firmware_version.h"
 #include "ota_manifest_logic.h"
 #include "utf8_text_logic.h"
@@ -83,7 +84,9 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
-    Serial.printf("[data] json err=%s head=%.48s\n", err.c_str(), line);
+    char diagnostic[64] = {};
+    formatMalformedJsonLog(line ? strlen(line) : 0, diagnostic, sizeof(diagnostic));
+    Serial.println(diagnostic);
     return;
   }
   if (xferCommand(doc)) {

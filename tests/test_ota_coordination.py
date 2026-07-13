@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from codex_buddy.ota_coordination import OtaAgentSession, OtaCoordinator
 from codex_buddy.ble_transport import NativeBleHelperError
 from codex_buddy.ota_release import OtaImageInfo
@@ -286,6 +288,68 @@ def test_boot_commit_immediately_enters_irreversible_reconnect_probe(tmp_path):
     probes = [item for item in ble.sent if item.get("cmd") == "ota_status"]
     assert len(probes) >= 2
     assert all(item["nonce"] == NONCE and item["generation"] == 1 for item in probes)
+
+
+@pytest.mark.parametrize("disconnect_after", ["accepted", "authenticated", "download", "readback"])
+def test_install_reconnects_after_acceptance_without_resending_offer(
+    tmp_path, disconnect_after
+):
+    async def exercise():
+        ble = _Ble(
+            [
+                _status("running", version="0.1.4", health="valid"),
+                _status("offer-received", version="0.1.4"),
+                _status("accepted"),
+                _status("authenticated"),
+                _status("download", percent=40),
+                _status("readback", percent=90),
+                _status("boot-committed", percent=100),
+                _status("running", percent=100, health="valid"),
+            ]
+        )
+        disconnected = False
+        inject_disconnect = False
+        original_recv = ble.recv_json
+
+        async def recv_json(*, timeout):
+            nonlocal disconnected, inject_disconnect
+            if inject_disconnect and not disconnected:
+                disconnected = True
+                raise NativeBleHelperError("transient helper disconnect")
+            payload = await original_recv(timeout=timeout)
+            inject_disconnect = payload["phase"] == disconnect_after
+            return payload
+
+        ble.recv_json = recv_json
+        trust = SimpleNamespace(
+            manifest_private_key=tmp_path / "private.pem",
+            manifest_public_key=tmp_path / "public.pem",
+        )
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            install_timeout=0.5,
+            reconnect_interval=0,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.5", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        await coordinator.run(session, image)
+        return session, ble, _Server.instances[-1]
+
+    session, ble, server = asyncio.run(exercise())
+    assert session.success is True
+    assert len([item for item in ble.sent if "ota_offer" in item]) == 1
+    assert len([item for item in ble.sent if item.get("cmd") == "ota_status"]) >= 2
+    assert server.closed is True
 
 
 def test_cancel_reports_noop_once_boot_is_committed(tmp_path):

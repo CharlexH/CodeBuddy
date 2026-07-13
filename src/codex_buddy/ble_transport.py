@@ -22,6 +22,7 @@ else:
 
 from .reducer import BuddySnapshot
 from .runtime import helper_app_path as runtime_helper_app_path
+from .native_helper_build import build_bundled_native_helper
 
 NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
@@ -151,29 +152,7 @@ def _native_helper_app_path() -> Path:
     if runtime_executable.exists():
         return runtime_app_path
 
-    root = Path(__file__).resolve().parents[2]
-    app_path = root / ".build" / "native" / "CodeBuddyBLEHelper.app"
-    executable_path = app_path / "Contents" / "MacOS" / "CodeBuddyBLEHelper"
-    source_path = root / "src" / "codex_buddy" / "native_ble_helper" / "CodeBuddyBLEHelper.swift"
-    plist_path = root / "src" / "codex_buddy" / "native_ble_helper" / "Info.plist"
-    build_script = root / "scripts" / "build-native-ble-helper.sh"
-    needs_build = (
-        not executable_path.exists()
-        or executable_path.stat().st_mtime < source_path.stat().st_mtime
-        or (app_path / "Contents" / "Info.plist").stat().st_mtime < plist_path.stat().st_mtime
-        or executable_path.stat().st_mtime < build_script.stat().st_mtime
-    )
-    if needs_build:
-        completed = subprocess.run(
-            ["/bin/zsh", str(build_script)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        output = completed.stdout.strip().splitlines()
-        if not output:
-            raise NativeBleHelperError("Native BLE helper build script returned no app path")
-        app_path = Path(output[-1]).expanduser()
+    app_path = build_bundled_native_helper()
     if not app_path.exists():
         raise NativeBleHelperError(f"Native BLE helper app not found at {app_path}")
     return app_path

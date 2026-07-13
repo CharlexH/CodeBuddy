@@ -25,7 +25,9 @@ struct OtaUpdateView {
   bool bootCommitted;
   bool terminal;
   bool error;
+  bool cancellable;
   uint8_t percent;
+  uint32_t sizeBytes;
   OtaUpdatePhase phase;
   OtaUpdateFailure failure;
   char version[OTA_VERSION_MAX_BYTES];

@@ -9,7 +9,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from codex_buddy import runtime
-from codex_buddy.ota_release import build_ota_release
+from codex_buddy.ota_release import (
+    build_ota_release,
+    inspect_esp32s3_application_image,
+)
 
 
 def main() -> int:
@@ -32,16 +35,24 @@ def main() -> int:
         help="public key embedded in the target firmware",
     )
     arguments = parser.parse_args()
+    inspected = inspect_esp32s3_application_image(arguments.firmware)
+    if inspected.version != arguments.version:
+        parser.error(
+            f"--version {arguments.version!r} does not match embedded application "
+            f"version {inspected.version!r}"
+        )
 
     release = build_ota_release(
         image_path=arguments.firmware,
         output_dir=arguments.output,
-        version=arguments.version,
+        version=inspected.version,
         current_version=arguments.current_version,
         chip=arguments.chip,
         artifact_url=arguments.url,
         signing_private_key=arguments.signing_key,
         expected_signing_public_key=arguments.signing_public_key,
+        expected_size_bytes=inspected.size_bytes,
+        expected_sha256=inspected.sha256,
     )
     print(f"Signed OTA release: {release.output_dir}")
     print(release.firmware)

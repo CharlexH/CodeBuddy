@@ -4,6 +4,7 @@ import hashlib
 import os
 import struct
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -583,6 +584,45 @@ def test_release_rechecks_image_against_inspected_size_hash_and_version(tmp_path
             expected_size_bytes=inspected.size_bytes,
             expected_sha256=inspected.sha256,
         )
+
+
+def test_release_cli_inspects_image_before_building(monkeypatch, tmp_path):
+    import importlib.util
+
+    script = Path(__file__).parents[1] / "scripts" / "build-ota-release.py"
+    spec = importlib.util.spec_from_file_location("build_ota_release_cli", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_versioned_esp32s3_image("0.1.4"))
+    observed = {}
+
+    def build(**kwargs):
+        observed.update(kwargs)
+        class Release:
+            output_dir = tmp_path / "out"
+            firmware = output_dir / "firmware.bin"
+            manifest = output_dir / "manifest.json"
+            signature = output_dir / "manifest.sig"
+        return Release()
+
+    monkeypatch.setattr(module, "build_ota_release", build)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(script), str(image), "--output", str(tmp_path / "out"),
+            "--version", "0.1.4", "--current-version", "0.1.3",
+            "--url", "https://127.0.0.1/fw", "--signing-key", str(tmp_path / "key"),
+            "--signing-public-key", str(tmp_path / "pub"),
+        ],
+    )
+
+    assert module.main() == 0
+    assert observed["expected_size_bytes"] == image.stat().st_size
+    assert observed["expected_sha256"] == hashlib.sha256(image.read_bytes()).hexdigest()
+    assert observed["version"] == "0.1.4"
 
 
 def test_release_refuses_output_inside_private_trust_directory(tmp_path):
