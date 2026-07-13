@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import secrets
 import subprocess
 import sys
 import time
@@ -23,6 +24,15 @@ from .runtime import state_path as runtime_state_path
 from .state_store import BridgeStateStore, PersistedState
 from .text_width import clip_text_by_width
 from .usage_limits import UsageDisplay
+from .ota_coordination import OtaAgentSession, OtaCoordinator
+from .ota_protocol import valid_ota_nonce
+from .ota_release import (
+    OtaImageInfo,
+    build_ota_release,
+    inspect_esp32s3_application_image,
+)
+from .ota_server import OtaHttpsServer
+from .ota_trust import require_existing_ota_trust
 
 _SUMMARY_LIMIT = 44
 _ENTRY_LIMIT = 160
@@ -172,6 +182,14 @@ class BuddyAgent:
         ble_factory: Optional[Callable[..., BleBuddyTransport]] = None,
         managed_session_factory: Optional[Callable[..., ManagedSessionBridge]] = None,
         account_usage_monitor_factory: Optional[Callable[..., AccountUsageMonitor]] = None,
+        ota_image_inspector: Callable[[Path], OtaImageInfo] = inspect_esp32s3_application_image,
+        ota_trust_loader: Callable[[], Any] = require_existing_ota_trust,
+        ota_server_factory: Callable[..., Any] = OtaHttpsServer,
+        ota_release_builder: Callable[..., Any] = build_ota_release,
+        ota_nonce_factory: Callable[[], str] = lambda: secrets.token_urlsafe(24),
+        ota_status_timeout: float = 15.0,
+        ota_confirm_timeout: float = 180.0,
+        ota_install_timeout: float = 600.0,
     ) -> None:
         self.state_path = state_path
         self.socket_path = socket_path or default_socket_path(state_path)
@@ -206,6 +224,22 @@ class BuddyAgent:
         self._ota_session_lock: Optional[asyncio.Lock] = None
         self._ota_session_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._ota_session_active = False
+        self._ota_image_inspector = ota_image_inspector
+        self._ota_nonce_factory = ota_nonce_factory
+        self._ota_state: Optional[OtaAgentSession] = None
+        self._ota_task: Optional[asyncio.Task[None]] = None
+        self._ota_coordinator = OtaCoordinator(
+            get_ble=lambda: self._ble,
+            is_ble_connected=lambda: self._ble_connected,
+            ota_session=self.ota_session,
+            trust_loader=ota_trust_loader,
+            server_factory=ota_server_factory,
+            release_builder=ota_release_builder,
+            status_timeout=ota_status_timeout,
+            confirm_timeout=ota_confirm_timeout,
+            install_timeout=ota_install_timeout,
+            reconnect_interval=reconnect_interval,
+        )
 
     @property
     def ota_session_active(self) -> bool:
@@ -259,6 +293,13 @@ class BuddyAgent:
                 self._stopped = None
 
     async def shutdown(self) -> None:
+        if self._ota_state is not None and not self._ota_state.terminal:
+            self._ota_state.cancel_event.set()
+        if self._ota_task is not None and not self._ota_task.done():
+            self._ota_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._ota_task
+        self._ota_task = None
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
@@ -322,6 +363,8 @@ class BuddyAgent:
             "socket_path": str(self.socket_path),
             "snapshot": snapshot.as_ble_payload(),
             "sessions": [session.as_dict() for session in self.catalog.sessions(now=self.clock())],
+            "ota": self._ota_state.public_payload(include_identity=False)
+            if self._ota_state else None,
         }
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -349,14 +392,70 @@ class BuddyAgent:
         if command == "sessions":
             return {"ok": True, "sessions": self.status_payload()["sessions"]}
         if command == "launch":
+            if self._ota_session_active:
+                raise AgentClientError("firmware update is active")
             workdir = Path(str(payload.get("workdir", ""))).expanduser()
             return await self.launch(workdir)
+        if command == "ota_begin":
+            return await self._begin_ota_update(payload)
+        if command == "ota_status":
+            return self._ota_command_status(payload)
+        if command == "ota_cancel":
+            return await self._cancel_ota_update(payload)
         if command == "stop":
             self._stop_requested = True
             if self._stopped is not None:
                 self._stopped.set()
             return {"ok": True}
         raise AgentClientError("Unknown agent command: {}".format(command))
+
+    async def _begin_ota_update(self, payload: dict[str, object]) -> dict[str, object]:
+        if self._ota_task is not None and not self._ota_task.done():
+            raise RuntimeError("a firmware update is already active")
+        if any(runtime.pending_prompt is not None for runtime in self._managed_runtime.values()):
+            raise RuntimeError("finish the active approval before updating firmware")
+        if not self._ble_connected or self._ble is None:
+            raise RuntimeError("Code Buddy is not connected over Bluetooth")
+        raw_path = payload.get("firmware")
+        if not isinstance(raw_path, str) or not raw_path or len(raw_path) > 4096 or "\x00" in raw_path:
+            raise ValueError("firmware application image path is invalid")
+        inspected = self._ota_image_inspector(Path(raw_path).expanduser())
+        nonce = self._ota_nonce_factory()
+        # build_ota_offer performs the same nonce/generation bounds used by the
+        # device parser before any network endpoint is created.
+        if not valid_ota_nonce(nonce):
+            raise RuntimeError("OTA nonce generator returned an invalid value")
+        session = OtaAgentSession(
+            nonce=nonce,
+            generation=1,
+            image_path=inspected.path,
+            version=inspected.version,
+        )
+        self._ota_state = session
+        self._ota_task = asyncio.create_task(self._run_ota_update(session, inspected))
+        return {"ok": True, "ota": session.public_payload()}
+
+    def _ota_command_status(self, payload: dict[str, object]) -> dict[str, object]:
+        session = self._ota_state
+        if session is None:
+            raise RuntimeError("no firmware update session exists")
+        if payload.get("nonce") != session.nonce:
+            raise RuntimeError("firmware update session does not match")
+        return {"ok": True, "ota": session.public_payload()}
+
+    async def _cancel_ota_update(self, payload: dict[str, object]) -> dict[str, object]:
+        session = self._ota_state
+        if session is None:
+            return {"ok": True}
+        if payload.get("nonce") != session.nonce:
+            raise RuntimeError("firmware update session does not match")
+        await self._ota_coordinator.cancel(session)
+        return {"ok": True, "ota": session.public_payload()}
+
+    async def _run_ota_update(
+        self, session: OtaAgentSession, inspected: OtaImageInfo
+    ) -> None:
+        await self._ota_coordinator.run(session, inspected)
 
     async def _readonly_loop(self) -> None:
         while not self._stop_requested:
@@ -384,6 +483,8 @@ class BuddyAgent:
                     device_name=paired_device_name,
                     on_permission=self._handle_device_permission,
                 )
+                self._ble_connected = False
+            if self._ble_connected and not getattr(self._ble, "is_connected", True):
                 self._ble_connected = False
             if not self._ble_connected:
                 try:

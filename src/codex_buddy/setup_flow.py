@@ -79,6 +79,20 @@ def ensure_helper_app_installed(destination: Path | None = None) -> Path:
     return destination
 
 
+def ensure_firmware_artifact_installed(source: Path, destination: Path | None = None) -> Path:
+    destination = runtime.default_firmware_path() if destination is None else Path(destination)
+    source = Path(source)
+    if source.is_symlink() or not source.is_file():
+        return destination
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".tmp")
+    temporary.unlink(missing_ok=True)
+    shutil.copyfile(source, temporary, follow_symlinks=False)
+    temporary.chmod(0o644)
+    os.replace(temporary, destination)
+    return destination
+
+
 def is_setup_complete(state: PersistedState) -> bool:
     if state.setup_version < SETUP_VERSION:
         return False

@@ -87,8 +87,8 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
     return;
   }
   if (xferCommand(doc)) {
-    otaOfferCancel(&out->otaOffer);
     const char* cmd = doc["cmd"];
+    if (xferCommandConflictsWithOta(cmd)) otaOfferCancel(&out->otaOffer);
     Serial.printf("[data] cmd=%s\n", cmd ? cmd : "(null)");
     _lastLiveMs = millis();
     return;
@@ -108,6 +108,12 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
         ? offer["manifestUrl"].as<const char*>() : nullptr;
       const char* signatureUrl = offer["signatureUrl"].is<const char*>()
         ? offer["signatureUrl"].as<const char*>() : nullptr;
+      const char* nonce = offer["nonce"].is<const char*>()
+        ? offer["nonce"].as<const char*>() : nullptr;
+      bool generationTyped = offer["generation"].is<uint32_t>() &&
+        !offer["generation"].is<bool>();
+      uint32_t generation = generationTyped
+        ? offer["generation"].as<uint32_t>() : 0;
       bool sizeTyped = offer["sizeBytes"].is<uint32_t>() &&
         !offer["sizeBytes"].is<bool>();
       uint32_t sizeBytes = sizeTyped ? offer["sizeBytes"].as<uint32_t>() : 0;
@@ -116,8 +122,10 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
       if (batteryPercent < 0) batteryPercent = 0;
       if (batteryPercent > 100) batteryPercent = 100;
       bool externalPower = compatVbusVoltageMv() > 4000;
-      accepted = offer.size() == 4 && version && manifestUrl && signatureUrl &&
-        sizeTyped && otaOfferAcceptHint(
+      accepted = offer.size() == 6 && nonce && generationTyped && version &&
+        manifestUrl && signatureUrl && sizeTyped && otaOfferAcceptBoundHint(
+          nonce,
+          generation,
           version,
           sizeBytes,
           manifestUrl,
@@ -132,6 +140,9 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
           static_cast<uint8_t>(batteryPercent),
           &out->otaOffer
         );
+      if (accepted) otaStatusBindOffer(out->otaOffer);
+      else if (nonce && generationTyped)
+        otaStatusReject(nonce, generation, "rejected");
     }
     if (!accepted) otaOfferReject(&out->otaOffer);
     Serial.println(accepted ? "[ota] offer accepted" : "[ota] offer rejected");

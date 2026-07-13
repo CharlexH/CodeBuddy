@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from codex_buddy.events import ApprovalRequest, TurnState
 from codex_buddy.proxy import ApprovalRequestResolved
 from codex_buddy.state_store import BridgeStateStore, PersistedState
 from codex_buddy.usage_limits import UsageDisplay
+from codex_buddy.ota_release import OtaImageInfo
 
 
 class _FakeBridge:
@@ -152,6 +154,83 @@ def test_agent_ota_session_suspends_snapshots_and_releases_after_failure(tmp_pat
         assert len(ble.sent_payloads) == 2
 
     asyncio.run(exercise())
+
+
+def test_agent_ota_commands_are_exclusive_cancel_and_release_snapshot_suspension(tmp_path):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(b"firmware")
+
+    def inspect(path):
+        assert path == image
+        return OtaImageInfo(
+            path=image,
+            version="0.1.5",
+            size_bytes=8,
+            sha256=hashlib.sha256(b"firmware").hexdigest(),
+        )
+
+    async def exercise():
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+        agent = BuddyAgent(
+            tmp_path / "state.json",
+            watcher=None,
+            ota_image_inspector=inspect,
+            ota_nonce_factory=lambda: "n" * 24,
+        )
+        agent._ble = _CapturingBle()
+        agent._ble_connected = True
+
+        async def fake_run(session, inspected):
+            async with agent.ota_session():
+                entered.set()
+                session.phase = "await-confirm"
+                await session.cancel_event.wait()
+                cancelled.set()
+                session.phase = "cancelled"
+                session.terminal = True
+                session.success = False
+
+        agent._run_ota_update = fake_run
+        first = await agent._handle_command(
+            {"cmd": "ota_begin", "firmware": str(image)}
+        )
+        await entered.wait()
+        assert agent.ota_session_active is True
+        with pytest.raises(RuntimeError, match="already active"):
+            await agent._handle_command({"cmd": "ota_begin", "firmware": str(image)})
+        status = await agent._handle_command(
+            {"cmd": "ota_status", "nonce": "n" * 24}
+        )
+        assert status["ota"]["phase"] == "await-confirm"
+        await agent._handle_command({"cmd": "ota_cancel", "nonce": "n" * 24})
+        await cancelled.wait()
+        await agent._ota_task
+        assert agent.ota_session_active is False
+        return first
+
+    first = asyncio.run(exercise())
+    assert first["ota"]["nonce"] == "n" * 24
+
+
+def test_agent_rejects_ota_when_approval_is_pending(tmp_path):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(b"firmware")
+    agent = BuddyAgent(
+        tmp_path / "state.json",
+        watcher=None,
+        ota_image_inspector=lambda _: OtaImageInfo(
+            path=image, version="0.1.5", size_bytes=8, sha256="a" * 64
+        ),
+    )
+    runtime = ManagedSessionRuntime(control_id="m", workdir=tmp_path)
+    runtime.session_id = "thread"
+    runtime.pending_prompt = SessionPrompt("request", "Bash", "write")
+    agent._managed_runtime["m"] = runtime
+    agent._ble_connected = True
+
+    with pytest.raises(RuntimeError, match="approval"):
+        asyncio.run(agent._handle_command({"cmd": "ota_begin", "firmware": str(image)}))
 
 
 def test_agent_launch_registers_managed_session_and_routes_device_approval(tmp_path):

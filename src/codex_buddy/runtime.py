@@ -59,5 +59,13 @@ def ota_sessions_dir() -> Path:
     return ota_private_dir() / "sessions"
 
 
+def firmware_dir() -> Path:
+    return runtime_root() / "firmware"
+
+
+def default_firmware_path() -> Path:
+    return firmware_dir() / "code-buddy-sticks3-app.bin"
+
+
 def zprofile_path() -> Path:
     return Path.home() / ".zprofile"

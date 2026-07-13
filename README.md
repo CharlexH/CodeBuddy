@@ -52,6 +52,10 @@ Developer release build:
 ./scripts/build-firmware-release.sh
 ```
 
+The build produces two distinct artifacts: `*-full.bin` is the USB recovery/
+bootstrap image, while `*-app.bin` is the application-only image accepted by
+OTA. Never pass the merged full image to the OTA command.
+
 ### 2. Install on macOS
 
 ```bash
@@ -69,6 +73,30 @@ On first run, Code Buddy will:
 - add `~/.code-buddy/bin` to `~/.zprofile`
 
 If you are already on the current StickS3 firmware, host-side fixes like BLE helper reconnect cleanup and oversized multilingual snapshot handling do not require reflashing the device.
+
+### Wireless firmware updates
+
+After the OTA-capable bootstrap has been flashed once and Wi-Fi has been
+provisioned from Settings, open **Settings > OTA update** on Code Buddy, then
+run:
+
+```bash
+code-buddy firmware update
+```
+
+For a development build, select the app-only image explicitly:
+
+```bash
+code-buddy firmware update --firmware firmware/.pio/build/m5stack-sticks3/firmware.bin
+```
+
+The background agent remains the sole Bluetooth owner. It signs an immutable
+one-time manifest using the already-pinned trust under `~/.code-buddy/ota`,
+serves the image over short-lived local HTTPS, and waits for physical A-button
+confirmation. Trust is never generated or rotated by this command. If trust is
+missing, repeat the explicit USB trust bootstrap. B or Ctrl-C cancels before
+the boot slot is committed; the Mac reports success only after reconnection
+proves the embedded target version is running and first-boot health is valid.
 
 The native BLE helper runs as a background macOS agent during normal use, so reconnect attempts should not open a helper window or steal focus. macOS may still show the first Bluetooth permission prompt; that system prompt cannot be skipped. For helper debugging, start it with `CODE_BUDDY_BLE_HELPER_DEBUG_WINDOW=1` to show the event log window.
 

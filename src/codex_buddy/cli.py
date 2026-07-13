@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import inspect
 import json
 import os
@@ -48,12 +49,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--state-path", type=Path, default=default_state_path())
-    subparsers = parser.add_subparsers(dest="command", metavar="{doctor,repair,uninstall}")
+    subparsers = parser.add_subparsers(dest="command", metavar="{doctor,repair,firmware,uninstall}")
     parser.set_defaults(command="default", device=None, timeout=4.0)
 
     doctor = subparsers.add_parser("doctor", help="Diagnose the current Code Buddy setup")
     doctor.add_argument("--json", action="store_true", help="Print raw machine-readable diagnostics")
     subparsers.add_parser("repair", help="Repair or finish the local Code Buddy setup")
+    firmware = subparsers.add_parser("firmware", help="Install signed StickS3 firmware updates")
+    firmware_commands = firmware.add_subparsers(dest="firmware_command", required=True)
+    firmware_update = firmware_commands.add_parser(
+        "update", help="Push an application firmware image over local Wi-Fi"
+    )
+    firmware_update.add_argument(
+        "--firmware",
+        type=Path,
+        help="application firmware.bin (development override)",
+    )
     uninstall = subparsers.add_parser("uninstall", help="Remove Code Buddy from this Mac")
     uninstall.add_argument("--yes", action="store_true", help="Skip the interactive confirmation")
 
@@ -77,6 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _pair(args: argparse.Namespace) -> int:
+    if await _ota_conflict_active(args.state_path):
+        print("A firmware update is active. Wait for it to finish before pairing.", file=sys.stderr)
+        return 1
     store = BridgeStateStore(args.state_path)
     matches = await BleBuddyTransport.discover(timeout=args.timeout)
     if args.device:
@@ -172,7 +186,9 @@ async def _setup(args: argparse.Namespace, *, repair: bool = False) -> int:
     if sys.platform != "darwin":
         print("Code Buddy currently supports macOS only.", file=sys.stderr)
         return 1
-
+    if await _ota_conflict_active(args.state_path):
+        print("A firmware update is active. Wait for it to finish before repairing.", file=sys.stderr)
+        return 1
     state_path = Path(args.state_path)
     setup_flow.migrate_legacy_state()
     store = BridgeStateStore(state_path)
@@ -184,6 +200,10 @@ async def _setup(args: argparse.Namespace, *, repair: bool = False) -> int:
         print(f"Native BLE helper is unavailable: {exc}", file=sys.stderr)
         print("Run `code-buddy repair` after the helper bundle is available.", file=sys.stderr)
         return 1
+    setup_flow.ensure_firmware_artifact_installed(
+        Path(__file__).resolve().parents[2]
+        / "dist" / "firmware" / "code-buddy-sticks3-app.bin"
+    )
 
     try:
         real_codex_path = setup_flow.resolve_real_codex_path(
@@ -227,6 +247,74 @@ async def _setup(args: argparse.Namespace, *, repair: bool = False) -> int:
     print(f"Codex shim: {runtime.shim_path()}")
     print("Next: open a new shell, then run `codex` normally.")
     return 0
+
+
+def _default_firmware_image() -> Path:
+    installed = runtime.default_firmware_path()
+    if installed.is_file() and not installed.is_symlink():
+        return installed
+    return Path(__file__).resolve().parents[2] / "dist" / "firmware" / "code-buddy-sticks3-app.bin"
+
+
+async def _firmware_update(args: argparse.Namespace) -> int:
+    image = Path(args.firmware).expanduser() if args.firmware else _default_firmware_image()
+    try:
+        await _ensure_agent_running(args.state_path)
+        response = await _agent_request(
+            args.state_path,
+            {"cmd": "ota_begin", "firmware": str(image)},
+        )
+        ota = response["ota"]
+        nonce = str(ota["nonce"])
+        last_phase = ""
+        last_bucket = -1
+        while True:
+            phase = str(ota.get("phase", ""))
+            percent = int(ota.get("percent", 0))
+            bucket = percent // 10
+            if phase != last_phase or bucket != last_bucket:
+                if phase == "await-confirm":
+                    print("Update ready. On Code Buddy, Press A to install or B to cancel.")
+                elif phase in {"download", "readback"}:
+                    label = "Downloading" if phase == "download" else "Verifying flash"
+                    print(f"{label}: {percent}%")
+                elif phase == "restarting":
+                    print("Firmware committed. Waiting for Code Buddy to restart...")
+                elif phase == "boot-health":
+                    print("Code Buddy restarted. Verifying boot health...")
+                elif phase == "preparing":
+                    print("Preparing signed local firmware update...")
+                last_phase, last_bucket = phase, bucket
+            if bool(ota.get("terminal", False)):
+                if bool(ota.get("success", False)):
+                    print(f"Firmware {ota.get('version', '')} is running and healthy.")
+                    return 0
+                error = str(ota.get("error", "update-failed"))
+                print(f"Firmware update failed: {error}.", file=sys.stderr)
+                return 1
+            await asyncio.sleep(0.25)
+            response = await _agent_request(
+                args.state_path,
+                {"cmd": "ota_status", "nonce": nonce},
+            )
+            ota = response["ota"]
+    except KeyboardInterrupt:
+        if "nonce" in locals():
+            with contextlib.suppress(Exception):
+                await _agent_request(
+                    args.state_path,
+                    {"cmd": "ota_cancel", "nonce": nonce},
+                )
+        print("Firmware update cancelled.", file=sys.stderr)
+        return 130
+    except (AgentClientError, KeyError, TypeError, ValueError, OSError) as exc:
+        message = str(exc)
+        if "trust" in message.lower():
+            message += " Run `python3 scripts/generate-ota-trust.py` only for the USB trust bootstrap."
+        elif "firmware image" in message.lower() or "no such file" in message.lower():
+            message += " Build the app image with `scripts/build-firmware-release.sh`."
+        print(f"Cannot start firmware update: {message}", file=sys.stderr)
+        return 1
 
 
 def _default_status(args: argparse.Namespace) -> int:
@@ -486,6 +574,15 @@ def _agent_status(state_path):
         return None
 
 
+async def _ota_conflict_active(state_path) -> bool:
+    try:
+        live = await _agent_request(state_path, {"cmd": "status"})
+    except AgentClientError:
+        return False
+    ota = live.get("state", {}).get("ota")
+    return isinstance(ota, dict) and not bool(ota.get("terminal", False))
+
+
 def _agent_sessions(state_path):
     try:
         return asyncio.run(_agent_request(state_path, {"cmd": "sessions"}))
@@ -505,6 +602,8 @@ def main(argv: list[str] | None = None) -> int:
         return _doctor(args)
     if args.command == "repair":
         return _repair(args)
+    if args.command == "firmware" and args.firmware_command == "update":
+        return asyncio.run(_firmware_update(args))
     if args.command == "uninstall":
         return _uninstall(args)
     if args.command == "pair":

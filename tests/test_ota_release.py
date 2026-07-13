@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from codex_buddy.ota_release import (
+    inspect_esp32s3_application_image,
     build_ota_release,
     canonical_manifest_bytes,
     compare_semantic_versions,
@@ -52,6 +53,62 @@ def _esp32s3_image(payload: bytes = b"firmware-payload") -> bytes:
     header[12:14] = struct.pack("<H", 9)
     header[23] = 0
     return bytes(header) + struct.pack("<II", 0x3C0E0020, len(payload)) + payload + b"\xef"
+
+
+def _versioned_esp32s3_image(version: str = "1.2.3") -> bytes:
+    app_desc = bytearray(256)
+    app_desc[0:4] = struct.pack("<I", 0xABCD5432)
+    encoded = version.encode("ascii")
+    app_desc[16 : 16 + len(encoded)] = encoded
+    app_desc[16 + len(encoded)] = 0
+    app_desc[48:58] = b"CodeBuddy\0"
+    return _esp32s3_image(bytes(app_desc) + b"application-payload")
+
+
+def test_inspect_application_image_reads_exact_embedded_semver(tmp_path):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_versioned_esp32s3_image("0.1.5-beta.1+build.7"))
+
+    inspected = inspect_esp32s3_application_image(image)
+
+    assert inspected.version == "0.1.5-beta.1+build.7"
+    assert inspected.size_bytes == image.stat().st_size
+    assert inspected.sha256 == hashlib.sha256(image.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "contents,error",
+    [
+        (b"\x00" * 4096 + _versioned_esp32s3_image(), "application image"),
+        (_esp32s3_image(), "application descriptor"),
+        (_versioned_esp32s3_image("01.2.3"), "semantic version"),
+    ],
+)
+def test_inspect_application_image_rejects_full_merged_corrupt_or_bad_version(
+    tmp_path, contents, error
+):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(contents)
+
+    with pytest.raises(ValueError, match=error):
+        inspect_esp32s3_application_image(image)
+
+
+def test_inspect_application_image_rejects_symlink_and_permissive_private_file(tmp_path):
+    real = tmp_path / "real.bin"
+    real.write_bytes(_versioned_esp32s3_image())
+    linked = tmp_path / "linked.bin"
+    linked.symlink_to(real)
+
+    with pytest.raises(ValueError, match="regular non-symlink"):
+        inspect_esp32s3_application_image(linked)
+
+    private = tmp_path / "private" / "firmware.bin"
+    private.parent.mkdir()
+    private.write_bytes(_versioned_esp32s3_image())
+    private.chmod(0o666)
+    with pytest.raises(ValueError, match="permissions"):
+        inspect_esp32s3_application_image(private)
 
 
 def test_manifest_has_exact_deterministic_canonical_bytes():

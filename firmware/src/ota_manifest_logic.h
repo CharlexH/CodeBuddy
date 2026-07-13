@@ -49,6 +49,8 @@ struct OtaOfferState {
   char version[OTA_VERSION_MAX_BYTES];
   char manifestUrl[OTA_URL_MAX_BYTES];
   char signatureUrl[OTA_URL_MAX_BYTES];
+  uint32_t generation;
+  char nonce[49];
 };
 
 struct OtaUrlParts {
@@ -514,6 +516,48 @@ inline bool otaOfferAcceptHint(
   output->sizeBytes = sizeBytes;
   output->pending = true;
   output->offerDeadlineMs = now + OTA_OFFER_TTL_MS;
+  return true;
+}
+
+inline bool otaOfferAcceptBoundHint(
+  const char* nonce,
+  uint32_t generation,
+  const char* version,
+  uint32_t sizeBytes,
+  const char* manifestUrl,
+  const char* signatureUrl,
+  const char* currentVersion,
+  uint32_t now,
+  bool connected,
+  bool approvalConflict,
+  bool transferConflict,
+  bool otherConflict,
+  bool externalPower,
+  uint8_t batteryPercent,
+  OtaOfferState* output
+) {
+  if (!nonce || !generation) {
+    otaOfferReset(output);
+    return false;
+  }
+  size_t nonceLength = strnlen(nonce, 49);
+  if (nonceLength < 24 || nonceLength > 48) {
+    otaOfferReset(output);
+    return false;
+  }
+  for (size_t i = 0; i < nonceLength; ++i) {
+    if (!otaTokenChar(nonce[i])) {
+      otaOfferReset(output);
+      return false;
+    }
+  }
+  if (!otaOfferAcceptHint(
+        version, sizeBytes, manifestUrl, signatureUrl, currentVersion, now,
+        connected, approvalConflict, transferConflict, otherConflict,
+        externalPower, batteryPercent, output
+      )) return false;
+  output->generation = generation;
+  memcpy(output->nonce, nonce, nonceLength + 1);
   return true;
 }
 

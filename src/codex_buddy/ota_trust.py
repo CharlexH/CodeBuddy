@@ -358,6 +358,57 @@ def load_ota_trust_pins(trust: OtaTrustPaths) -> OtaTrustPins:
     return pins
 
 
+def require_existing_ota_trust(root: Optional[Path] = None) -> OtaTrustPaths:
+    """Validate already-pinned OTA trust without creating or repairing files."""
+    trust = ota_trust_paths(root)
+    try:
+        pins = load_ota_trust_pins(trust)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "OTA trust is unavailable; run explicit trust bootstrap before firmware update"
+        ) from exc
+    _require_protected_trust_directory(trust.private_dir, "private trust")
+    for path, label, mode in (
+        (trust.local_ca_private_key, "local CA private key", 0o600),
+        (trust.manifest_private_key, "manifest signing private key", 0o600),
+        (trust.local_ca_certificate, "local CA certificate", 0o644),
+        (trust.manifest_public_key, "manifest signing public key", 0o644),
+    ):
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"OTA {label} is missing; run explicit trust bootstrap") from exc
+        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeError(f"OTA {label} must be a regular non-symlink file")
+        if stat.S_IMODE(metadata.st_mode) != mode:
+            raise RuntimeError(f"OTA {label} permissions must be exactly {mode:04o}")
+    try:
+        ca_public_der = _validate_p256_private_key(
+            trust.local_ca_private_key, "local CA private key"
+        )
+        manifest_private_public_der = _validate_p256_private_key(
+            trust.manifest_private_key, "manifest signing private key"
+        )
+        manifest_public_der = _public_key_der(trust.manifest_public_key)
+        certificate_der = _certificate_der(trust.local_ca_certificate)
+    except RuntimeError as exc:
+        raise RuntimeError("OTA trust does not match pinned firmware trust") from exc
+    matches = (
+        _certificate_is_valid_ca(trust.local_ca_certificate, ca_public_der)
+        and hmac.compare_digest(manifest_private_public_der, manifest_public_der)
+        and hmac.compare_digest(
+            hashlib.sha256(certificate_der).hexdigest(), pins.ca_der_sha256
+        )
+        and hmac.compare_digest(
+            hashlib.sha256(manifest_public_der).hexdigest(),
+            pins.manifest_public_der_sha256,
+        )
+    )
+    if not matches:
+        raise RuntimeError("OTA trust does not match pinned firmware trust")
+    return trust
+
+
 def _certificate_is_valid_ca(certificate: Path, expected_public_der: bytes) -> bool:
     if certificate.is_symlink() or not certificate.is_file():
         return False

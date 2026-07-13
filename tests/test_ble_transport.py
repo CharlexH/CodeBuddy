@@ -30,6 +30,7 @@ class _FakeNativeSession:
         self.disconnected = False
         self.writes: list[dict] = []
         self.on_permission = None
+        self.notifications = None
 
     @property
     def is_connected(self) -> bool:
@@ -43,6 +44,11 @@ class _FakeNativeSession:
 
     async def write_json(self, payload: dict) -> None:
         self.writes.append(payload)
+
+    async def recv_json(self, *, timeout: float) -> dict:
+        if self.notifications is None:
+            self.notifications = asyncio.Queue()
+        return await asyncio.wait_for(self.notifications.get(), timeout=timeout)
 
     async def emit_permission(self, request_id: str, decision: str) -> None:
         assert self.on_permission is not None
@@ -107,6 +113,24 @@ def test_ble_transport_native_helper_connect_sends_owner_and_time_sync():
     assert len(fake.writes[1]["time"]) == 2
 
 
+def test_ble_transport_reports_native_disconnect_state():
+    fake = _FakeNativeSession()
+
+    def factory(**_):
+        return fake
+
+    async def exercise():
+        transport = BleBuddyTransport(
+            "device-1", use_native_helper=True, native_session_factory=factory
+        )
+        await transport.connect()
+        assert transport.is_connected is True
+        fake.connected = False
+        assert transport.is_connected is False
+
+    asyncio.run(exercise())
+
+
 def test_native_helper_open_command_launches_without_focus(tmp_path):
     app_path = tmp_path / "CodeBuddyBLEHelper.app"
     session_dir = tmp_path / "session"
@@ -156,6 +180,71 @@ def test_ble_transport_native_helper_forwards_permission_events():
     asyncio.run(fake.emit_permission("req-1", "deny"))
 
     assert approvals == [("req-1", "deny")]
+
+
+def test_native_helper_session_queues_bounded_json_notifications():
+    async def exercise():
+        session = NativeBleHelperSession(
+            device_id="dev-1", device_name="Codex-1234", on_permission=None
+        )
+        await session._handle_event(
+            {
+                "event": "notification",
+                "line": '{"cmd":"ota_status","nonce":"abc","phase":"authenticated"}',
+            }
+        )
+        assert await session.recv_json(timeout=0.1) == {
+            "cmd": "ota_status",
+            "nonce": "abc",
+            "phase": "authenticated",
+        }
+
+        await session._handle_event(
+            {"event": "notification", "line": "{" + "x" * 2048 + "}"}
+        )
+        with pytest.raises(asyncio.TimeoutError):
+            await session.recv_json(timeout=0.01)
+
+    asyncio.run(exercise())
+
+
+def test_ble_transport_sends_and_receives_application_json_without_regressing_permissions():
+    fake = _FakeNativeSession()
+    approvals: list[tuple[str, str]] = []
+
+    async def on_permission(request_id: str, decision: str) -> None:
+        approvals.append((request_id, decision))
+
+    def factory(*, device_id: str, device_name: str, on_permission):
+        fake.on_permission = on_permission
+        return fake
+
+    async def exercise():
+        transport = BleBuddyTransport(
+            "device-1",
+            device_name="Codex-1234",
+            on_permission=on_permission,
+            use_native_helper=True,
+            native_session_factory=factory,
+        )
+        await transport.connect()
+        await transport.send_json({"cmd": "ota_status", "nonce": "abc"})
+        if fake.notifications is None:
+            fake.notifications = asyncio.Queue()
+        await fake.notifications.put(
+            {"cmd": "ota_status", "nonce": "abc", "phase": "running"}
+        )
+        result = await transport.recv_json(timeout=0.1)
+        await fake.emit_permission("req-7", "approve")
+        return result
+
+    assert asyncio.run(exercise()) == {
+        "cmd": "ota_status",
+        "nonce": "abc",
+        "phase": "running",
+    }
+    assert fake.writes[-1] == {"cmd": "ota_status", "nonce": "abc"}
+    assert approvals == [("req-7", "approve")]
 
 
 def test_native_discovery_matches_name_or_service_uuid():

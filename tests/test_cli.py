@@ -314,9 +314,91 @@ def test_help_only_surfaces_public_user_commands(capsys):
     assert "doctor" in output
     assert "repair" in output
     assert "uninstall" in output
+    assert "firmware" in output
     assert "agent" not in output
     assert "service-install" not in output
     assert "sessions" not in output
+
+
+def test_firmware_update_parser_accepts_default_and_explicit_application_image(tmp_path):
+    parser = cli.build_parser()
+    default = parser.parse_args(["firmware", "update"])
+    explicit = parser.parse_args(
+        ["firmware", "update", "--firmware", str(tmp_path / "firmware.bin")]
+    )
+
+    assert default.command == "firmware"
+    assert default.firmware_command == "update"
+    assert default.firmware is None
+    assert explicit.firmware == tmp_path / "firmware.bin"
+
+
+def test_firmware_update_reports_sanitized_agent_progress(monkeypatch, tmp_path, capsys):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(b"not-inspected-by-cli")
+    responses = iter(
+        [
+            {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "preparing", "terminal": False}},
+            {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "await-confirm", "percent": 0, "terminal": False}},
+            {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "readback", "percent": 90, "terminal": False}},
+            {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "running", "percent": 100, "terminal": True, "success": True, "version": "0.1.5"}},
+        ]
+    )
+
+    async def fake_ensure(_):
+        return None
+
+    async def fake_request(_, payload):
+        if payload["cmd"] == "ota_begin":
+            assert payload["firmware"] == str(image)
+        return next(responses)
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(cli, "_ensure_agent_running", fake_ensure)
+    monkeypatch.setattr(cli, "_agent_request", fake_request)
+    monkeypatch.setattr(cli.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(
+        cli._firmware_update(
+            argparse.Namespace(state_path=tmp_path / "state.json", firmware=image)
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "Press A" in output
+    assert "90%" in output
+    assert "0.1.5" in output
+    assert "secret-nonce" not in output
+
+
+def test_firmware_update_sends_cancel_on_keyboard_interrupt(monkeypatch, tmp_path):
+    requests: list[dict] = []
+
+    async def fake_ensure(_):
+        return None
+
+    async def fake_request(_, payload):
+        requests.append(payload)
+        if payload["cmd"] == "ota_begin":
+            return {"ok": True, "ota": {"nonce": "n", "phase": "preparing", "terminal": False}}
+        if payload["cmd"] == "ota_status":
+            raise KeyboardInterrupt
+        return {"ok": True}
+
+    monkeypatch.setattr(cli, "_ensure_agent_running", fake_ensure)
+    monkeypatch.setattr(cli, "_agent_request", fake_request)
+
+    result = asyncio.run(
+        cli._firmware_update(
+            argparse.Namespace(state_path=tmp_path / "state.json", firmware=None)
+        )
+    )
+
+    assert result == 130
+    assert requests[-1] == {"cmd": "ota_cancel", "nonce": "n"}
 
 
 def test_version_flag_reports_project_version(capsys):

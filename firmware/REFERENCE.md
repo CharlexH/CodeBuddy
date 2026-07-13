@@ -134,6 +134,36 @@ generic counter (e.g. bytes written for chunk acks, otherwise 0).
 | `{"cmd":"owner","name":"Felix"}` | sets owner name          | `{"ack":"owner","ok":true}`  |
 | `{"cmd":"unpair"}`               | erase stored BLE bonds   | `{"ack":"unpair","ok":true}` |
 
+## Signed OTA coordination
+
+OTA coordination shares NUS, but firmware bytes never travel over BLE. The
+Mac sends a bounded `ota_offer` only while the user-opened two-minute receive
+window is active. `nonce` is 24-48 URL-safe characters and `generation` is a
+non-zero uint32. The two HTTPS URLs must share the same RFC1918 IP, explicit
+port, and one-time token. They remain untrusted hints until the device verifies
+the detached signature over the exact canonical manifest bytes.
+
+```json
+{"ota_offer":{"nonce":"<24-48 url-safe chars>","generation":1,"version":"0.1.5","sizeBytes":2360000,"manifestUrl":"https://192.168.1.8:4444/<token>/manifest.json","signatureUrl":"https://192.168.1.8:4444/<token>/manifest.sig"}}
+```
+
+Device status notifications have a fixed, secret-free shape. Emit on a phase
+change, an error, or each new 10% progress bucket at most. Do not echo URLs,
+tokens, signatures, Wi-Fi identifiers/passwords, or free-form error detail.
+
+```json
+{"cmd":"ota_status","nonce":"<same nonce>","generation":1,"phase":"download","percent":40,"version":"0.1.5","health":"ordinary","error":""}
+```
+
+Phases are `running`, `offer-received`, `await-confirm`, `accepted`,
+`authenticated`, `download`, `readback`, `boot-committed`, `restarting`,
+`boot-health`, `rejected`, `busy`, `cancelled`, or `error`. The host may send
+`{"cmd":"ota_status","nonce":"...","generation":1}` after reconnect;
+the response binds current embedded version and boot health to that request.
+`ota_cancel` uses the same identity fields and is honored only before the boot
+slot is committed. These BLE messages coordinate UI only; TLS and the signed
+manifest remain the security boundary.
+
 **Status response.** The desktop polls this every couple of seconds to
 populate the Hardware Buddy window's stats panel:
 

@@ -59,6 +59,14 @@ class OtaRelease:
     signature: Path
 
 
+@dataclass(frozen=True)
+class OtaImageInfo:
+    path: Path
+    version: str
+    size_bytes: int
+    sha256: str
+
+
 def _parse_semantic_version(value: str) -> SemanticVersion:
     if not isinstance(value, str) or len(value.encode("utf-8")) > _OTA_VERSION_MAX_BYTES:
         raise ValueError(f"invalid semantic version: {value!r}")
@@ -391,6 +399,54 @@ def _validate_esp32s3_application_image(contents: bytes) -> None:
     minimum_trailer = 1 + (32 if hash_appended else 0)
     if len(contents) - offset < minimum_trailer:
         raise ValueError("firmware must be an ESP32-S3 application image")
+
+
+def _embedded_application_version(contents: bytes) -> str:
+    # ESP-IDF places esp_app_desc_t at the start of the first application
+    # segment. The descriptor begins with ESP_APP_DESC_MAGIC_WORD, followed by
+    # secure/reserved words and a fixed 32-byte NUL-terminated version field.
+    first_segment_data = 24 + 8
+    version_offset = first_segment_data + 16
+    version_end = version_offset + 32
+    if len(contents) < version_end:
+        raise ValueError("firmware application descriptor is missing or truncated")
+    if struct.unpack_from("<I", contents, first_segment_data)[0] != 0xABCD5432:
+        raise ValueError("firmware application descriptor is missing or invalid")
+    raw = contents[version_offset:version_end]
+    nul = raw.find(b"\x00")
+    if nul <= 0:
+        raise ValueError("firmware embedded version is not a semantic version")
+    if any(raw[nul + 1 :]):
+        raise ValueError("firmware embedded version field is not canonical")
+    try:
+        version = raw[:nul].decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError("firmware embedded version is not ASCII") from exc
+    try:
+        _parse_semantic_version(version)
+    except ValueError as exc:
+        raise ValueError("firmware embedded version is not a semantic version") from exc
+    return version
+
+
+def inspect_esp32s3_application_image(image_path: Path) -> OtaImageInfo:
+    image_path = Path(image_path).expanduser()
+    if image_path.is_symlink() or not image_path.is_file():
+        raise ValueError(
+            f"firmware image must be a regular non-symlink file: {image_path}"
+        )
+    mode = stat.S_IMODE(image_path.lstat().st_mode)
+    if mode & 0o022:
+        raise ValueError("firmware image permissions must not be group/world writable")
+    contents = image_path.read_bytes()
+    _validate_esp32s3_application_image(contents)
+    version = _embedded_application_version(contents)
+    return OtaImageInfo(
+        path=image_path,
+        version=version,
+        size_bytes=len(contents),
+        sha256=hashlib.sha256(contents).hexdigest(),
+    )
 
 
 def _validate_signing_pair(

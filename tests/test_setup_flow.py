@@ -75,3 +75,19 @@ def test_is_setup_complete_requires_metadata_and_runtime_files(tmp_path):
 
 def test_is_setup_complete_rejects_missing_required_state():
     assert setup_flow.is_setup_complete(PersistedState()) is False
+
+
+def test_install_firmware_artifact_copies_release_app_image_without_following_symlink(tmp_path):
+    source = tmp_path / "dist" / "code-buddy-sticks3-app.bin"
+    source.parent.mkdir()
+    source.write_bytes(b"app-image")
+    destination = tmp_path / "runtime" / "firmware.bin"
+
+    assert setup_flow.ensure_firmware_artifact_installed(source, destination) == destination
+    assert destination.read_bytes() == b"app-image"
+    assert destination.stat().st_mode & 0o022 == 0
+
+    source.unlink()
+    source.symlink_to(tmp_path / "secret")
+    assert setup_flow.ensure_firmware_artifact_installed(source, destination) == destination
+    assert destination.read_bytes() == b"app-image"

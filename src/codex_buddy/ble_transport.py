@@ -286,6 +286,7 @@ class NativeBleHelperSession:
         self._pump_task: Optional[asyncio.Task[None]] = None
         self._stop_requested = False
         self._shutdown_requested = False
+        self._notifications: Optional[asyncio.Queue[dict[str, object]]] = None
 
     @property
     def is_connected(self) -> bool:
@@ -309,6 +310,13 @@ class NativeBleHelperSession:
         await self.connect()
         line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         await self._send_command("write_json", line=line)
+
+    async def recv_json(self, *, timeout: float) -> dict[str, object]:
+        if timeout <= 0:
+            raise ValueError("BLE notification timeout must be positive")
+        if self._notifications is None:
+            self._notifications = asyncio.Queue(maxsize=64)
+        return await asyncio.wait_for(self._notifications.get(), timeout=timeout)
 
     async def disconnect(self) -> None:
         if self._session_dir is None:
@@ -425,6 +433,24 @@ class NativeBleHelperSession:
             asyncio.create_task(self.on_permission(request_id, decision))
             return
 
+        if event == "notification":
+            line = payload.get("line")
+            if not isinstance(line, str) or len(line.encode("utf-8")) > 1024:
+                return
+            try:
+                notification = json.loads(line)
+            except (json.JSONDecodeError, UnicodeError):
+                return
+            if not isinstance(notification, dict):
+                return
+            if self._notifications is None:
+                self._notifications = asyncio.Queue(maxsize=64)
+            if self._notifications.full():
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    self._notifications.get_nowait()
+            self._notifications.put_nowait(notification)
+            return
+
         if event == "ack":
             seq = int(payload.get("seq", -1))
             future = self._pending.get(seq)
@@ -497,6 +523,13 @@ class BleBuddyTransport:
         self._use_native_helper = _default_use_native_helper() if use_native_helper is None else use_native_helper
         self._native_session_factory = native_session_factory or NativeBleHelperSession
         self._native_session: Optional[NativeBleHelperSession] = None
+        self._notifications: Optional[asyncio.Queue[dict[str, object]]] = None
+
+    @property
+    def is_connected(self) -> bool:
+        if self._use_native_helper:
+            return self._native_session is not None and self._native_session.is_connected
+        return bool(self._client is not None and self._client.is_connected)
 
     @classmethod
     async def discover(cls, *, timeout: float = 4.0) -> list[DiscoveredBuddy]:
@@ -562,6 +595,20 @@ class BleBuddyTransport:
     async def send_time_sync(self) -> None:
         await self._send_json(self._time_sync_payload())
 
+    async def send_json(self, payload: dict[str, object]) -> None:
+        await self._send_json(payload)
+
+    async def recv_json(self, *, timeout: float) -> dict[str, object]:
+        if timeout <= 0:
+            raise ValueError("BLE notification timeout must be positive")
+        if self._use_native_helper:
+            await self.connect()
+            assert self._native_session is not None
+            return await self._native_session.recv_json(timeout=timeout)
+        if self._notifications is None:
+            self._notifications = asyncio.Queue(maxsize=64)
+        return await asyncio.wait_for(self._notifications.get(), timeout=timeout)
+
     def _time_sync_payload(self) -> dict:
         now = datetime.now().astimezone()
         offset = int(now.utcoffset().total_seconds()) if now.utcoffset() else 0
@@ -594,7 +641,16 @@ class BleBuddyTransport:
                 payload = json.loads(line.decode("utf-8"))
             except json.JSONDecodeError:
                 continue
+            if not isinstance(payload, dict):
+                continue
             if payload.get("cmd") == "permission" and self.on_permission:
                 decision = str(payload.get("decision", ""))
                 request_id = str(payload.get("id", ""))
                 asyncio.create_task(self.on_permission(request_id, decision))
+                continue
+            if self._notifications is None:
+                self._notifications = asyncio.Queue(maxsize=64)
+            if self._notifications.full():
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    self._notifications.get_nowait()
+            self._notifications.put_nowait(payload)

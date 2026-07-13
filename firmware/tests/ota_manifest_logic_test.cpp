@@ -264,6 +264,26 @@ static void testMacLocalUrlPolicyAndBinding() {
   expect_true(!otaLocalHttpsUrlValid(oversizedTokenUrl, OTA_URL_FIRMWARE),
               "128-byte token must fail");
 
+  OtaOfferState bound = otaOfferStateInitial();
+  expect_true(otaOfferOpenReceiveWindow(&bound, 900, true) &&
+              otaOfferAcceptBoundHint(
+                "abcdefghijklmnopqrstuvwx", 9,
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 901, true, false, false, false, true, 100, &bound
+              ), "bound offer accepts nonce and generation");
+  expect_true(strcmp(bound.nonce, "abcdefghijklmnopqrstuvwx") == 0 &&
+              bound.generation == 9,
+              "accepted offer retains coordination identity");
+  otaOfferReset(&bound);
+  expect_true(otaOfferOpenReceiveWindow(&bound, 910, true) &&
+              !otaOfferAcceptBoundHint(
+                "short", 9, "1.2.3", 1234, VALID_MANIFEST_URL,
+                VALID_SIGNATURE_URL, "1.2.2", 911, true, false, false,
+                false, true, 100, &bound
+              ), "short coordination nonce is rejected");
+  expect_true(!bound.pending && bound.nonce[0] == 0,
+              "rejected bound offer is scrubbed");
+
   OtaOfferState offer = otaOfferStateInitial();
   expect_true(!otaOfferAcceptHint(
                 "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,

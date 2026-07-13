@@ -1669,6 +1669,7 @@ void loop() {
   otaInputs.batteryKnown = batteryVoltageMv >= 2500 && batteryVoltageMv <= 5000;
   otaInputs.batteryPercent = static_cast<uint8_t>(batteryPercent);
   otaUpdatePoll(&tama.otaOffer, otaInputs);
+  otaStatusPoll(otaUpdateView());
   if (otaUpdateActive()) {
     napping = false;
     wake();

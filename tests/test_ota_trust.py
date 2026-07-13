@@ -13,6 +13,7 @@ from codex_buddy.ota_trust import (
     export_public_trust,
     generate_ota_trust,
     load_ota_trust_pins,
+    require_existing_ota_trust,
 )
 
 
@@ -22,6 +23,32 @@ def _mode(path: Path) -> int:
 
 def _generate_in_process(root: str) -> bytes:
     return generate_ota_trust(Path(root)).manifest_public_key.read_bytes()
+
+
+def test_existing_trust_loader_never_bootstraps_or_rotates(tmp_path):
+    root = tmp_path / "ota"
+    with pytest.raises(RuntimeError, match="explicit trust bootstrap"):
+        require_existing_ota_trust(root)
+    assert not root.exists()
+
+    trust = bootstrap_ota_trust(root)
+    original = {
+        path: path.read_bytes()
+        for path in (
+            trust.local_ca_private_key,
+            trust.local_ca_certificate,
+            trust.manifest_private_key,
+            trust.manifest_public_key,
+            trust.trust_pins,
+        )
+    }
+    assert require_existing_ota_trust(root) == trust
+    assert {path: path.read_bytes() for path in original} == original
+
+    trust.manifest_public_key.write_text("corrupt", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="does not match pinned firmware trust"):
+        require_existing_ota_trust(root)
+    assert trust.manifest_public_key.read_text(encoding="utf-8") == "corrupt"
 
 
 def test_runtime_exposes_protected_ota_paths(monkeypatch, tmp_path):

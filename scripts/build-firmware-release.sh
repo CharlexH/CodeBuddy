@@ -90,6 +90,8 @@ if [[ ${#ESPTOOL_COMMAND[@]} -eq 0 ]]; then
 fi
 
 OUTPUT="$DIST_DIR/code-buddy-sticks3-v${VERSION}-full.bin"
+APP_OUTPUT="$DIST_DIR/code-buddy-sticks3-v${VERSION}-app.bin"
+DEFAULT_APP_OUTPUT="$DIST_DIR/code-buddy-sticks3-app.bin"
 
 for artifact in \
   "$BUILD_DIR/bootloader.bin" \
@@ -102,6 +104,21 @@ do
   fi
 done
 
+cp "$BUILD_DIR/firmware.bin" "$APP_OUTPUT"
+cp "$BUILD_DIR/firmware.bin" "$DEFAULT_APP_OUTPUT"
+PYTHONPATH="$ROOT/src" "$PIO_PYTHON" - <<'PY' "$APP_OUTPUT" "$VERSION"
+import sys
+from pathlib import Path
+from codex_buddy.ota_release import inspect_esp32s3_application_image
+
+image = inspect_esp32s3_application_image(Path(sys.argv[1]))
+if image.version != sys.argv[2]:
+    raise SystemExit(
+        "Embedded firmware version %s does not match release version %s"
+        % (image.version, sys.argv[2])
+    )
+PY
+
 "${ESPTOOL_COMMAND[@]}" --chip esp32s3 merge_bin -o "$OUTPUT" \
   0x0000 "$BUILD_DIR/bootloader.bin" \
   0x8000 "$BUILD_DIR/partitions.bin" \
@@ -109,3 +126,4 @@ done
   0x10000 "$BUILD_DIR/firmware.bin"
 
 echo "$OUTPUT"
+echo "$APP_OUTPUT"

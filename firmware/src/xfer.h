@@ -74,6 +74,14 @@ const char* ownerName();
 #include "stats.h"
 #include "board_compat.h"
 #include "ota_boot_health.h"
+#include "ota_status.h"
+
+inline bool xferCommandConflictsWithOta(const char* cmd) {
+  if (!cmd) return false;
+  return strcmp(cmd, "char_begin") == 0 || strcmp(cmd, "file") == 0 ||
+    strcmp(cmd, "chunk") == 0 || strcmp(cmd, "file_end") == 0 ||
+    strcmp(cmd, "char_end") == 0 || strcmp(cmd, "unpair") == 0;
+}
 
 inline bool xferCommand(JsonDocument& doc) {
   const char* cmd = doc["cmd"];
@@ -107,6 +115,30 @@ inline bool xferCommand(JsonDocument& doc) {
     const char* n = doc["name"];
     if (n) ownerSet(n);
     _xAck("owner", n != nullptr);
+    return true;
+  }
+
+  if (strcmp(cmd, "ota_status") == 0) {
+    const char* nonce = doc["nonce"].is<const char*>()
+      ? doc["nonce"].as<const char*>() : nullptr;
+    bool generationTyped = doc["generation"].is<uint32_t>() &&
+      !doc["generation"].is<bool>();
+    uint32_t generation = generationTyped
+      ? doc["generation"].as<uint32_t>() : 0;
+    if (doc.size() == 3 && nonce && generationTyped)
+      otaStatusReplyRunning(nonce, generation);
+    return true;
+  }
+
+  if (strcmp(cmd, "ota_cancel") == 0) {
+    const char* nonce = doc["nonce"].is<const char*>()
+      ? doc["nonce"].as<const char*>() : nullptr;
+    bool generationTyped = doc["generation"].is<uint32_t>() &&
+      !doc["generation"].is<bool>();
+    uint32_t generation = generationTyped
+      ? doc["generation"].as<uint32_t>() : 0;
+    if (doc.size() == 3 && nonce && generationTyped)
+      otaStatusCancel(nonce, generation);
     return true;
   }
 
