@@ -20,6 +20,8 @@ def test_runtime_paths_are_derived_from_runtime_root():
     assert runtime.shim_path() == root / "bin" / "codex"
     assert runtime.helper_app_path() == root / "helper" / "CodeBuddyBLEHelper.app"
     assert runtime.socket_path() == root / "agent.sock"
+    assert runtime.ota_snapshots_dir() == root / "ota" / "snapshots"
+    assert runtime.ota_sessions_dir() == root / "ota" / "private" / "sessions"
 
 
 def test_zprofile_path_is_default_shell_integration_target():

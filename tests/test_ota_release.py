@@ -20,6 +20,7 @@ from codex_buddy.ota_release import (
     sign_manifest,
     verify_manifest_signature,
     cleanup_ota_release,
+    snapshot_ota_image,
 )
 from codex_buddy.ota_trust import bootstrap_ota_trust, generate_ota_trust
 
@@ -683,6 +684,30 @@ def test_release_refuses_output_inside_private_trust_directory(tmp_path):
             signing_private_key=trust.manifest_private_key,
             expected_signing_public_key=trust.manifest_public_key,
         )
+
+
+def test_release_accepts_immutable_snapshot_outside_private_trust_directory(tmp_path):
+    ota_root = tmp_path / "ota"
+    trust = generate_ota_trust(ota_root)
+    source = tmp_path / "firmware.bin"
+    source.write_bytes(_versioned_esp32s3_image("1.2.3"))
+    snapshot = snapshot_ota_image(source, ota_root / "snapshots")
+    inspected = inspect_esp32s3_application_image(snapshot)
+
+    release = _build_ota_release(
+        image_path=snapshot,
+        output_dir=ota_root / "releases" / "current",
+        version=inspected.version,
+        current_version="1.2.2",
+        chip="esp32s3",
+        artifact_url=ONE_TIME_URL,
+        signing_private_key=trust.manifest_private_key,
+        expected_signing_public_key=trust.manifest_public_key,
+        expected_size_bytes=inspected.size_bytes,
+        expected_sha256=inspected.sha256,
+    )
+
+    assert release.firmware.read_bytes() == source.read_bytes()
 
 
 def test_release_rejects_private_key_and_symlink_as_firmware(tmp_path):

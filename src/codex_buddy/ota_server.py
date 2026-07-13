@@ -760,5 +760,9 @@ class OtaHttpsServer:
         head = [f"HTTP/1.1 {response.status} {phrase}\r\n"]
         head.extend(f"{name}: {value}\r\n" for name, value in response.headers.items())
         head.append("\r\n")
-        writer.write("".join(head).encode("ascii") + response.body)
+        writer.write("".join(head).encode("ascii"))
         await writer.drain()
+        body = memoryview(response.body)
+        for offset in range(0, len(body), 16 * 1024):
+            writer.write(body[offset : offset + 16 * 1024])
+            await writer.drain()

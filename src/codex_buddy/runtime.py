@@ -60,7 +60,7 @@ def ota_sessions_dir() -> Path:
 
 
 def ota_snapshots_dir() -> Path:
-    return ota_private_dir() / "snapshots"
+    return ota_dir() / "snapshots"
 
 
 def firmware_dir() -> Path:

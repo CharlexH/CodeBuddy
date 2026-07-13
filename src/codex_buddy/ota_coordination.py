@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -12,6 +13,9 @@ from .ota_release import OtaImageInfo, build_ota_release
 from .ota_server import OtaHttpsServer
 from .ota_trust import require_existing_ota_trust
 from .ble_transport import NativeBleHelperError
+
+
+_LOG = logging.getLogger(__name__)
 
 
 _DEVICE_ERRORS = {
@@ -340,6 +344,7 @@ class OtaCoordinator:
             session.phase, session.error = "error", "timeout"
             session.terminal = True
         except Exception as exc:
+            _LOG.exception("OTA coordination failed")
             code = str(exc) if str(exc) in _DEVICE_ERRORS else "download"
             session.phase = "cancelled" if code == "cancelled" else "error"
             session.error = code

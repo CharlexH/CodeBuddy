@@ -84,6 +84,37 @@ class _NonReadingWriter:
             await asyncio.Event().wait()
 
 
+class _RecordingWriter:
+    def __init__(self) -> None:
+        self.writes = []
+        self.drains = 0
+
+    def write(self, contents) -> None:
+        self.writes.append(bytes(contents))
+
+    async def drain(self) -> None:
+        self.drains += 1
+
+
+def test_response_body_is_streamed_with_bounded_backpressure():
+    async def exercise():
+        writer = _RecordingWriter()
+        response = ota_server_module.OtaHttpResponse(
+            status=200,
+            headers={"Content-Length": str(40 * 1024)},
+            body=b"x" * (40 * 1024),
+        )
+
+        await OtaHttpsServer._write_response(writer, response)
+
+        assert writer.writes[0].startswith(b"HTTP/1.1 200 OK")
+        assert b"".join(writer.writes[1:]) == response.body
+        assert max(map(len, writer.writes[1:])) <= 16 * 1024
+        assert writer.drains == len(writer.writes)
+
+    asyncio.run(exercise())
+
+
 def test_private_lan_selection_accepts_only_rfc1918_candidates():
     selected = select_private_lan_ipv4(
         discovery=lambda: [

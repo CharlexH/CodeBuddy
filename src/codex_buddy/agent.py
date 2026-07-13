@@ -309,7 +309,7 @@ class BuddyAgent:
         try:
             ota_root = self.state_path.parent / "ota"
             cleanup_stale_ota_runtime(
-                snapshots_root=ota_root / "private" / "snapshots",
+                snapshots_root=ota_root / "snapshots",
                 sessions_root=ota_root / "private" / "sessions",
                 releases_root=ota_root / "releases",
             )
