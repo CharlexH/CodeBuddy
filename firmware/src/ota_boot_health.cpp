@@ -15,6 +15,14 @@
 #error "Code Buddy OTA requires CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE"
 #endif
 
+// Arduino-ESP32 otherwise marks PENDING_VERIFY images valid inside
+// initArduino(), before setup() and our concrete health checks can run. This
+// exact strong C symbol overrides the core's weak default and defers validation
+// to the supervisor armed as setup()'s first executable statement.
+extern "C" bool verifyRollbackLater() {
+  return true;
+}
+
 namespace {
 
 constexpr uint32_t EXPECTED_OTADATA_OFFSET = 0xE000;
