@@ -7,21 +7,28 @@
 inline void usageMeterApplyJson(JsonVariantConst usageVariant, UsageMeterState* state) {
   const bool usageObjectPresent = !usageVariant.isUnbound();
   JsonObjectConst usage = usageVariant.as<JsonObjectConst>();
-  const bool usageObjectHasIntegerPair =
-    usageObjectPresent && !usage.isNull() &&
-    usage["five_hour_remaining"].is<int>() &&
-    usage["seven_day_remaining"].is<int>();
-  const int fiveHourRemaining = usageObjectHasIntegerPair
-    ? usage["five_hour_remaining"].as<int>()
+  const bool isObject = usageObjectPresent && !usage.isNull();
+  JsonVariantConst fiveHour = usage["five_hour_remaining"];
+  JsonVariantConst sevenDay = usage["seven_day_remaining"];
+  const bool hasFiveHour = isObject && !fiveHour.isUnbound();
+  const bool hasSevenDay = isObject && !sevenDay.isUnbound();
+  const bool fiveHourTyped = !hasFiveHour || fiveHour.is<int>();
+  const bool sevenDayTyped = !hasSevenDay || sevenDay.is<int>();
+  const bool usageObjectValid = isObject && (hasFiveHour || hasSevenDay) &&
+    fiveHourTyped && sevenDayTyped;
+  const int fiveHourRemaining = hasFiveHour && fiveHourTyped
+    ? fiveHour.as<int>()
     : 0;
-  const int sevenDayRemaining = usageObjectHasIntegerPair
-    ? usage["seven_day_remaining"].as<int>()
+  const int sevenDayRemaining = hasSevenDay && sevenDayTyped
+    ? sevenDay.as<int>()
     : 0;
   usageMeterApply(
     state,
     usageObjectPresent,
-    usageObjectHasIntegerPair,
+    usageObjectValid,
+    hasFiveHour,
     fiveHourRemaining,
+    hasSevenDay,
     sevenDayRemaining
   );
 }

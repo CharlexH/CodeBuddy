@@ -17,7 +17,8 @@ struct TamaState {
   uint8_t  sessionsWaiting;
   bool     recentlyCompleted;
   uint32_t tokensToday;
-  bool     hasUsageLimits;
+  bool     hasFiveHourUsage;
+  bool     hasSevenDayUsage;
   uint8_t  fiveHourRemaining;
   uint8_t  sevenDayRemaining;
   uint32_t lastUpdated;
@@ -182,12 +183,14 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
   out->tokensToday = doc["tokens_today"] | out->tokensToday;
 
   UsageMeterState usageState = {
-    out->hasUsageLimits,
+    out->hasFiveHourUsage,
+    out->hasSevenDayUsage,
     out->fiveHourRemaining,
     out->sevenDayRemaining,
   };
   usageMeterApplyJson(doc["usage"], &usageState);
-  out->hasUsageLimits = usageState.hasUsageLimits;
+  out->hasFiveHourUsage = usageState.hasFiveHour;
+  out->hasSevenDayUsage = usageState.hasSevenDay;
   out->fiveHourRemaining = usageState.fiveHourRemaining;
   out->sevenDayRemaining = usageState.sevenDayRemaining;
 
@@ -297,12 +300,14 @@ inline void dataPoll(TamaState* out) {
     out->sessionsTotal=0; out->sessionsRunning=0; out->sessionsWaiting=0;
     out->recentlyCompleted=false; out->lastUpdated=now;
     UsageMeterState usageState = {
-      out->hasUsageLimits,
+      out->hasFiveHourUsage,
+      out->hasSevenDayUsage,
       out->fiveHourRemaining,
       out->sevenDayRemaining,
     };
     usageMeterClear(&usageState);
-    out->hasUsageLimits = usageState.hasUsageLimits;
+    out->hasFiveHourUsage = usageState.hasFiveHour;
+    out->hasSevenDayUsage = usageState.hasSevenDay;
     out->fiveHourRemaining = usageState.fiveHourRemaining;
     out->sevenDayRemaining = usageState.sevenDayRemaining;
     utf8CopyTruncate(out->msg, "No Codex connected");

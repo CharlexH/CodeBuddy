@@ -475,6 +475,43 @@ def test_monitor_reads_rate_limits_merges_sparse_updates_and_exposes_only_displa
     assert socket_closed is True
 
 
+def test_monitor_publishes_the_current_week_only_codex_bucket_shape():
+    seen: list[object] = []
+
+    async def exercise() -> None:
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=seen.append,
+            now=lambda: 100.0,
+        )
+        monitor._read_request_ids.add(7)
+        await monitor._handle_message(
+            json.dumps(
+                {
+                    "id": 7,
+                    "result": {
+                        "rateLimitsByLimitId": {
+                            "codex": {
+                                "primary": {
+                                    "usedPercent": 1,
+                                    "windowDurationMins": 10_080,
+                                    "resetsAt": 1_700_100_000,
+                                },
+                                "secondary": None,
+                            },
+                            "codex_bengalfox": _rate_limits(80, 70)["rateLimits"],
+                        }
+                    },
+                }
+            )
+        )
+        await monitor._stop_expiry_task()
+
+    asyncio.run(exercise())
+
+    assert seen == [UsageDisplay(seven_day_remaining=99)]
+
+
 def test_monitor_cleanup_cancels_a_waiting_receive_loop_and_never_uses_auth_arguments():
     process = _FakeProcess()
     launch_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []

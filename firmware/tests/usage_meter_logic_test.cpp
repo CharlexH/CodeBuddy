@@ -30,30 +30,37 @@ static void expectMeterRect(
 int main() {
   UsageMeterState usage = {};
 
-  expect_true(usageMeterValidPair(0, 100), "0 and 100 percent should be valid");
-  expect_true(usageMeterValidPair(72, 91), "in-range percentage pair should be valid");
-  expect_true(!usageMeterValidPair(-1, 91), "negative five-hour value should be invalid");
-  expect_true(!usageMeterValidPair(72, 101), "weekly value above 100 should be invalid");
+  expect_true(usageMeterValidPercent(0), "zero percent should be valid");
+  expect_true(usageMeterValidPercent(100), "one hundred percent should be valid");
+  expect_true(!usageMeterValidPercent(-1), "negative values should be invalid");
+  expect_true(!usageMeterValidPercent(101), "values above 100 should be invalid");
 
-  usageMeterApply(&usage, true, true, 72, 91);
-  expect_true(usage.hasUsageLimits, "complete valid object should enable the meter");
+  usageMeterApply(&usage, true, true, true, 72, true, 91);
+  expect_true(usage.hasFiveHour && usage.hasSevenDay, "complete valid object should enable both windows");
   expect_true(usage.fiveHourRemaining == 72, "complete valid object should retain five-hour value");
   expect_true(usage.sevenDayRemaining == 91, "complete valid object should retain weekly value");
 
-  usageMeterApply(&usage, false, false, 0, 0);
-  expect_true(usage.hasUsageLimits, "absent usage object should preserve prior value");
+  usageMeterApply(&usage, false, false, false, 0, false, 0);
+  expect_true(usage.hasFiveHour && usage.hasSevenDay, "absent usage object should preserve prior value");
   expect_true(usage.fiveHourRemaining == 72, "absent usage object should not overwrite five-hour value");
   expect_true(usage.sevenDayRemaining == 91, "absent usage object should not overwrite weekly value");
 
-  usageMeterApply(&usage, true, false, 0, 0);
-  expect_true(!usage.hasUsageLimits, "malformed present object must clear the whole meter");
+  usageMeterApply(&usage, true, true, false, 0, true, 99);
+  expect_true(!usage.hasFiveHour && usage.hasSevenDay, "weekly-only object should retain only the weekly window");
+  expect_true(usage.sevenDayRemaining == 99, "weekly-only object should retain its value");
 
-  usageMeterApply(&usage, true, true, 72, 101);
-  expect_true(!usage.hasUsageLimits, "out-of-range present object must clear the whole meter");
+  usageMeterApply(&usage, true, true, true, 72, false, 0);
+  expect_true(usage.hasFiveHour && !usage.hasSevenDay, "five-hour-only object should retain only that window");
 
-  usageMeterApply(&usage, true, true, 72, 91);
+  usageMeterApply(&usage, true, false, false, 0, false, 0);
+  expect_true(!usage.hasFiveHour && !usage.hasSevenDay, "malformed present object must clear the whole meter");
+
+  usageMeterApply(&usage, true, true, true, 72, true, 101);
+  expect_true(!usage.hasFiveHour && !usage.hasSevenDay, "out-of-range known value must clear the whole meter");
+
+  usageMeterApply(&usage, true, true, true, 72, true, 91);
   usageMeterClear(&usage);
-  expect_true(!usage.hasUsageLimits, "disconnect should clear the meter instead of showing stale limits");
+  expect_true(!usage.hasFiveHour && !usage.hasSevenDay, "disconnect should clear the meter instead of showing stale limits");
   expect_true(usage.fiveHourRemaining == 0, "disconnect should clear stale five-hour value");
   expect_true(usage.sevenDayRemaining == 0, "disconnect should clear stale weekly value");
 
@@ -62,7 +69,7 @@ int main() {
   expect_true(usageMeterFillWidth(135, 72) == 97, "fractional pixel widths should truncate deterministically");
   expect_true(usageMeterFillWidth(135, 99) == 133, "fractional pixel widths should use integer math");
 
-  UsageMeterState meterUsage = {true, 72, 91};
+  UsageMeterState meterUsage = {true, true, 72, 91};
   UsageMeterRenderPlan meterPlan = usageMeterRenderPlan(meterUsage, 135, 240);
   expect_true(meterPlan.count == 4, "valid usage should compose two base and two fill operations");
   expectMeterRect(
@@ -110,7 +117,7 @@ int main() {
     "surfaces shorter than the sixteen-pixel footprint should not render a usage meter"
   );
 
-  UsageMeterState noMeterUsage = {false, 72, 91};
+  UsageMeterState noMeterUsage = {false, false, 72, 91};
   expect_true(
     usageMeterRenderPlan(noMeterUsage, 135, 240).count == 0,
     "invalid or unavailable usage should yield no drawing operations"
@@ -126,6 +133,38 @@ int main() {
   expect_true(
     usageMeterFooterInset(true, noMeterUsage) == 0,
     "invalid usage should not move the approval footer"
+  );
+
+  UsageMeterState weekOnlyUsage = {false, true, 0, 99};
+  UsageMeterRenderPlan weekOnlyPortrait = usageMeterRenderPlan(weekOnlyUsage, 135, 240);
+  expect_true(weekOnlyPortrait.count == 2, "weekly-only usage should compose one base and one fill");
+  expectMeterRect(
+    weekOnlyPortrait.rects[0], 2, 232, 131, 6, USAGE_METER_CONSUMED,
+    "weekly-only portrait bar should sit two pixels above the bottom"
+  );
+  expectMeterRect(
+    weekOnlyPortrait.rects[1], 2, 232, 129, 6, USAGE_METER_SEVEN_DAY,
+    "weekly-only portrait fill should truncate 131 times 99 percent to 129 pixels"
+  );
+  UsageMeterRenderPlan weekOnlyLandscape = usageMeterRenderPlan(weekOnlyUsage, 240, 135);
+  expectMeterRect(
+    weekOnlyLandscape.rects[0], 2, 127, 236, 6, USAGE_METER_CONSUMED,
+    "weekly-only landscape bar should sit two pixels above the bottom"
+  );
+  expectMeterRect(
+    weekOnlyLandscape.rects[1], 2, 127, 233, 6, USAGE_METER_SEVEN_DAY,
+    "weekly-only landscape fill should truncate 236 times 99 percent to 233 pixels"
+  );
+  expect_true(usageMeterFooterInset(true, weekOnlyUsage) == 8,
+              "one visible window should reserve an eight-pixel footer footprint");
+  expect_true(usageMeterRenderPlan(weekOnlyUsage, 135, 7).count == 0,
+              "a single meter needs the complete eight-pixel footprint");
+
+  UsageMeterState fiveOnlyUsage = {true, false, 99, 0};
+  UsageMeterRenderPlan fiveOnlyPlan = usageMeterRenderPlan(fiveOnlyUsage, 135, 240);
+  expectMeterRect(
+    fiveOnlyPlan.rects[1], 2, 232, 129, 6, USAGE_METER_FIVE_HOUR,
+    "five-hour-only usage should use the bright-green single bar"
   );
 
   UsageMeterRenderState portraitState = {};
@@ -152,20 +191,36 @@ int main() {
               "a hidden portrait meter should not repeatedly clear the sprite");
 
   UsageMeterRenderState landscapeState = {};
-  UsageMeterRenderDecision firstVisible = usageMeterRenderTransition(&landscapeState, true);
+  UsageMeterRenderDecision firstVisible = usageMeterRenderTransition(
+    &landscapeState, true, true, true, 72, 91
+  );
   expect_true(firstVisible.draw && !firstVisible.clear,
               "a newly visible meter should draw without clearing its background");
 
-  UsageMeterRenderDecision stillVisible = usageMeterRenderTransition(&landscapeState, true);
+  UsageMeterRenderDecision stillVisible = usageMeterRenderTransition(
+    &landscapeState, true, true, true, 72, 91
+  );
   expect_true(!stillVisible.draw && !stillVisible.clear,
               "an unchanged visible direct meter should not redraw every frame");
 
-  UsageMeterState changedMeterUsage = {true, 71, 91};
+  UsageMeterState changedMeterUsage = {true, true, 71, 91};
   UsageMeterRenderFrame changedVisible = usageMeterPrepareFrame(
     &landscapeState, true, changedMeterUsage, 240, 135
   );
   expect_true(changedVisible.decision.draw && !changedVisible.decision.clear,
               "a changed direct meter limit should redraw the strip");
+
+  UsageMeterRenderFrame changedToSingle = usageMeterPrepareFrame(
+    &landscapeState, true, weekOnlyUsage, 240, 135
+  );
+  expect_true(changedToSingle.decision.draw && changedToSingle.decision.clear,
+              "dual-to-single transition should clear the old sixteen-pixel strip and repaint once");
+
+  UsageMeterRenderFrame stableSingle = usageMeterPrepareFrame(
+    &landscapeState, true, weekOnlyUsage, 240, 135
+  );
+  expect_true(!stableSingle.decision.draw && !stableSingle.decision.clear,
+              "an unchanged single meter should not redraw or clear repeatedly");
 
   UsageMeterRenderDecision hidden = usageMeterRenderTransition(&landscapeState, false);
   expect_true(!hidden.draw && hidden.clear,
@@ -175,7 +230,7 @@ int main() {
   expect_true(!stillHidden.draw && !stillHidden.clear,
               "an already-cleared meter should not repeatedly erase the landscape surface");
 
-  usageMeterRenderTransition(&landscapeState, true);
+  usageMeterRenderTransition(&landscapeState, true, true, true, 72, 91);
   usageMeterRenderReset(&landscapeState);
   UsageMeterRenderDecision hiddenAfterLandscapeReset = usageMeterRenderTransition(&landscapeState, false);
   expect_true(!hiddenAfterLandscapeReset.draw && !hiddenAfterLandscapeReset.clear,

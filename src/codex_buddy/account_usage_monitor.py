@@ -239,7 +239,7 @@ class AccountUsageMonitor:
         await self._publish_display()
 
     async def _publish_display(self) -> None:
-        display = self._limits.display_pair(now=self._now())
+        display = self._limits.display_windows(now=self._now())
         self._schedule_expiry(display)
         await self._notify_usage(display)
 
@@ -266,7 +266,7 @@ class AccountUsageMonitor:
         await self._expiry_sleep(delay)
         if self._stopping or self._limits.observed_at != observed_at:
             return
-        if self._limits.display_pair(now=self._now()) is None:
+        if self._limits.display_windows(now=self._now()) is None:
             await self._notify_usage(None)
 
     async def _stop_expiry_task(self) -> None:

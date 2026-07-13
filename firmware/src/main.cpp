@@ -171,7 +171,8 @@ static UsageMeterRenderFrame usageMeterFrameForDisplay(
   bool forceDraw = false
 ) {
   UsageMeterState usage = {
-    tama.hasUsageLimits,
+    tama.hasFiveHourUsage,
+    tama.hasSevenDayUsage,
     tama.fiveHourRemaining,
     tama.sevenDayRemaining,
   };
@@ -193,7 +194,8 @@ static void clearUsageMeter(Canvas& canvas, uint16_t width, uint16_t height, uin
 
 static uint8_t usageMeterBottomInset() {
   UsageMeterState usage = {
-    tama.hasUsageLimits,
+    tama.hasFiveHourUsage,
+    tama.hasSevenDayUsage,
     tama.fiveHourRemaining,
     tama.sevenDayRemaining,
   };

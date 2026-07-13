@@ -49,10 +49,12 @@ class BuddySnapshot:
         if self.prompt is not None:
             payload["prompt"] = dict(self.prompt)
         if self.usage is not None:
-            payload["usage"] = {
-                "five_hour_remaining": self.usage.five_hour_remaining,
-                "seven_day_remaining": self.usage.seven_day_remaining,
-            }
+            usage = {}
+            if self.usage.five_hour_remaining is not None:
+                usage["five_hour_remaining"] = self.usage.five_hour_remaining
+            if self.usage.seven_day_remaining is not None:
+                usage["seven_day_remaining"] = self.usage.seven_day_remaining
+            payload["usage"] = usage
         elif self.usage_is_known:
             payload["usage"] = None
 

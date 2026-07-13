@@ -181,6 +181,15 @@ def test_snapshot_usage_is_optional_and_keeps_the_compact_ble_shape():
         "seven_day_remaining": 91,
     }
 
+    snapshot_with_week_only = replace(
+        snapshot_with_usage,
+        usage=UsageDisplay(seven_day_remaining=99),
+    )
+
+    assert snapshot_with_week_only.as_ble_payload()["usage"] == {
+        "seven_day_remaining": 99,
+    }
+
 
 def test_snapshot_emits_an_explicit_usage_clear_after_a_known_limit_expires():
     expired_snapshot = BuddySnapshot(
