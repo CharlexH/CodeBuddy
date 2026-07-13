@@ -177,6 +177,9 @@ class OtaCoordinator:
                 }
             ):
                 self._finish_cancel_request(session, status.cancel_applied)
+            if status.phase == "cancelled" and not status.cancel_applied:
+                await self._probe(session)
+                continue
             return status
 
     async def _probe(self, session: OtaAgentSession) -> None:
