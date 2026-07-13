@@ -498,6 +498,96 @@ enum OtaUpdatePhase : uint8_t {
   OTA_PHASE_ERROR,
 };
 
+enum OtaUpdateFailure : uint8_t {
+  OTA_UPDATE_FAILURE_NONE = 0,
+  OTA_UPDATE_FAILURE_WIFI,
+  OTA_UPDATE_FAILURE_TRUST,
+  OTA_UPDATE_FAILURE_MANIFEST,
+  OTA_UPDATE_FAILURE_VERSION,
+  OTA_UPDATE_FAILURE_DOWNLOAD,
+  OTA_UPDATE_FAILURE_HASH,
+  OTA_UPDATE_FAILURE_POWER,
+  OTA_UPDATE_FAILURE_TIMEOUT,
+  OTA_UPDATE_FAILURE_ROLLBACK,
+  OTA_UPDATE_FAILURE_CONFLICT,
+  OTA_UPDATE_FAILURE_RECONNECT,
+};
+
+inline OtaUpdateFailure otaUpdateFailureForGate(
+  OtaUpdateGate gate,
+  bool deadlineExpired
+) {
+  if (deadlineExpired) return OTA_UPDATE_FAILURE_TIMEOUT;
+  switch (gate) {
+    case OTA_GATE_WIFI: return OTA_UPDATE_FAILURE_WIFI;
+    case OTA_GATE_TIME: return OTA_UPDATE_FAILURE_TRUST;
+    case OTA_GATE_POWER: return OTA_UPDATE_FAILURE_POWER;
+    case OTA_GATE_CONFLICT: return OTA_UPDATE_FAILURE_CONFLICT;
+    case OTA_GATE_NO_OFFER:
+    case OTA_GATE_DISCONNECTED:
+    case OTA_GATE_STALE: return OTA_UPDATE_FAILURE_RECONNECT;
+    case OTA_GATE_READY: return OTA_UPDATE_FAILURE_NONE;
+  }
+  return OTA_UPDATE_FAILURE_DOWNLOAD;
+}
+
+inline OtaUpdateFailure otaUpdateFailureForManifest(OtaManifestResult result) {
+  switch (result) {
+    case OTA_MANIFEST_OK: return OTA_UPDATE_FAILURE_NONE;
+    case OTA_MANIFEST_SIGNATURE_INVALID: return OTA_UPDATE_FAILURE_TRUST;
+    case OTA_MANIFEST_VERSION_INVALID:
+    case OTA_MANIFEST_NOT_NEWER: return OTA_UPDATE_FAILURE_VERSION;
+    default: return OTA_UPDATE_FAILURE_MANIFEST;
+  }
+}
+
+inline OtaUpdateFailure otaUpdateFailureForEvent(OtaUpdateEvent event) {
+  switch (event) {
+    case OTA_EVENT_OPEN_MANIFEST:
+    case OTA_EVENT_OPEN_SIGNATURE:
+    case OTA_EVENT_OPEN_FIRMWARE: return OTA_UPDATE_FAILURE_TRUST;
+    case OTA_EVENT_READ_MANIFEST:
+    case OTA_EVENT_READ_SIGNATURE: return OTA_UPDATE_FAILURE_MANIFEST;
+    case OTA_EVENT_AUTHENTICATE: return OTA_UPDATE_FAILURE_TRUST;
+    case OTA_EVENT_DIGEST_MATCH: return OTA_UPDATE_FAILURE_HASH;
+    case OTA_EVENT_SELECT:
+    case OTA_EVENT_SET_BOOT: return OTA_UPDATE_FAILURE_ROLLBACK;
+    case OTA_EVENT_DOWNLOAD:
+    case OTA_EVENT_WRITE:
+    case OTA_EVENT_FINISH_DOWNLOAD:
+    case OTA_EVENT_BEGIN:
+    case OTA_EVENT_END:
+    case OTA_EVENT_READBACK:
+    case OTA_EVENT_FINAL_GATE: return OTA_UPDATE_FAILURE_DOWNLOAD;
+    case OTA_EVENT_ABORT:
+    case OTA_EVENT_RESTART:
+    case OTA_EVENT_RESTART_FALLBACK: return OTA_UPDATE_FAILURE_DOWNLOAD;
+  }
+  return OTA_UPDATE_FAILURE_DOWNLOAD;
+}
+
+inline OtaUpdateFailure otaUpdateFailureForPhase(OtaUpdatePhase phase) {
+  switch (phase) {
+    case OTA_PHASE_OPEN_MANIFEST: return otaUpdateFailureForEvent(OTA_EVENT_OPEN_MANIFEST);
+    case OTA_PHASE_READ_MANIFEST: return otaUpdateFailureForEvent(OTA_EVENT_READ_MANIFEST);
+    case OTA_PHASE_OPEN_SIGNATURE: return otaUpdateFailureForEvent(OTA_EVENT_OPEN_SIGNATURE);
+    case OTA_PHASE_READ_SIGNATURE: return otaUpdateFailureForEvent(OTA_EVENT_READ_SIGNATURE);
+    case OTA_PHASE_AUTHENTICATE: return otaUpdateFailureForEvent(OTA_EVENT_AUTHENTICATE);
+    case OTA_PHASE_SELECT: return otaUpdateFailureForEvent(OTA_EVENT_SELECT);
+    case OTA_PHASE_OPEN_FIRMWARE: return otaUpdateFailureForEvent(OTA_EVENT_OPEN_FIRMWARE);
+    case OTA_PHASE_BEGIN: return otaUpdateFailureForEvent(OTA_EVENT_BEGIN);
+    case OTA_PHASE_DOWNLOAD: return otaUpdateFailureForEvent(OTA_EVENT_DOWNLOAD);
+    case OTA_PHASE_WRITE: return otaUpdateFailureForEvent(OTA_EVENT_WRITE);
+    case OTA_PHASE_FINISH_DOWNLOAD: return otaUpdateFailureForEvent(OTA_EVENT_FINISH_DOWNLOAD);
+    case OTA_PHASE_END: return otaUpdateFailureForEvent(OTA_EVENT_END);
+    case OTA_PHASE_READBACK: return otaUpdateFailureForEvent(OTA_EVENT_READBACK);
+    case OTA_PHASE_DIGEST: return otaUpdateFailureForEvent(OTA_EVENT_DIGEST_MATCH);
+    case OTA_PHASE_FINAL_GATE: return otaUpdateFailureForEvent(OTA_EVENT_FINAL_GATE);
+    case OTA_PHASE_SET_BOOT: return otaUpdateFailureForEvent(OTA_EVENT_SET_BOOT);
+    default: return OTA_UPDATE_FAILURE_DOWNLOAD;
+  }
+}
+
 inline uint8_t otaUpdateOverallProgress(
   OtaUpdatePhase phase,
   uint64_t receivedBytes,
@@ -527,22 +617,25 @@ enum OtaUpdateActionStatus : uint8_t {
 struct OtaUpdateActionResult {
   OtaUpdateActionStatus status;
   uint32_t bytes;
+  OtaUpdateFailure failure;
 };
 
-inline OtaUpdateActionResult otaActionFailure() {
-  return {OTA_ACTION_FAILURE, 0};
+inline OtaUpdateActionResult otaActionFailure(
+  OtaUpdateFailure failure = OTA_UPDATE_FAILURE_NONE
+) {
+  return {OTA_ACTION_FAILURE, 0, failure};
 }
 
 inline OtaUpdateActionResult otaActionPending() {
-  return {OTA_ACTION_PENDING, 0};
+  return {OTA_ACTION_PENDING, 0, OTA_UPDATE_FAILURE_NONE};
 }
 
 inline OtaUpdateActionResult otaActionProgress(uint32_t bytes) {
-  return {OTA_ACTION_PROGRESS, bytes};
+  return {OTA_ACTION_PROGRESS, bytes, OTA_UPDATE_FAILURE_NONE};
 }
 
 inline OtaUpdateActionResult otaActionComplete(uint32_t bytes = 0) {
-  return {OTA_ACTION_COMPLETE, bytes};
+  return {OTA_ACTION_COMPLETE, bytes, OTA_UPDATE_FAILURE_NONE};
 }
 
 using OtaUpdateAction = OtaUpdateActionResult (*)(
@@ -566,6 +659,7 @@ struct OtaUpdateMachine {
   uint8_t restartAttempts;
   uint32_t nextRestartAttemptMs;
   uint32_t readyDeadlineMs;
+  OtaUpdateFailure failure;
 };
 
 inline OtaUpdateMachine otaUpdateMachineInitial() {
@@ -579,6 +673,14 @@ inline bool otaUpdateTerminal(const OtaUpdateMachine& machine) {
   if (machine.bootCommitted) return false;
   return machine.phase == OTA_PHASE_RESTARTING ||
     machine.phase == OTA_PHASE_CANCELLED || machine.phase == OTA_PHASE_ERROR;
+}
+
+inline bool otaUpdateCancellationAllowed(
+  bool active,
+  const OtaUpdateMachine& machine
+) {
+  return active && !machine.bootCommitted && !otaUpdateTerminal(machine) &&
+    machine.phase < OTA_PHASE_SET_BOOT;
 }
 
 inline OtaUpdateActionResult otaUpdateAct(
@@ -603,14 +705,23 @@ inline void otaUpdateAbortHandle(OtaUpdateMachine* machine) {
   otaUpdateAct(machine, OTA_EVENT_ABORT);
 }
 
-inline void otaUpdateFail(OtaUpdateMachine* machine) {
+inline void otaUpdateFail(
+  OtaUpdateMachine* machine,
+  OtaUpdateFailure failure = OTA_UPDATE_FAILURE_NONE
+) {
   if (!machine || machine->bootCommitted) return;
+  machine->failure = failure == OTA_UPDATE_FAILURE_NONE
+    ? otaUpdateFailureForPhase(machine->phase) : failure;
   otaUpdateAbortHandle(machine);
   machine->phase = OTA_PHASE_ERROR;
 }
 
-inline void otaUpdateCancelMachine(OtaUpdateMachine* machine) {
+inline void otaUpdateCancelMachine(
+  OtaUpdateMachine* machine,
+  OtaUpdateFailure failure = OTA_UPDATE_FAILURE_NONE
+) {
   if (!machine || machine->bootCommitted) return;
+  machine->failure = failure;
   otaUpdateAbortHandle(machine);
   machine->phase = OTA_PHASE_CANCELLED;
 }
@@ -621,11 +732,13 @@ inline void otaUpdateScrubMachine(OtaUpdateMachine* machine) {
   bool bootCommitted = machine->bootCommitted;
   uint8_t restartAttempts = machine->restartAttempts;
   uint32_t nextRestartAttemptMs = machine->nextRestartAttemptMs;
+  OtaUpdateFailure failure = machine->failure;
   *machine = {};
   machine->phase = phase;
   machine->bootCommitted = bootCommitted;
   machine->restartAttempts = restartAttempts;
   machine->nextRestartAttemptMs = nextRestartAttemptMs;
+  machine->failure = failure;
 }
 
 inline bool otaUpdateReadResultValid(
@@ -655,7 +768,7 @@ inline void otaUpdateStep(
     machine->nextRestartAttemptMs = inputs.nowMs + OTA_UPDATE_RESTART_RETRY_MS;
     return;
   }
-  if (physicalCancel) {
+  if (physicalCancel && otaUpdateCancellationAllowed(true, *machine)) {
     otaUpdateCancelMachine(machine);
     return;
   }
@@ -663,11 +776,11 @@ inline void otaUpdateStep(
   if (machine->phase == OTA_PHASE_CONFIRM) {
     OtaUpdateGate gate = otaUpdateGate(inputs, true);
     if (gate == OTA_GATE_CONFLICT) {
-      otaUpdateCancelMachine(machine);
+      otaUpdateCancelMachine(machine, OTA_UPDATE_FAILURE_CONFLICT);
       return;
     }
     if (gate != OTA_GATE_READY && gate != OTA_GATE_WIFI && gate != OTA_GATE_TIME) {
-      otaUpdateFail(machine);
+      otaUpdateFail(machine, otaUpdateFailureForGate(gate, false));
       return;
     }
     if (!physicalConfirm) return;
@@ -683,19 +796,20 @@ inline void otaUpdateStep(
     if (gate == OTA_GATE_READY) {
       machine->phase = OTA_PHASE_OPEN_MANIFEST;
     } else if (gate == OTA_GATE_CONFLICT) {
-      otaUpdateCancelMachine(machine);
+      otaUpdateCancelMachine(machine, OTA_UPDATE_FAILURE_CONFLICT);
     } else if ((gate != OTA_GATE_WIFI && gate != OTA_GATE_TIME) ||
                otaDeadlineExpired(inputs.nowMs, machine->readyDeadlineMs)) {
-      otaUpdateFail(machine);
+      bool expired = otaDeadlineExpired(inputs.nowMs, machine->readyDeadlineMs);
+      otaUpdateFail(machine, otaUpdateFailureForGate(gate, expired));
     }
     return;
   }
   if (gate == OTA_GATE_CONFLICT) {
-    otaUpdateCancelMachine(machine);
+    otaUpdateCancelMachine(machine, OTA_UPDATE_FAILURE_CONFLICT);
     return;
   }
   if (gate != OTA_GATE_READY) {
-    otaUpdateFail(machine);
+    otaUpdateFail(machine, otaUpdateFailureForGate(gate, false));
     return;
   }
 
@@ -704,7 +818,7 @@ inline void otaUpdateStep(
     case OTA_PHASE_OPEN_MANIFEST:
       result = otaUpdateAct(machine, OTA_EVENT_OPEN_MANIFEST);
       if (result.status == OTA_ACTION_PENDING) break;
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->phase = OTA_PHASE_READ_MANIFEST;
       break;
     case OTA_PHASE_READ_MANIFEST:
@@ -713,14 +827,14 @@ inline void otaUpdateStep(
       );
       if (result.status == OTA_ACTION_PENDING) break;
       if (!otaUpdateReadResultValid(result, OTA_UPDATE_SMALL_CHUNK_BYTES))
-        return otaUpdateFail(machine);
+        return otaUpdateFail(machine, result.failure);
       if (result.status == OTA_ACTION_COMPLETE)
         machine->phase = OTA_PHASE_OPEN_SIGNATURE;
       break;
     case OTA_PHASE_OPEN_SIGNATURE:
       result = otaUpdateAct(machine, OTA_EVENT_OPEN_SIGNATURE);
       if (result.status == OTA_ACTION_PENDING) break;
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->phase = OTA_PHASE_READ_SIGNATURE;
       break;
     case OTA_PHASE_READ_SIGNATURE:
@@ -729,32 +843,32 @@ inline void otaUpdateStep(
       );
       if (result.status == OTA_ACTION_PENDING) break;
       if (!otaUpdateReadResultValid(result, OTA_UPDATE_SMALL_CHUNK_BYTES))
-        return otaUpdateFail(machine);
+        return otaUpdateFail(machine, result.failure);
       if (result.status == OTA_ACTION_COMPLETE)
         machine->phase = OTA_PHASE_AUTHENTICATE;
       break;
     case OTA_PHASE_AUTHENTICATE:
       result = otaUpdateAct(machine, OTA_EVENT_AUTHENTICATE);
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->authenticated = true;
       machine->phase = OTA_PHASE_SELECT;
       break;
     case OTA_PHASE_SELECT:
       result = otaUpdateAct(machine, OTA_EVENT_SELECT);
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->phase = OTA_PHASE_OPEN_FIRMWARE;
       break;
     case OTA_PHASE_OPEN_FIRMWARE:
       result = otaUpdateAct(machine, OTA_EVENT_OPEN_FIRMWARE);
       if (result.status == OTA_ACTION_PENDING) break;
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->phase = OTA_PHASE_BEGIN;
       break;
     case OTA_PHASE_BEGIN:
       result = otaUpdateAct(
         machine, OTA_EVENT_BEGIN, 0, static_cast<uint32_t>(machine->imageSize)
       );
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->handleValid = true;
       machine->phase = OTA_PHASE_DOWNLOAD;
       break;
@@ -767,11 +881,12 @@ inline void otaUpdateStep(
         machine, OTA_EVENT_DOWNLOAD, machine->receivedBytes, amount
       );
       if (result.status == OTA_ACTION_PENDING) break;
-      if (!otaUpdateReadResultValid(result, amount)) return otaUpdateFail(machine);
+      if (!otaUpdateReadResultValid(result, amount))
+        return otaUpdateFail(machine, result.failure);
       uint64_t next = machine->receivedBytes + result.bytes;
       bool final = next == machine->imageSize;
       if ((result.status == OTA_ACTION_COMPLETE) != final)
-        return otaUpdateFail(machine);
+        return otaUpdateFail(machine, result.failure);
       machine->pendingChunkBytes = result.bytes;
       machine->pendingChunkFinal = final;
       machine->phase = OTA_PHASE_WRITE;
@@ -783,7 +898,7 @@ inline void otaUpdateStep(
         machine, OTA_EVENT_WRITE, machine->receivedBytes,
         machine->pendingChunkBytes
       );
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->receivedBytes += machine->pendingChunkBytes;
       machine->pendingChunkBytes = 0;
       machine->phase = machine->pendingChunkFinal
@@ -792,14 +907,14 @@ inline void otaUpdateStep(
       break;
     case OTA_PHASE_FINISH_DOWNLOAD:
       result = otaUpdateAct(machine, OTA_EVENT_FINISH_DOWNLOAD);
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->phase = OTA_PHASE_END;
       break;
     case OTA_PHASE_END:
       machine->endAttempted = true;
       machine->handleValid = false;
       result = otaUpdateAct(machine, OTA_EVENT_END);
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->phase = OTA_PHASE_READBACK;
       break;
     case OTA_PHASE_READBACK: {
@@ -812,7 +927,7 @@ inline void otaUpdateStep(
       );
       if (result.status == OTA_ACTION_PENDING) break;
       if (result.status != OTA_ACTION_COMPLETE || result.bytes != amount)
-        return otaUpdateFail(machine);
+        return otaUpdateFail(machine, result.failure);
       machine->readbackBytes += amount;
       if (machine->readbackBytes == machine->imageSize)
         machine->phase = OTA_PHASE_DIGEST;
@@ -820,17 +935,17 @@ inline void otaUpdateStep(
     }
     case OTA_PHASE_DIGEST:
       result = otaUpdateAct(machine, OTA_EVENT_DIGEST_MATCH);
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->phase = OTA_PHASE_FINAL_GATE;
       break;
     case OTA_PHASE_FINAL_GATE:
       result = otaUpdateAct(machine, OTA_EVENT_FINAL_GATE);
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->phase = OTA_PHASE_SET_BOOT;
       break;
     case OTA_PHASE_SET_BOOT:
       result = otaUpdateAct(machine, OTA_EVENT_SET_BOOT);
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine, result.failure);
       machine->bootCommitted = true;
       machine->restartAttempts = 0;
       machine->nextRestartAttemptMs = inputs.nowMs;

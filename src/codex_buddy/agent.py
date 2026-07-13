@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Deque, Optional
 
 from . import runtime
+from .agent_runtime import AgentProcessLock, cleanup_stale_ota_runtime
 from .ble_transport import BleBuddyTransport
 from .bridge import ManagedSessionBridge
 from .catalog import SessionCatalog, SessionPrompt, SessionRecord
@@ -196,6 +197,7 @@ class BuddyAgent:
     ) -> None:
         self.state_path = state_path
         self.socket_path = socket_path or default_socket_path(state_path)
+        self._process_lock = AgentProcessLock(self.state_path.parent / "agent.lock")
         self.clock = clock or time.time
         self.readonly_poll_interval = readonly_poll_interval
         self.keepalive_interval = keepalive_interval
@@ -303,31 +305,41 @@ class BuddyAgent:
     async def run(self) -> None:
         if self._stopped is not None:
             raise RuntimeError("buddy agent is already running")
-        self._stop_requested = False
-        stopped = asyncio.Event()
-        self._stopped = stopped
+        self._process_lock.acquire()
         try:
-            self.socket_path.parent.mkdir(parents=True, exist_ok=True)
-            if self.socket_path.exists():
-                self.socket_path.unlink()
-
-            self._server = await asyncio.start_unix_server(
-                self._handle_client,
-                path=str(self.socket_path),
+            ota_root = self.state_path.parent / "ota"
+            cleanup_stale_ota_runtime(
+                snapshots_root=ota_root / "private" / "snapshots",
+                sessions_root=ota_root / "private" / "sessions",
+                releases_root=ota_root / "releases",
             )
-            await self._start_account_usage_monitor()
-            self._tasks = [
-                asyncio.create_task(self._readonly_loop()),
-                asyncio.create_task(self._ble_loop()),
-                asyncio.create_task(self._keepalive_loop()),
-            ]
-            await self._publish_state(force=True)
-            await stopped.wait()
-        finally:
+            self._stop_requested = False
+            stopped = asyncio.Event()
+            self._stopped = stopped
             try:
-                await self.shutdown()
+                self.socket_path.parent.mkdir(parents=True, exist_ok=True)
+                if self.socket_path.exists():
+                    self.socket_path.unlink()
+
+                self._server = await asyncio.start_unix_server(
+                    self._handle_client,
+                    path=str(self.socket_path),
+                )
+                await self._start_account_usage_monitor()
+                self._tasks = [
+                    asyncio.create_task(self._readonly_loop()),
+                    asyncio.create_task(self._ble_loop()),
+                    asyncio.create_task(self._keepalive_loop()),
+                ]
+                await self._publish_state(force=True)
+                await stopped.wait()
             finally:
-                self._stopped = None
+                try:
+                    await self.shutdown()
+                finally:
+                    self._stopped = None
+        finally:
+            self._process_lock.release()
 
     async def shutdown(self) -> None:
         if self._ota_state is not None and not self._ota_state.terminal:
@@ -500,8 +512,12 @@ class BuddyAgent:
             return {"ok": True}
         if payload.get("nonce") != session.nonce:
             raise RuntimeError("firmware update session does not match")
-        await self._ota_coordinator.cancel(session)
-        return {"ok": True, "ota": session.public_payload()}
+        applied = await self._ota_coordinator.cancel(session)
+        return {
+            "ok": True,
+            "cancel_applied": applied,
+            "ota": session.public_payload(),
+        }
 
     async def _run_ota_update(
         self, session: OtaAgentSession, inspected: OtaImageInfo

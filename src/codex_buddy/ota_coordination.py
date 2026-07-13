@@ -11,6 +11,7 @@ from .ota_protocol import OtaProtocolError, build_ota_offer, parse_ota_status
 from .ota_release import OtaImageInfo, build_ota_release
 from .ota_server import OtaHttpsServer
 from .ota_trust import require_existing_ota_trust
+from .ble_transport import NativeBleHelperError
 
 
 _DEVICE_ERRORS = {
@@ -33,6 +34,7 @@ class OtaAgentSession:
     error: str = ""
     health: str = ""
     accepted: bool = False
+    irreversible: bool = False
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     def public_payload(self, *, include_identity: bool = True) -> dict[str, object]:
@@ -78,11 +80,11 @@ class OtaCoordinator:
         self._install_timeout = install_timeout
         self._reconnect_interval = reconnect_interval
 
-    async def cancel(self, session: OtaAgentSession) -> None:
-        if session.terminal or session.phase in {
+    async def cancel(self, session: OtaAgentSession) -> bool:
+        if session.terminal or session.irreversible or session.phase in {
             "boot-committed", "restarting", "boot-health"
         }:
-            return
+            return False
         session.cancel_event.set()
         ble = self._get_ble()
         if ble is not None and self._is_ble_connected():
@@ -94,6 +96,7 @@ class OtaCoordinator:
                         "generation": session.generation,
                     }
                 )
+        return True
 
     async def _receive(self, session: OtaAgentSession, *, timeout: float):
         deadline = asyncio.get_running_loop().time() + timeout
@@ -190,6 +193,10 @@ class OtaCoordinator:
                         accepted = session.accepted = True
                         session.phase = status.phase
                         session.percent = status.percent
+                        if status.phase in {
+                            "boot-committed", "restarting", "boot-health"
+                        }:
+                            session.irreversible = True
                         break
                     if status.phase in {"rejected", "busy", "error"}:
                         raise RuntimeError(status.error or status.phase)
@@ -197,7 +204,7 @@ class OtaCoordinator:
                     raise RuntimeError("timeout")
 
                 deadline = asyncio.get_running_loop().time() + self._install_timeout
-                awaiting_restart_health = False
+                awaiting_restart_health = session.irreversible
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
@@ -218,6 +225,14 @@ class OtaCoordinator:
                         status = await self._receive(
                             session, timeout=receive_timeout
                         )
+                    except NativeBleHelperError:
+                        if awaiting_restart_health or session.irreversible:
+                            awaiting_restart_health = True
+                            await asyncio.sleep(
+                                max(0, min(self._reconnect_interval, remaining))
+                            )
+                            continue
+                        raise
                     except asyncio.TimeoutError:
                         if awaiting_restart_health:
                             continue
@@ -225,8 +240,6 @@ class OtaCoordinator:
                     session.phase = status.phase
                     session.percent = status.percent
                     session.health = status.health
-                    if status.version:
-                        session.version = status.version
                     if status.phase == "accepted":
                         accepted = session.accepted = True
                     elif status.phase in {"rejected", "busy", "cancelled", "error"}:
@@ -236,9 +249,14 @@ class OtaCoordinator:
                             session.percent = 100
                             session.success = session.terminal = True
                             return
-                        if accepted:
+                        if accepted and not session.irreversible:
                             raise RuntimeError("rollback")
-                    elif status.phase in {"restarting", "boot-health"}:
+                        if session.irreversible:
+                            awaiting_restart_health = True
+                    elif status.phase in {
+                        "boot-committed", "restarting", "boot-health"
+                    }:
+                        session.irreversible = True
                         awaiting_restart_health = True
                         if status.phase == "restarting":
                             await asyncio.sleep(self._reconnect_interval)

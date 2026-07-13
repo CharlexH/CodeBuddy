@@ -19,14 +19,16 @@ void writeStatus(
   OtaStatusPhase phase,
   uint8_t percent,
   const char* error,
-  bool cadenceLimited
+  bool cadenceLimited,
+  bool cancelApplied = false
 ) {
   if (cadenceLimited &&
       !otaStatusShouldEmit(&cadence, phase, percent, error)) return;
-  char payload[256] = {};
+  char payload[384] = {};
   size_t length = otaStatusBuildJson(
     payload, sizeof(payload), nonce, generation, phase, percent,
-    CODE_BUDDY_FIRMWARE_VERSION, otaBootHealthStatusLabel(), error
+    CODE_BUDDY_FIRMWARE_VERSION, otaBootHealthStatusLabel(), error,
+    cancelApplied
   );
   if (!length) return;
   Serial.write(reinterpret_cast<const uint8_t*>(payload), length);
@@ -34,29 +36,15 @@ void writeStatus(
 }
 
 OtaStatusPhase phaseForView(const OtaUpdateView& view, const char** error) {
-  *error = "";
-  if (view.phase == OTA_PHASE_CONFIRM) return OTA_STATUS_AWAIT_CONFIRM;
-  if (view.phase == OTA_PHASE_WAIT_READY) return OTA_STATUS_ACCEPTED;
-  if (view.phase >= OTA_PHASE_OPEN_MANIFEST &&
-      view.phase <= OTA_PHASE_AUTHENTICATE) return OTA_STATUS_ACCEPTED;
-  if (view.authenticated && view.phase < OTA_PHASE_DOWNLOAD)
+  if (view.authenticated && view.phase < OTA_PHASE_DOWNLOAD) {
+    *error = "";
     return OTA_STATUS_AUTHENTICATED;
-  if (view.phase >= OTA_PHASE_DOWNLOAD && view.phase < OTA_PHASE_READBACK)
-    return OTA_STATUS_DOWNLOAD;
-  if (view.phase >= OTA_PHASE_READBACK && view.phase < OTA_PHASE_SET_BOOT)
-    return OTA_STATUS_READBACK;
-  if (view.phase == OTA_PHASE_SET_BOOT || view.phase == OTA_PHASE_RESTART)
-    return OTA_STATUS_BOOT_COMMITTED;
-  if (view.phase == OTA_PHASE_RESTARTING) return OTA_STATUS_RESTARTING;
-  if (view.phase == OTA_PHASE_CANCELLED) {
-    *error = "cancelled";
-    return OTA_STATUS_CANCELLED;
   }
-  if (view.phase == OTA_PHASE_ERROR) {
-    *error = "download";
-    return OTA_STATUS_ERROR;
-  }
-  return OTA_STATUS_ACCEPTED;
+  OtaStatusProjection projection = otaStatusProjectUpdate(
+    view.phase, view.bootCommitted, view.failure
+  );
+  *error = projection.error;
+  return projection.phase;
 }
 }  // namespace
 
@@ -94,9 +82,21 @@ bool otaStatusReplyRunning(const char* nonce, uint32_t generation) {
 bool otaStatusCancel(const char* nonce, uint32_t generation) {
   if (!otaStatusNonceValid(nonce) || generation != activeGeneration ||
       strcmp(nonce, activeNonce) != 0) return false;
-  otaUpdateCancel();
-  writeStatus(activeNonce, activeGeneration, OTA_STATUS_CANCELLED, 0, "cancelled", true);
-  return true;
+  OtaUpdateView view = otaUpdateView();
+  bool applied = otaUpdateCancel();
+  if (applied) {
+    writeStatus(
+      activeNonce, activeGeneration, OTA_STATUS_CANCELLED, view.percent,
+      "cancelled", true, true
+    );
+    return true;
+  }
+  const char* error = "";
+  OtaStatusPhase phase = phaseForView(view, &error);
+  writeStatus(
+    activeNonce, activeGeneration, phase, view.percent, error, false, false
+  );
+  return false;
 }
 
 void otaStatusPoll(const OtaUpdateView& view) {

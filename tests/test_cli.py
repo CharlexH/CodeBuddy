@@ -436,6 +436,51 @@ def test_firmware_update_sends_cancel_on_keyboard_interrupt(monkeypatch, tmp_pat
     assert requests[-1] == {"cmd": "ota_cancel", "nonce": "n"}
 
 
+def test_firmware_update_task_cancellation_shields_bounded_device_cancel(
+    monkeypatch, tmp_path
+):
+    async def exercise():
+        requests: list[dict] = []
+        status_started = asyncio.Event()
+        never = asyncio.Event()
+        image = tmp_path / "firmware.bin"
+        image.write_bytes(b"explicit-test-image")
+
+        async def fake_ensure(_):
+            return None
+
+        async def fake_request(_, payload):
+            requests.append(payload)
+            if payload["cmd"] == "ota_begin":
+                return {
+                    "ok": True,
+                    "ota": {"nonce": "n", "phase": "preparing", "terminal": False},
+                }
+            if payload["cmd"] == "ota_status":
+                status_started.set()
+                await never.wait()
+            if payload["cmd"] == "ota_cancel":
+                await asyncio.sleep(0)
+                return {"ok": True, "cancel_applied": True}
+            raise AssertionError(payload)
+
+        monkeypatch.setattr(cli, "_ensure_agent_running", fake_ensure)
+        monkeypatch.setattr(cli, "_agent_request", fake_request)
+        task = asyncio.create_task(
+            cli._firmware_update(
+                argparse.Namespace(state_path=tmp_path / "state.json", firmware=image)
+            )
+        )
+        await status_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return requests
+
+    requests = asyncio.run(exercise())
+    assert requests[-1] == {"cmd": "ota_cancel", "nonce": "n"}
+
+
 def test_firmware_update_missing_installed_default_fails_before_agent_request(
     monkeypatch, tmp_path, capsys
 ):

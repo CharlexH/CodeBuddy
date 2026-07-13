@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ota_update_logic.h"
+
 enum OtaStatusPhase : uint8_t {
   OTA_STATUS_RUNNING = 0,
   OTA_STATUS_OFFER_RECEIVED,
@@ -80,6 +82,59 @@ inline bool otaStatusErrorValid(const char* error) {
   return false;
 }
 
+inline const char* otaStatusFailureLabel(OtaUpdateFailure failure) {
+  switch (failure) {
+    case OTA_UPDATE_FAILURE_WIFI: return "wifi";
+    case OTA_UPDATE_FAILURE_TRUST: return "trust";
+    case OTA_UPDATE_FAILURE_MANIFEST: return "manifest";
+    case OTA_UPDATE_FAILURE_VERSION: return "version";
+    case OTA_UPDATE_FAILURE_DOWNLOAD: return "download";
+    case OTA_UPDATE_FAILURE_HASH: return "hash";
+    case OTA_UPDATE_FAILURE_POWER: return "power";
+    case OTA_UPDATE_FAILURE_TIMEOUT: return "timeout";
+    case OTA_UPDATE_FAILURE_ROLLBACK: return "rollback";
+    case OTA_UPDATE_FAILURE_CONFLICT: return "conflict";
+    case OTA_UPDATE_FAILURE_RECONNECT: return "reconnect";
+    case OTA_UPDATE_FAILURE_NONE: return "download";
+  }
+  return "download";
+}
+
+struct OtaStatusProjection {
+  OtaStatusPhase phase;
+  const char* error;
+};
+
+inline OtaStatusProjection otaStatusProjectUpdate(
+  OtaUpdatePhase phase,
+  bool bootCommitted,
+  OtaUpdateFailure failure
+) {
+  if (phase == OTA_PHASE_CONFIRM) return {OTA_STATUS_AWAIT_CONFIRM, ""};
+  if (phase == OTA_PHASE_WAIT_READY) return {OTA_STATUS_ACCEPTED, ""};
+  if (phase >= OTA_PHASE_OPEN_MANIFEST && phase <= OTA_PHASE_AUTHENTICATE)
+    return {OTA_STATUS_ACCEPTED, ""};
+  if (phase >= OTA_PHASE_DOWNLOAD && phase < OTA_PHASE_READBACK)
+    return {OTA_STATUS_DOWNLOAD, ""};
+  if (phase >= OTA_PHASE_READBACK && phase < OTA_PHASE_SET_BOOT)
+    return {OTA_STATUS_READBACK, ""};
+  if (phase == OTA_PHASE_SET_BOOT && !bootCommitted)
+    return {OTA_STATUS_READBACK, ""};
+  if (phase == OTA_PHASE_SET_BOOT || phase == OTA_PHASE_RESTART)
+    return {OTA_STATUS_BOOT_COMMITTED, ""};
+  if (phase == OTA_PHASE_RESTARTING) return {OTA_STATUS_RESTARTING, ""};
+  if (phase == OTA_PHASE_CANCELLED) {
+    return {
+      OTA_STATUS_CANCELLED,
+      failure == OTA_UPDATE_FAILURE_NONE
+        ? "cancelled" : otaStatusFailureLabel(failure)
+    };
+  }
+  if (phase == OTA_PHASE_ERROR)
+    return {OTA_STATUS_ERROR, otaStatusFailureLabel(failure)};
+  return {OTA_STATUS_ACCEPTED, ""};
+}
+
 inline const char* otaStatusHealthLabel(const char* raw) {
   if (!raw) return "error";
   if (strcmp(raw, "ordinary") == 0) return "ordinary";
@@ -131,7 +186,8 @@ inline size_t otaStatusBuildJson(
   uint8_t percent,
   const char* version,
   const char* health,
-  const char* error
+  const char* error,
+  bool cancelApplied
 ) {
   if (!output || !capacity || !otaStatusNonceValid(nonce) || !generation ||
       percent > 100 || !otaStatusSafeVersion(version) ||
@@ -141,9 +197,10 @@ inline size_t otaStatusBuildJson(
     output, capacity,
     "{\"cmd\":\"ota_status\",\"nonce\":\"%s\",\"generation\":%lu,"
     "\"phase\":\"%s\",\"percent\":%u,\"version\":\"%s\","
-    "\"health\":\"%s\",\"error\":\"%s\"}\n",
+    "\"health\":\"%s\",\"error\":\"%s\","
+    "\"cancel_applied\":%s}\n",
     nonce, static_cast<unsigned long>(generation), otaStatusPhaseLabel(phase),
-    percent, version, safeHealth, error
+    percent, version, safeHealth, error, cancelApplied ? "true" : "false"
   );
   if (written <= 0 || static_cast<size_t>(written) >= capacity) {
     output[0] = 0;

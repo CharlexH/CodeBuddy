@@ -811,6 +811,60 @@ static void testTerminalScrubPreservesOnlyOutcome() {
          "terminal scrub must remove lengths, handles, and callback pointers");
 }
 
+static void testCancellationApplicabilityAndFailureMapping() {
+  OtaUpdateMachine update = otaUpdateMachineInitial();
+  expect(otaUpdateCancellationAllowed(true, update),
+         "confirmation is cancellable");
+  update.phase = OTA_PHASE_READBACK;
+  expect(otaUpdateCancellationAllowed(true, update),
+         "readback remains cancellable before final boot selection");
+  update.phase = OTA_PHASE_SET_BOOT;
+  expect(!otaUpdateCancellationAllowed(true, update),
+         "set-boot is not cancellable even before its action runs");
+  update.phase = OTA_PHASE_RESTART;
+  expect(!otaUpdateCancellationAllowed(true, update),
+         "restart is irreversible");
+  update.phase = OTA_PHASE_RESTARTING;
+  expect(!otaUpdateCancellationAllowed(true, update),
+         "restarting is irreversible");
+  update.phase = OTA_PHASE_CANCELLED;
+  expect(!otaUpdateCancellationAllowed(true, update),
+         "cancelled terminal state cannot be cancelled again");
+  update.phase = OTA_PHASE_ERROR;
+  expect(!otaUpdateCancellationAllowed(true, update),
+         "error terminal state cannot be relabelled cancelled");
+  update = otaUpdateMachineInitial();
+  expect(!otaUpdateCancellationAllowed(false, update),
+         "inactive update cannot accept cancellation");
+
+  expect(otaUpdateFailureForGate(OTA_GATE_WIFI, false) == OTA_UPDATE_FAILURE_WIFI,
+         "Wi-Fi gate maps to wifi");
+  expect(otaUpdateFailureForGate(OTA_GATE_POWER, false) == OTA_UPDATE_FAILURE_POWER,
+         "power gate maps to power");
+  expect(otaUpdateFailureForGate(OTA_GATE_CONFLICT, false) == OTA_UPDATE_FAILURE_CONFLICT,
+         "coordination conflict maps to conflict");
+  expect(otaUpdateFailureForGate(OTA_GATE_WIFI, true) == OTA_UPDATE_FAILURE_TIMEOUT,
+         "expired readiness deadline maps to timeout");
+  expect(otaUpdateFailureForEvent(OTA_EVENT_OPEN_MANIFEST) == OTA_UPDATE_FAILURE_TRUST,
+         "TLS open failures map to trust");
+  expect(otaUpdateFailureForEvent(OTA_EVENT_READ_MANIFEST) == OTA_UPDATE_FAILURE_MANIFEST,
+         "manifest HTTP body failures map to manifest");
+  expect(otaUpdateFailureForEvent(OTA_EVENT_DOWNLOAD) == OTA_UPDATE_FAILURE_DOWNLOAD,
+         "firmware reads map to download");
+  expect(otaUpdateFailureForEvent(OTA_EVENT_DIGEST_MATCH) == OTA_UPDATE_FAILURE_HASH,
+         "digest mismatch maps to hash");
+  expect(otaUpdateFailureForEvent(OTA_EVENT_SET_BOOT) == OTA_UPDATE_FAILURE_ROLLBACK,
+         "boot selection maps to rollback");
+  expect(otaUpdateFailureForManifest(OTA_MANIFEST_SIGNATURE_INVALID) == OTA_UPDATE_FAILURE_TRUST,
+         "signature rejection maps to trust");
+  expect(otaUpdateFailureForManifest(OTA_MANIFEST_VERSION_INVALID) == OTA_UPDATE_FAILURE_VERSION,
+         "invalid version maps to version");
+  expect(otaUpdateFailureForManifest(OTA_MANIFEST_NOT_NEWER) == OTA_UPDATE_FAILURE_VERSION,
+         "non-newer version maps to version");
+  expect(otaUpdateFailureForManifest(OTA_MANIFEST_NON_CANONICAL) == OTA_UPDATE_FAILURE_MANIFEST,
+         "manifest schema failures map to manifest");
+}
+
 int main() {
   testReadinessAndPowerGates();
   testCoordinationEndsOnlyAfterAuthentication();
@@ -826,6 +880,7 @@ int main() {
   testAsyncOpenRemainsResponsiveAndPreBegin();
   testBootCommitIgnoresAllCancellationAndGateChanges();
   testTerminalScrubPreservesOnlyOutcome();
+  testCancellationApplicabilityAndFailureMapping();
   puts("ota update logic tests passed");
   return 0;
 }

@@ -287,24 +287,34 @@ class NativeBleHelperSession:
         self._stop_requested = False
         self._shutdown_requested = False
         self._notifications: Optional[asyncio.Queue[dict[str, object]]] = None
+        self._operation_lock: Optional[asyncio.Lock] = None
+        self._operation_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _lock_for_running_loop(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._operation_lock is None or self._operation_lock_loop is not loop:
+            self._operation_lock = asyncio.Lock()
+            self._operation_lock_loop = loop
+        return self._operation_lock
 
     @property
     def is_connected(self) -> bool:
         return self._connected
 
     async def connect(self) -> None:
-        if self._connected:
-            return
-        if self._pump_task is None or self._pump_task.done():
-            await self._start_helper()
+        async with self._lock_for_running_loop():
+            if self._connected:
+                return
+            if self._pump_task is None or self._pump_task.done():
+                await self._start_helper()
 
-        deadline = asyncio.get_running_loop().time() + self.connect_timeout
-        while not self._connected:
-            if self._connect_error is not None:
-                raise self._connect_error
-            if asyncio.get_running_loop().time() >= deadline:
-                raise NativeBleHelperError("Timed out waiting for native BLE helper to connect")
-            await asyncio.sleep(0.05)
+            deadline = asyncio.get_running_loop().time() + self.connect_timeout
+            while not self._connected:
+                if self._connect_error is not None:
+                    raise self._connect_error
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise NativeBleHelperError("Timed out waiting for native BLE helper to connect")
+                await asyncio.sleep(0.05)
 
     async def write_json(self, payload: dict) -> None:
         await self.connect()
@@ -319,21 +329,22 @@ class NativeBleHelperSession:
         return await asyncio.wait_for(self._notifications.get(), timeout=timeout)
 
     async def disconnect(self) -> None:
-        if self._session_dir is None:
-            return
+        async with self._lock_for_running_loop():
+            if self._session_dir is None:
+                return
 
-        self._shutdown_requested = True
-        if self._pump_task is not None and not self._pump_task.done():
-            with contextlib.suppress(Exception):
-                await self._send_command("shutdown")
-            try:
-                await asyncio.wait_for(self._pump_task, timeout=3.0)
-            except asyncio.TimeoutError:
-                self._pump_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._pump_task
+            self._shutdown_requested = True
+            if self._pump_task is not None and not self._pump_task.done():
+                with contextlib.suppress(Exception):
+                    await self._send_command("shutdown")
+                try:
+                    await asyncio.wait_for(self._pump_task, timeout=3.0)
+                except asyncio.TimeoutError:
+                    self._pump_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._pump_task
 
-        self._cleanup()
+            self._cleanup()
 
     async def _start_helper(self) -> None:
         self._cleanup()
@@ -524,6 +535,15 @@ class BleBuddyTransport:
         self._native_session_factory = native_session_factory or NativeBleHelperSession
         self._native_session: Optional[NativeBleHelperSession] = None
         self._notifications: Optional[asyncio.Queue[dict[str, object]]] = None
+        self._operation_lock: Optional[asyncio.Lock] = None
+        self._operation_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _lock_for_running_loop(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._operation_lock is None or self._operation_lock_loop is not loop:
+            self._operation_lock = asyncio.Lock()
+            self._operation_lock_loop = loop
+        return self._operation_lock
 
     @property
     def is_connected(self) -> bool:
@@ -547,6 +567,10 @@ class BleBuddyTransport:
         return matches
 
     async def connect(self) -> None:
+        async with self._lock_for_running_loop():
+            await self._connect_locked()
+
+    async def _connect_locked(self) -> None:
         if self._use_native_helper:
             if self._native_session is None:
                 self._native_session = self._native_session_factory(
@@ -567,24 +591,27 @@ class BleBuddyTransport:
         self._client = client_class(self.device_id)
         await self._client.connect()
         await self._client.start_notify(NUS_TX_UUID, self._handle_notification)
-        await self.send_owner(os.environ.get("USER", "Codex"))
-        await self.send_time_sync()
+        await self._write_connected_json(
+            {"cmd": "owner", "name": os.environ.get("USER", "Codex")[:31]}
+        )
+        await self._write_connected_json(self._time_sync_payload())
 
     async def disconnect(self) -> None:
-        if self._use_native_helper:
-            if self._native_session is not None:
-                try:
-                    await self._native_session.disconnect()
-                finally:
-                    self._native_session = None
-            return
+        async with self._lock_for_running_loop():
+            if self._use_native_helper:
+                if self._native_session is not None:
+                    try:
+                        await self._native_session.disconnect()
+                    finally:
+                        self._native_session = None
+                return
 
-        if self._client:
-            try:
-                if self._client.is_connected:
-                    await self._client.disconnect()
-            finally:
-                self._client = None
+            if self._client:
+                try:
+                    if self._client.is_connected:
+                        await self._client.disconnect()
+                finally:
+                    self._client = None
 
     async def send_snapshot(self, snapshot: BuddySnapshot) -> None:
         await self._send_json(snapshot.as_ble_payload())
@@ -619,16 +646,19 @@ class BleBuddyTransport:
         if self._lock is None:
             self._lock = asyncio.Lock()
         async with self._lock:
-            if self._use_native_helper:
-                assert self._native_session is not None
-                await self._native_session.write_json(payload)
-                return
+            await self._write_connected_json(payload)
 
-            raw = (json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
-            mtu = 180
-            assert self._client is not None
-            for idx in range(0, len(raw), mtu):
-                await self._client.write_gatt_char(NUS_RX_UUID, raw[idx : idx + mtu], response=True)
+    async def _write_connected_json(self, payload: dict) -> None:
+        if self._use_native_helper:
+            assert self._native_session is not None
+            await self._native_session.write_json(payload)
+            return
+
+        raw = (json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+        mtu = 180
+        assert self._client is not None
+        for idx in range(0, len(raw), mtu):
+            await self._client.write_gatt_char(NUS_RX_UUID, raw[idx : idx + mtu], response=True)
 
     def _handle_notification(self, _: str, data: bytearray) -> None:
         self._buffer.extend(data)

@@ -41,6 +41,7 @@ def test_status_parser_rejects_stale_or_secret_bearing_events():
         "version": "0.1.5",
         "health": "monitoring",
         "error": "",
+        "cancel_applied": False,
     }
     assert parse_ota_status(valid, nonce="n" * 24, generation=3).percent == 40
 
@@ -65,14 +66,26 @@ def test_status_parser_bounds_phase_progress_and_sanitized_error():
         "version": "0.1.5",
         "health": "valid",
         "error": "download",
+        "cancel_applied": False,
     }
     assert parse_ota_status(base, nonce="n" * 24, generation=1).error == "download"
     for key, value in (
         ("phase", "x" * 80),
         ("percent", 101),
         ("error", "https://192.168.1.2/secret"),
+        ("cancel_applied", 1),
     ):
         invalid = dict(base)
         invalid[key] = value
         with pytest.raises(OtaProtocolError):
             parse_ota_status(invalid, nonce="n" * 24, generation=1)
+
+    cancelled = dict(
+        base,
+        phase="cancelled",
+        error="cancelled",
+        cancel_applied=True,
+    )
+    assert parse_ota_status(
+        cancelled, nonce="n" * 24, generation=1
+    ).cancel_applied is True

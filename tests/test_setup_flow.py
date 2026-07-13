@@ -14,11 +14,16 @@ def _application_image(version: str = "0.1.4") -> bytes:
     descriptor[:4] = struct.pack("<I", 0xABCD5432)
     descriptor[16 : 16 + len(version)] = version.encode("ascii")
     header = bytearray(24)
-    header[0], header[1], header[2], header[3], header[23] = 0xE9, 1, 2, 0x3F, 1
+    header[0], header[1], header[2], header[3], header[23] = 0xE9, 2, 2, 0x3F, 1
+    header[4:8] = struct.pack("<I", 0x40377B44)
     header[12:14] = struct.pack("<H", 9)
     image = bytes(header) + struct.pack("<II", 0x3C0E0020, len(descriptor)) + descriptor
+    code = bytes(16)
+    image += struct.pack("<II", 0x40377B40, len(code)) + code
     checksum = 0xEF
     for value in descriptor:
+        checksum ^= value
+    for value in code:
         checksum ^= value
     checksum_offset = (len(image) + 16) & ~15
     image += b"\0" * (checksum_offset - 1 - len(image)) + bytes([checksum])

@@ -19,12 +19,17 @@ def _image(version: str) -> bytes:
     descriptor[:4] = struct.pack("<I", 0xABCD5432)
     descriptor[16 : 16 + len(version)] = version.encode("ascii")
     header = bytearray(24)
-    header[0], header[1], header[2], header[3] = 0xE9, 1, 2, 0x3F
+    header[0], header[1], header[2], header[3] = 0xE9, 2, 2, 0x3F
+    header[4:8] = struct.pack("<I", 0x40377B44)
     header[12:14] = struct.pack("<H", 9)
     header[23] = 1
+    code = bytearray(16)
     raw = header + struct.pack("<II", 0x3C000020, len(descriptor)) + descriptor
+    raw += struct.pack("<II", 0x40377B40, len(code)) + code
     checksum = 0xEF
     for value in descriptor:
+        checksum ^= value
+    for value in code:
         checksum ^= value
     while (len(raw) + 1) % 16:
         raw.append(0)

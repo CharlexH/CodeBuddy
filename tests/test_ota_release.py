@@ -42,28 +42,51 @@ def _public_key_der_sha256(path: Path) -> str:
     return hashlib.sha256(der).hexdigest()
 
 
-def _esp32s3_image(payload: bytes = b"firmware-payload") -> bytes:
+def _esp32s3_image(
+    payload: bytes = b"firmware-payload",
+    *,
+    entry_addr: int = 0x40377B44,
+    code_load_addr: int = 0x40377B40,
+    code_payload: bytes = b"\x00" * 16,
+) -> bytes:
     payload += b"\x00" * (-len(payload) % 4)
+    code_payload += b"\x00" * (-len(code_payload) % 4)
     header = bytearray(24)
     header[0] = 0xE9
-    header[1] = 1
+    header[1] = 2
     header[2] = 2
     header[3] = 0x3F
-    header[4:8] = struct.pack("<I", 0x40377B4C)
+    header[4:8] = struct.pack("<I", entry_addr)
     header[8] = 0xEE
     header[12:14] = struct.pack("<H", 9)
     header[23] = 1
     image = bytes(header) + struct.pack("<II", 0x3C0E0020, len(payload)) + payload
+    image += struct.pack("<II", code_load_addr, len(code_payload)) + code_payload
     checksum = 0xEF
-    for value in payload:
+    for value in payload + code_payload:
         checksum ^= value
     checksum_offset = (len(image) + 16) & ~15
     image += b"\x00" * (checksum_offset - 1 - len(image)) + bytes([checksum])
     return image + hashlib.sha256(image).digest()
 
 
+def _esp_image_segments_end(contents: bytes) -> int:
+    offset = 24
+    for _ in range(contents[1]):
+        data_length = struct.unpack_from("<I", contents, offset + 4)[0]
+        offset += 8 + data_length
+    return offset
+
+
+def _rehash_esp_image(contents: bytearray) -> None:
+    hash_offset = (_esp_image_segments_end(contents) + 16) & ~15
+    contents[hash_offset:] = hashlib.sha256(contents[:hash_offset]).digest()
+
+
 def _versioned_esp32s3_image(
-    version: str = "1.2.3", payload: bytes = b"application-payload"
+    version: str = "1.2.3",
+    payload: bytes = b"application-payload",
+    **image_kwargs,
 ) -> bytes:
     app_desc = bytearray(256)
     app_desc[0:4] = struct.pack("<I", 0xABCD5432)
@@ -71,7 +94,7 @@ def _versioned_esp32s3_image(
     app_desc[16 : 16 + len(encoded)] = encoded
     app_desc[16 + len(encoded)] = 0
     app_desc[48:58] = b"CodeBuddy\0"
-    return _esp32s3_image(bytes(app_desc) + payload)
+    return _esp32s3_image(bytes(app_desc) + payload, **image_kwargs)
 
 
 def _build_ota_release(**kwargs):
@@ -136,8 +159,7 @@ def test_inspect_application_image_rejects_noncanonical_or_corrupt_trailer(
     tmp_path, mutation
 ):
     contents = bytearray(_versioned_esp32s3_image())
-    segment_length = struct.unpack_from("<I", contents, 28)[0]
-    segments_end = 32 + segment_length
+    segments_end = _esp_image_segments_end(contents)
     hash_offset = (segments_end + 16) & ~15
     checksum_offset = hash_offset - 1
     if mutation == "trailing":
@@ -155,6 +177,82 @@ def test_inspect_application_image_rejects_noncanonical_or_corrupt_trailer(
 
     with pytest.raises(ValueError, match="application image"):
         inspect_esp32s3_application_image(image)
+
+
+@pytest.mark.parametrize(
+    ("entry_addr", "message"),
+    [
+        (0, "entry address"),
+        (0x40000000, "executable range"),
+        (0x40378000, "loaded executable segment"),
+        (0x40377B50, "loaded executable segment"),
+    ],
+)
+def test_inspect_application_image_rejects_invalid_or_unloaded_entry_address(
+    tmp_path, entry_addr, message
+):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(_versioned_esp32s3_image(entry_addr=entry_addr))
+
+    with pytest.raises(ValueError, match=message):
+        inspect_esp32s3_application_image(image)
+
+
+@pytest.mark.parametrize(
+    ("load_address", "entry_addr"),
+    [
+        (0x40370000, 0x40370004),
+        (0x42000000, 0x42000004),
+    ],
+)
+def test_inspect_application_image_accepts_loaded_esp32s3_executable_ranges(
+    tmp_path, load_address, entry_addr
+):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(
+        _versioned_esp32s3_image(
+            entry_addr=entry_addr,
+            code_load_addr=load_address,
+        )
+    )
+
+    assert inspect_esp32s3_application_image(image).version == "1.2.3"
+
+
+def test_inspect_application_image_rejects_segment_address_overflow(tmp_path):
+    contents = bytearray(_versioned_esp32s3_image())
+    first_length = struct.unpack_from("<I", contents, 28)[0]
+    second_header = 32 + first_length
+    struct.pack_into("<I", contents, second_header, 0xFFFFFFF8)
+    _rehash_esp_image(contents)
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(contents)
+
+    with pytest.raises(ValueError, match="segment address"):
+        inspect_esp32s3_application_image(image)
+
+
+def test_inspect_real_platformio_image_and_rejects_mutated_entry_addresses(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    built_image = project / "firmware/.pio/build/m5stack-sticks3/firmware.bin"
+    if not built_image.is_file():
+        pytest.skip("PlatformIO firmware image is not available")
+
+    inspected = inspect_esp32s3_application_image(built_image)
+    assert inspected.version
+
+    for label, entry_addr, message in (
+        ("zero", 0, "entry address"),
+        ("outside", 0x40000000, "executable range"),
+        ("unloaded", 0x40370000, "loaded executable segment"),
+    ):
+        contents = bytearray(built_image.read_bytes())
+        struct.pack_into("<I", contents, 4, entry_addr)
+        _rehash_esp_image(contents)
+        mutated = tmp_path / f"{label}.bin"
+        mutated.write_bytes(contents)
+        with pytest.raises(ValueError, match=message):
+            inspect_esp32s3_application_image(mutated)
 
 
 def test_manifest_has_exact_deterministic_canonical_bytes():

@@ -389,3 +389,62 @@ def test_native_helper_session_start_helper_cleans_stale_helpers_for_device(monk
     asyncio.run(run())
 
     assert calls[0] == {"device_id": "dev-1"}
+
+
+def test_native_helper_connect_is_singleflight_on_same_event_loop(monkeypatch):
+    async def exercise():
+        session = NativeBleHelperSession(
+            device_id="dev-1", device_name="Codex-1234", on_permission=None
+        )
+        starts = 0
+
+        async def fake_start_helper():
+            nonlocal starts
+            starts += 1
+            await asyncio.sleep(0)
+            session._connected = True
+
+        monkeypatch.setattr(session, "_start_helper", fake_start_helper)
+        await asyncio.gather(session.connect(), session.connect())
+        return starts
+
+    assert asyncio.run(exercise()) == 1
+
+
+def test_transport_connect_and_disconnect_are_singleflight_for_agent_and_ota():
+    class SlowNative(_FakeNativeSession):
+        def __init__(self):
+            super().__init__()
+            self.connects = 0
+            self.disconnects = 0
+
+        async def connect(self):
+            self.connects += 1
+            await asyncio.sleep(0)
+            self.connected = True
+
+        async def disconnect(self):
+            self.disconnects += 1
+            await asyncio.sleep(0)
+            self.connected = False
+
+    fake = SlowNative()
+    factory_calls = 0
+
+    def factory(**_):
+        nonlocal factory_calls
+        factory_calls += 1
+        return fake
+
+    async def exercise():
+        transport = BleBuddyTransport(
+            "dev-1", use_native_helper=True, native_session_factory=factory
+        )
+        await asyncio.gather(transport.connect(), transport.connect())
+        await asyncio.gather(transport.disconnect(), transport.disconnect())
+
+    asyncio.run(exercise())
+    assert factory_calls == 1
+    assert fake.connects == 1
+    assert fake.disconnects == 1
+    assert len(fake.writes) == 2

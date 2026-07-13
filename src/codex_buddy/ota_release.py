@@ -32,6 +32,12 @@ _OTA_UINT32_MAX = 0xFFFFFFFF
 _OTA_VERSION_MAX_BYTES = 63
 _OTA_URL_MAX_BYTES = 255
 _OTA_MANIFEST_MAX_BYTES = 1024
+# ESP-IDF's ESP32-S3 SOC_IROM_* and SOC_IRAM_* bounds. The upper bounds are
+# exclusive, matching esp_ptr_executable() in soc_memory_types.h.
+_ESP32S3_EXECUTABLE_ADDRESS_RANGES = (
+    (0x40370000, 0x403E0000),
+    (0x42000000, 0x44000000),
+)
 _TOKEN = re.compile(r"^[0-9A-Za-z_-]{24,127}$")
 _RFC1918_NETWORKS = tuple(
     ipaddress.ip_network(network)
@@ -393,6 +399,7 @@ def _validate_esp32s3_application_image(contents: bytes) -> None:
     checksum = 0xEF
     first_load_address = None
     first_data_length = None
+    executable_segments = []
     for segment_index in range(segment_count):
         if offset + 8 > len(contents):
             raise ValueError("firmware must be an ESP32-S3 application image")
@@ -405,6 +412,14 @@ def _validate_esp32s3_application_image(contents: bytes) -> None:
             or data_length > len(contents) - offset
         ):
             raise ValueError("firmware must be an ESP32-S3 application image")
+        if data_length > _OTA_UINT32_MAX - load_address:
+            raise ValueError("firmware segment address range overflows 32 bits")
+        load_end = load_address + data_length
+        if any(
+            range_start <= load_address < load_end <= range_end
+            for range_start, range_end in _ESP32S3_EXECUTABLE_ADDRESS_RANGES
+        ):
+            executable_segments.append((load_address, load_end))
         if segment_index == 0:
             first_load_address = load_address
             first_data_length = data_length
@@ -418,6 +433,20 @@ def _validate_esp32s3_application_image(contents: bytes) -> None:
         or first_data_length < 256
     ):
         raise ValueError("firmware application descriptor is missing or invalid")
+
+    entry_address = struct.unpack_from("<I", contents, 4)[0]
+    if entry_address == 0:
+        raise ValueError("firmware entry address must be nonzero")
+    if not any(
+        range_start <= entry_address < range_end
+        for range_start, range_end in _ESP32S3_EXECUTABLE_ADDRESS_RANGES
+    ):
+        raise ValueError("firmware entry address is outside the ESP32-S3 executable range")
+    if not any(
+        segment_start <= entry_address < segment_end
+        for segment_start, segment_end in executable_segments
+    ):
+        raise ValueError("firmware entry address is not in a loaded executable segment")
 
     hash_offset = (offset + 16) & ~15
     checksum_offset = hash_offset - 1

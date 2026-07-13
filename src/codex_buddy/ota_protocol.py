@@ -51,6 +51,7 @@ _STATUS_KEYS = {
     "version",
     "health",
     "error",
+    "cancel_applied",
 }
 
 
@@ -67,6 +68,7 @@ class OtaDeviceStatus:
     version: str
     health: str
     error: str
+    cancel_applied: bool
 
 
 def valid_ota_nonce(nonce: object) -> bool:
@@ -134,6 +136,7 @@ def parse_ota_status(
     version = payload.get("version")
     health = payload.get("health")
     error = payload.get("error")
+    cancel_applied = payload.get("cancel_applied")
     if not isinstance(phase, str) or phase not in _PHASES:
         raise OtaProtocolError("invalid OTA phase")
     if not isinstance(percent, int) or isinstance(percent, bool) or not 0 <= percent <= 100:
@@ -149,6 +152,10 @@ def parse_ota_status(
         raise OtaProtocolError("invalid OTA boot health")
     if not isinstance(error, str) or error not in _ERRORS:
         raise OtaProtocolError("invalid OTA error")
+    if not isinstance(cancel_applied, bool):
+        raise OtaProtocolError("invalid OTA cancellation result")
+    if cancel_applied and phase != "cancelled":
+        raise OtaProtocolError("OTA cancellation result does not match phase")
     return OtaDeviceStatus(
         nonce=nonce,
         generation=generation,
@@ -157,4 +164,5 @@ def parse_ota_status(
         version=version,
         health=health,
         error=error,
+        cancel_applied=cancel_applied,
     )

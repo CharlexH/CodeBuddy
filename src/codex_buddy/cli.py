@@ -263,6 +263,24 @@ def _default_firmware_image() -> Path:
     )
 
 
+async def _request_ota_cancel_bounded(state_path: Path, nonce: str) -> None:
+    request = asyncio.create_task(
+        asyncio.wait_for(
+            _agent_request(
+                state_path,
+                {"cmd": "ota_cancel", "nonce": nonce},
+            ),
+            timeout=2.0,
+        )
+    )
+    try:
+        await asyncio.shield(request)
+    except (Exception, asyncio.CancelledError):
+        # The inner task remains bounded by wait_for even if a second signal
+        # cancels this CLI while the best-effort device cancellation is sent.
+        pass
+
+
 async def _firmware_update(args: argparse.Namespace) -> int:
     try:
         image = Path(args.firmware).expanduser() if args.firmware else _default_firmware_image()
@@ -305,13 +323,13 @@ async def _firmware_update(args: argparse.Namespace) -> int:
                 {"cmd": "ota_status", "nonce": nonce},
             )
             ota = response["ota"]
+    except asyncio.CancelledError:
+        if "nonce" in locals():
+            await _request_ota_cancel_bounded(args.state_path, nonce)
+        raise
     except KeyboardInterrupt:
         if "nonce" in locals():
-            with contextlib.suppress(Exception):
-                await _agent_request(
-                    args.state_path,
-                    {"cmd": "ota_cancel", "nonce": nonce},
-                )
+            await _request_ota_cancel_bounded(args.state_path, nonce)
         print("Firmware update cancelled.", file=sys.stderr)
         return 130
     except (AgentClientError, KeyError, TypeError, ValueError, OSError) as exc:

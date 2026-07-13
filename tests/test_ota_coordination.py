@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from codex_buddy.ota_coordination import OtaAgentSession, OtaCoordinator
+from codex_buddy.ble_transport import NativeBleHelperError
 from codex_buddy.ota_release import OtaImageInfo
 
 
@@ -22,6 +23,7 @@ def _status(phase, *, version="0.1.5", percent=0, health="ordinary", error="", n
         "version": version,
         "health": health,
         "error": error,
+        "cancel_applied": False,
     }
 
 
@@ -221,3 +223,91 @@ def test_coordination_reprobes_after_device_reconnect(tmp_path):
     session, ble = asyncio.run(exercise())
     assert session.success is True
     assert len([item for item in ble.sent if item.get("cmd") == "ota_status"]) >= 2
+
+
+def test_boot_commit_immediately_enters_irreversible_reconnect_probe(tmp_path):
+    async def exercise():
+        ble = _Ble(
+            [
+                _status("running", version="0.1.4", health="valid"),
+                _status("offer-received", version="0.1.4"),
+                _status("accepted"),
+                _status("boot-committed", percent=100),
+            ]
+        )
+        disconnected = False
+        original_recv = ble.recv_json
+
+        async def recv_json(*, timeout):
+            nonlocal disconnected
+            if not ble.statuses.empty():
+                return await original_recv(timeout=timeout)
+            if not disconnected:
+                disconnected = True
+                raise NativeBleHelperError("native helper disconnected during reboot")
+            return await original_recv(timeout=timeout)
+
+        async def send_json(payload):
+            await _Ble.send_json(ble, payload)
+            probes = [item for item in ble.sent if item.get("cmd") == "ota_status"]
+            if disconnected and len(probes) >= 2:
+                ble.statuses.put_nowait(
+                    _status("running", percent=100, health="valid")
+                )
+
+        ble.recv_json = recv_json
+        ble.send_json = send_json
+        trust = SimpleNamespace(
+            manifest_private_key=tmp_path / "private.pem",
+            manifest_public_key=tmp_path / "public.pem",
+        )
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            install_timeout=0.5,
+            reconnect_interval=0,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.5", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        await coordinator.run(session, image)
+        return session, ble
+
+    session, ble = asyncio.run(exercise())
+    assert session.success is True
+    probes = [item for item in ble.sent if item.get("cmd") == "ota_status"]
+    assert len(probes) >= 2
+    assert all(item["nonce"] == NONCE and item["generation"] == 1 for item in probes)
+
+
+def test_cancel_reports_noop_once_boot_is_committed(tmp_path):
+    async def exercise():
+        ble = _Ble([])
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+        )
+        session = OtaAgentSession(
+            NONCE, 1, tmp_path / "firmware.bin", "0.1.5", phase="boot-committed"
+        )
+        applied = await coordinator.cancel(session)
+        return applied, session, ble
+
+    applied, session, ble = asyncio.run(exercise())
+    assert applied is False
+    assert session.cancel_event.is_set() is False
+    assert ble.sent == []
