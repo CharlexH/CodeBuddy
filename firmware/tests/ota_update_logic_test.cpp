@@ -105,6 +105,12 @@ static void testBoundedReadinessWaitAndWrap() {
          "wrapped deadline remains active");
   expect(otaDeadlineExpired(11, 10),
          "wrapped deadline expires after its target");
+  expect(!otaHttpIoExpired(4999, 5000, 6000),
+         "async open remains pending before both hard deadlines");
+  expect(otaHttpIoExpired(5000, 5000, 6000),
+         "async open hard timeout expires without another network call");
+  expect(otaHttpIoExpired(5500, 7000, 5500),
+         "async open idle timeout also fails closed");
 }
 
 static void testTargetAndHttpValidation() {
@@ -229,6 +235,92 @@ static void testTargetAndHttpValidation() {
   response.contentLength = -1;
   expect(!otaHttpMetaBoundedValid(response, OTA_MANIFEST_MAX_BYTES),
          "missing Content-Length must fail");
+
+  const char validHeader[] =
+    "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n"
+    "Content-Encoding: identity\r\nConnection: close\r\n\r\n";
+  OtaHttpMeta parsed = {};
+  expect(otaParseStrictHttpResponseHeader(
+           reinterpret_cast<const uint8_t*>(validHeader),
+           sizeof(validHeader) - 1,
+           &parsed) && otaHttpMetaExactValid(parsed, 1000, 1000),
+         "bounded manual parser should accept strict identity response");
+  const char chunkedHeader[] =
+    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+  expect(otaParseStrictHttpResponseHeader(
+           reinterpret_cast<const uint8_t*>(chunkedHeader),
+           sizeof(chunkedHeader) - 1,
+           &parsed) && !parsed.identityEncoding,
+         "manual parser must expose forbidden transfer encoding");
+  const char duplicateLength[] =
+    "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\n";
+  expect(!otaParseStrictHttpResponseHeader(
+           reinterpret_cast<const uint8_t*>(duplicateLength),
+           sizeof(duplicateLength) - 1,
+           &parsed),
+         "duplicate Content-Length must fail closed");
+  const char mixedCase[] =
+    "HTTP/1.1 200 OK\r\ncOnTeNt-LeNgTh:\t7 \r\n\r\n";
+  expect(otaParseStrictHttpResponseHeader(
+           reinterpret_cast<const uint8_t*>(mixedCase),
+           sizeof(mixedCase) - 1,
+           &parsed) && parsed.contentLength == 7,
+         "header names must be case-insensitive with bounded OWS");
+  const char compressed[] =
+    "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n"
+    "Content-Encoding: gzip\r\n\r\n";
+  expect(otaParseStrictHttpResponseHeader(
+           reinterpret_cast<const uint8_t*>(compressed),
+           sizeof(compressed) - 1,
+           &parsed) && !parsed.identityEncoding,
+         "compressed bodies must be exposed for rejection");
+  const char redirect[] =
+    "HTTP/1.1 302 Found\r\nContent-Length: 7\r\n"
+    "Location: https://192.168.1.2/elsewhere\r\n\r\n";
+  expect(otaParseStrictHttpResponseHeader(
+           reinterpret_cast<const uint8_t*>(redirect),
+           sizeof(redirect) - 1,
+           &parsed) && !otaHttpMetaBoundedValid(parsed, 7),
+         "redirect status and Location must fail strict response validation");
+  const char informational[] =
+    "HTTP/1.1 100 Continue\r\nContent-Length: 7\r\n\r\n";
+  expect(otaParseStrictHttpResponseHeader(
+           reinterpret_cast<const uint8_t*>(informational),
+           sizeof(informational) - 1,
+           &parsed) && !otaHttpMetaBoundedValid(parsed, 7),
+         "informational responses must not be accepted as OTA bodies");
+  const char bareLf[] =
+    "HTTP/1.1 200 OK\nContent-Length: 7\r\n\r\n";
+  expect(!otaParseStrictHttpResponseHeader(
+           reinterpret_cast<const uint8_t*>(bareLf),
+           sizeof(bareLf) - 1,
+           &parsed),
+         "manual parser must require CRLF on every response line");
+  uint8_t oversizedHeader[OTA_UPDATE_HTTP_HEADER_MAX_BYTES + 1] = {};
+  memcpy(
+    oversizedHeader + sizeof(oversizedHeader) - 4,
+    "\r\n\r\n",
+    4
+  );
+  expect(!otaParseStrictHttpResponseHeader(
+           oversizedHeader, sizeof(oversizedHeader), &parsed),
+         "header parser must reject bytes beyond its fixed cap");
+  expect(otaPrefetchedBodyValid(107, 100, 7),
+         "prefetched bytes exactly matching Content-Length may proceed");
+  expect(!otaPrefetchedBodyValid(108, 100, 7),
+         "known extra body bytes must fail during OPEN before Flash begin");
+  expect(otaHttpEofDecision(-0x6900, -0x6900, -0x6880) ==
+           OTA_HTTP_EOF_WAIT,
+         "WANT_READ while awaiting close must remain non-blocking");
+  expect(otaHttpEofDecision(-0x6880, -0x6900, -0x6880) ==
+           OTA_HTTP_EOF_WAIT,
+         "WANT_WRITE while awaiting close must remain non-blocking");
+  expect(otaHttpEofDecision(0, -0x6900, -0x6880) ==
+           OTA_HTTP_EOF_COMPLETE,
+         "only authenticated TLS EOF completes the exact body");
+  expect(otaHttpEofDecision(1, -0x6900, -0x6880) ==
+           OTA_HTTP_EOF_FAILURE,
+         "a later extra byte must fail before staging completes");
 }
 
 static void testDigestProgressAndUiHelpers() {
@@ -318,6 +410,8 @@ struct Fake {
   bool manifestPendingReturned;
   bool firmwarePendingReturned;
   bool restartReturns;
+  uint8_t pendingOpenCount;
+  bool failOpenAfterPending;
   uint32_t firmwareReadSizes[8];
   size_t firmwareReadCount;
   size_t firmwareReadIndex;
@@ -337,6 +431,15 @@ static OtaUpdateActionResult fakeAction(
   if ((event == OTA_EVENT_RESTART || event == OTA_EVENT_RESTART_FALLBACK) &&
       fake->restartReturns)
     return otaActionFailure();
+  if (event == OTA_EVENT_OPEN_MANIFEST ||
+      event == OTA_EVENT_OPEN_SIGNATURE ||
+      event == OTA_EVENT_OPEN_FIRMWARE) {
+    if (fake->pendingOpenCount) {
+      --fake->pendingOpenCount;
+      return otaActionPending();
+    }
+    if (fake->failOpenAfterPending) return otaActionFailure();
+  }
   if (event == OTA_EVENT_DIGEST_MATCH)
     return fake->digestMatches ? otaActionComplete() : otaActionFailure();
   if (event == OTA_EVENT_READ_MANIFEST) {
@@ -556,6 +659,72 @@ static void testMalformedActionAccountingFailsClosed() {
          "adapter may not report more bytes than requested");
 }
 
+static void testAsyncOpenRemainsResponsiveAndPreBegin() {
+  Fake pending = {};
+  pending.digestMatches = true;
+  pending.pendingOpenCount = 20;
+  OtaUpdateMachine first = machine(&pending);
+  OtaUpdateInputs inputs = ready();
+  otaUpdateStep(&first, inputs, true, false);
+  for (int poll = 0; poll < 20; ++poll) {
+    otaUpdateStep(&first, inputs, false, false);
+    expect(first.phase == OTA_PHASE_OPEN_MANIFEST &&
+             !saw(pending, OTA_EVENT_BEGIN),
+           "async TLS open may remain pending across polls without Flash begin");
+  }
+  size_t beforeCancel = pending.eventCount;
+  inputs.prompt = true;
+  otaUpdateStep(&first, inputs, false, true);
+  expect(first.phase == OTA_PHASE_CANCELLED &&
+           pending.eventCount == beforeCancel,
+         "physical cancel or approval must stop a pending open immediately");
+  inputs.prompt = false;
+  otaUpdateStep(&first, inputs, false, false);
+  expect(first.phase == OTA_PHASE_CANCELLED &&
+           pending.eventCount == beforeCancel,
+         "late async completion after cancel must be ignored");
+
+  Fake conflict = {};
+  conflict.digestMatches = true;
+  conflict.pendingOpenCount = 10;
+  OtaUpdateMachine conflicted = machine(&conflict);
+  inputs = ready();
+  otaUpdateStep(&conflicted, inputs, true, false);
+  otaUpdateStep(&conflicted, inputs, false, false);
+  size_t beforeConflict = conflict.eventCount;
+  inputs.prompt = true;
+  otaUpdateStep(&conflicted, inputs, false, false);
+  expect(conflicted.phase == OTA_PHASE_CANCELLED &&
+           conflict.eventCount == beforeConflict,
+         "approval conflict must preempt a pending TLS open without polling it");
+
+  Fake timeout = {};
+  timeout.digestMatches = true;
+  timeout.pendingOpenCount = 3;
+  timeout.failOpenAfterPending = true;
+  OtaUpdateMachine second = machine(&timeout);
+  otaUpdateStep(&second, ready(), true, false);
+  for (int poll = 0; poll < 4; ++poll)
+    otaUpdateStep(&second, ready(), false, false);
+  expect(second.phase == OTA_PHASE_ERROR &&
+           !saw(timeout, OTA_EVENT_BEGIN),
+         "hard open timeout/failure must terminate without Flash begin");
+
+  Fake firmware = {};
+  firmware.digestMatches = true;
+  OtaUpdateMachine third = machine(&firmware);
+  otaUpdateStep(&third, ready(), true, false);
+  while (third.phase != OTA_PHASE_OPEN_FIRMWARE)
+    otaUpdateStep(&third, ready(), false, false);
+  firmware.pendingOpenCount = 5;
+  for (int poll = 0; poll < 5; ++poll) {
+    otaUpdateStep(&third, ready(), false, false);
+    expect(third.phase == OTA_PHASE_OPEN_FIRMWARE &&
+             !saw(firmware, OTA_EVENT_BEGIN),
+           "firmware TLS/header open must complete before esp_ota_begin");
+  }
+}
+
 static void testBootCommitIgnoresAllCancellationAndGateChanges() {
   Fake fake = {};
   fake.digestMatches = true;
@@ -654,6 +823,7 @@ int main() {
   testFailureCleanupAndNoBootSwitch();
   testCancellationAndApprovalConflict();
   testMalformedActionAccountingFailsClosed();
+  testAsyncOpenRemainsResponsiveAndPreBegin();
   testBootCommitIgnoresAllCancellationAndGateChanges();
   testTerminalScrubPreservesOnlyOutcome();
   puts("ota update logic tests passed");

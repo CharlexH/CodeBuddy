@@ -9,8 +9,10 @@ constexpr uint32_t OTA_UPDATE_CHUNK_BYTES = 4096;
 constexpr uint32_t OTA_UPDATE_SMALL_CHUNK_BYTES = 256;
 constexpr uint32_t OTA_UPDATE_READY_TIMEOUT_MS = 30000;
 constexpr uint32_t OTA_UPDATE_IO_IDLE_TIMEOUT_MS = 5000;
+constexpr uint32_t OTA_UPDATE_OPEN_TIMEOUT_MS = 5000;
 constexpr uint32_t OTA_UPDATE_RESOURCE_TIMEOUT_MS = 30000;
 constexpr uint32_t OTA_UPDATE_FIRMWARE_TIMEOUT_MS = 300000;
+constexpr size_t OTA_UPDATE_HTTP_HEADER_MAX_BYTES = 1024;
 constexpr uint32_t OTA_UPDATE_RESTART_RETRY_MS = 100;
 constexpr uint8_t OTA_UPDATE_RESTART_API_ATTEMPTS = 3;
 
@@ -45,6 +47,15 @@ struct OtaUpdateInputs {
 
 inline bool otaDeadlineExpired(uint32_t now, uint32_t deadline) {
   return static_cast<int32_t>(now - deadline) >= 0;
+}
+
+inline bool otaHttpIoExpired(
+  uint32_t now,
+  uint32_t absoluteDeadline,
+  uint32_t idleDeadline
+) {
+  return otaDeadlineExpired(now, absoluteDeadline) ||
+    otaDeadlineExpired(now, idleDeadline);
 }
 
 inline OtaUpdateGate otaUpdateGate(
@@ -158,6 +169,123 @@ struct OtaHttpMeta {
   bool identityEncoding;
 };
 
+inline char otaAsciiLower(char value) {
+  return value >= 'A' && value <= 'Z'
+    ? static_cast<char>(value - 'A' + 'a') : value;
+}
+
+inline bool otaAsciiCaseEqual(
+  const uint8_t* value,
+  size_t length,
+  const char* expected
+) {
+  if (!value || !expected || strlen(expected) != length) return false;
+  for (size_t index = 0; index < length; ++index) {
+    if (otaAsciiLower(static_cast<char>(value[index])) !=
+        otaAsciiLower(expected[index])) return false;
+  }
+  return true;
+}
+
+inline bool otaParseStrictHttpResponseHeader(
+  const uint8_t* header,
+  size_t length,
+  OtaHttpMeta* output
+) {
+  if (!header || !output || length < 12 ||
+      length > OTA_UPDATE_HTTP_HEADER_MAX_BYTES ||
+      memcmp(header + length - 4, "\r\n\r\n", 4) != 0)
+    return false;
+
+  size_t lineEnd = 0;
+  while (lineEnd + 1 < length &&
+         !(header[lineEnd] == '\r' && header[lineEnd + 1] == '\n'))
+    ++lineEnd;
+  if (lineEnd + 1 >= length || lineEnd < 12 ||
+      memcmp(header, "HTTP/1.1 ", 9) != 0 ||
+      !otaAsciiDigit(static_cast<char>(header[9])) ||
+      !otaAsciiDigit(static_cast<char>(header[10])) ||
+      !otaAsciiDigit(static_cast<char>(header[11])) ||
+      (lineEnd > 12 && header[12] != ' '))
+    return false;
+  for (size_t index = 12; index < lineEnd; ++index) {
+    if (header[index] < 0x20 || header[index] > 0x7e) return false;
+  }
+
+  OtaHttpMeta parsed = {};
+  parsed.status = (header[9] - '0') * 100 +
+    (header[10] - '0') * 10 + (header[11] - '0');
+  parsed.contentLength = -1;
+  parsed.identityEncoding = true;
+  bool contentLengthSeen = false;
+  size_t position = lineEnd + 2;
+  while (position + 1 < length) {
+    if (header[position] == '\r' && header[position + 1] == '\n') {
+      position += 2;
+      break;
+    }
+    lineEnd = position;
+    while (lineEnd + 1 < length &&
+           !(header[lineEnd] == '\r' && header[lineEnd + 1] == '\n'))
+      ++lineEnd;
+    if (lineEnd + 1 >= length || lineEnd == position ||
+        header[position] == ' ' || header[position] == '\t')
+      return false;
+    size_t colon = position;
+    while (colon < lineEnd && header[colon] != ':') ++colon;
+    if (colon == position || colon == lineEnd) return false;
+    for (size_t index = position; index < colon; ++index) {
+      char value = static_cast<char>(header[index]);
+      if (!(otaAsciiAlpha(value) || otaAsciiDigit(value) || value == '-'))
+        return false;
+    }
+    for (size_t index = colon + 1; index < lineEnd; ++index) {
+      if (header[index] != '\t' &&
+          (header[index] < 0x20 || header[index] > 0x7e))
+        return false;
+    }
+    size_t valueStart = colon + 1;
+    while (valueStart < lineEnd &&
+           (header[valueStart] == ' ' || header[valueStart] == '\t'))
+      ++valueStart;
+    size_t valueEnd = lineEnd;
+    while (valueEnd > valueStart &&
+           (header[valueEnd - 1] == ' ' || header[valueEnd - 1] == '\t'))
+      --valueEnd;
+    size_t nameLength = colon - position;
+    size_t valueLength = valueEnd - valueStart;
+    if (otaAsciiCaseEqual(header + position, nameLength, "Content-Length")) {
+      uint32_t contentLength = 0;
+      if (contentLengthSeen ||
+          !otaParseCanonicalUint(
+            reinterpret_cast<const char*>(header + valueStart),
+            valueLength,
+            UINT32_MAX,
+            &contentLength
+          )) return false;
+      contentLengthSeen = true;
+      parsed.contentLength = contentLength;
+    } else if (otaAsciiCaseEqual(
+                 header + position, nameLength, "Transfer-Encoding"
+               )) {
+      // Any transfer coding is forbidden: the OTA body must be byte-for-byte
+      // identical to the signed Content-Length representation.
+      parsed.identityEncoding = false;
+    } else if (otaAsciiCaseEqual(
+                 header + position, nameLength, "Content-Encoding"
+               )) {
+      if (!otaAsciiCaseEqual(header + valueStart, valueLength, "identity"))
+        parsed.identityEncoding = false;
+    } else if (otaAsciiCaseEqual(header + position, nameLength, "Location")) {
+      parsed.redirected = true;
+    }
+    position = lineEnd + 2;
+  }
+  if (position != length) return false;
+  *output = parsed;
+  return true;
+}
+
 inline bool otaHttpMetaCommonValid(const OtaHttpMeta& meta) {
   return meta.status == 200 && !meta.redirected && meta.identityEncoding &&
     meta.contentLength > 0;
@@ -179,6 +307,30 @@ inline bool otaHttpMetaExactValid(
   return otaHttpMetaCommonValid(meta) && expectedLength > 0 &&
     expectedLength <= maximumLength &&
     static_cast<uint64_t>(meta.contentLength) == expectedLength;
+}
+
+inline bool otaPrefetchedBodyValid(
+  size_t receivedBytes,
+  size_t headerBytes,
+  uint32_t contentLength
+) {
+  return headerBytes <= receivedBytes &&
+    receivedBytes - headerBytes <= contentLength;
+}
+
+enum OtaHttpEofDecision : uint8_t {
+  OTA_HTTP_EOF_WAIT = 0,
+  OTA_HTTP_EOF_COMPLETE,
+  OTA_HTTP_EOF_FAILURE,
+};
+
+inline OtaHttpEofDecision otaHttpEofDecision(
+  int32_t result,
+  int32_t wantRead,
+  int32_t wantWrite
+) {
+  if (result == wantRead || result == wantWrite) return OTA_HTTP_EOF_WAIT;
+  return result == 0 ? OTA_HTTP_EOF_COMPLETE : OTA_HTTP_EOF_FAILURE;
 }
 
 enum OtaHttpBodyDecision : uint8_t {
@@ -551,6 +703,7 @@ inline void otaUpdateStep(
   switch (machine->phase) {
     case OTA_PHASE_OPEN_MANIFEST:
       result = otaUpdateAct(machine, OTA_EVENT_OPEN_MANIFEST);
+      if (result.status == OTA_ACTION_PENDING) break;
       if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
       machine->phase = OTA_PHASE_READ_MANIFEST;
       break;
@@ -566,6 +719,7 @@ inline void otaUpdateStep(
       break;
     case OTA_PHASE_OPEN_SIGNATURE:
       result = otaUpdateAct(machine, OTA_EVENT_OPEN_SIGNATURE);
+      if (result.status == OTA_ACTION_PENDING) break;
       if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
       machine->phase = OTA_PHASE_READ_SIGNATURE;
       break;
@@ -592,6 +746,7 @@ inline void otaUpdateStep(
       break;
     case OTA_PHASE_OPEN_FIRMWARE:
       result = otaUpdateAct(machine, OTA_EVENT_OPEN_FIRMWARE);
+      if (result.status == OTA_ACTION_PENDING) break;
       if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
       machine->phase = OTA_PHASE_BEGIN;
       break;
