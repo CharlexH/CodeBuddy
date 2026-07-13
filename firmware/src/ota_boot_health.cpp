@@ -3,6 +3,7 @@
 #include <esp_attr.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
+#include <esp_rom_sys.h>
 #include <esp_system.h>
 #include <sdkconfig.h>
 #include <stdlib.h>
@@ -16,7 +17,6 @@
 
 namespace {
 
-constexpr uint32_t ROLLBACK_RECORD_MAGIC = 0x43425242;  // "CBRB"
 constexpr uint32_t EXPECTED_OTADATA_OFFSET = 0xE000;
 constexpr uint32_t EXPECTED_OTADATA_SIZE = 0x2000;
 constexpr uint32_t EXPECTED_OTA0_OFFSET = 0x10000;
@@ -25,47 +25,64 @@ constexpr uint32_t EXPECTED_OTA_SLOT_SIZE = 0x330000;
 
 struct RollbackRecord {
   uint32_t magic;
+  uint8_t version;
   uint8_t reason;
-  uint8_t reasonInverse;
   uint16_t reserved;
+  int32_t errorCode;
+  uint32_t checksum;
 };
 
 RTC_DATA_ATTR RollbackRecord retainedRollback = {};
 OtaBootHealthState supervisor = otaBootHealthInitial();
 OtaBootHealthReason observedRollbackReason = OTA_BOOT_REASON_NONE;
+int32_t observedRollbackError = 0;
 int lastStateQueryError = 0;
 portMUX_TYPE supervisorMux = portMUX_INITIALIZER_UNLOCKED;
 
-bool validReasonByte(uint8_t reason) {
-  return reason >= OTA_BOOT_REASON_LAYOUT &&
-    reason <= OTA_BOOT_REASON_SUPERVISOR;
-}
-
 void observeAndClearRetainedReason() {
-  if (retainedRollback.magic == ROLLBACK_RECORD_MAGIC &&
-      static_cast<uint8_t>(~retainedRollback.reason) ==
-        retainedRollback.reasonInverse &&
-      validReasonByte(retainedRollback.reason)) {
+  observedRollbackReason = OTA_BOOT_REASON_NONE;
+  observedRollbackError = 0;
+  OtaBootHealthReason reason =
+    static_cast<OtaBootHealthReason>(retainedRollback.reason);
+  if (otaBootRollbackRecordValid(
+        retainedRollback.magic,
+        retainedRollback.version,
+        reason,
+        retainedRollback.errorCode,
+        retainedRollback.checksum)) {
     observedRollbackReason =
       static_cast<OtaBootHealthReason>(retainedRollback.reason);
+    observedRollbackError = retainedRollback.errorCode;
   }
+  // Clear the commit marker first. Any interruption leaves an invalid record.
   retainedRollback.magic = 0;
+  __sync_synchronize();
+  retainedRollback.version = 0;
   retainedRollback.reason = 0;
-  retainedRollback.reasonInverse = 0;
   retainedRollback.reserved = 0;
+  retainedRollback.errorCode = 0;
+  retainedRollback.checksum = 0;
 }
 
-void retainRollbackReason(OtaBootHealthReason reason) {
-  const uint8_t encoded = validReasonByte(static_cast<uint8_t>(reason))
+void retainRollbackReason(OtaBootHealthReason reason, int32_t errorCode) {
+  const uint8_t encoded = otaBootHealthReasonIsPersistable(
+      static_cast<uint8_t>(reason))
     ? static_cast<uint8_t>(reason)
     : static_cast<uint8_t>(OTA_BOOT_REASON_EVENT_LOOP);
-  retainedRollback.reason = encoded;
-  retainedRollback.reasonInverse = static_cast<uint8_t>(~encoded);
-  retainedRollback.reserved = 0;
-  // Commit marker last so a reset during this tiny write is fail-closed for
-  // diagnostics without ever blocking the actual rollback.
+  retainedRollback.magic = 0;
   __sync_synchronize();
-  retainedRollback.magic = ROLLBACK_RECORD_MAGIC;
+  retainedRollback.version = OTA_BOOT_ROLLBACK_RECORD_VERSION;
+  retainedRollback.reason = encoded;
+  retainedRollback.reserved = 0;
+  retainedRollback.errorCode = errorCode;
+  retainedRollback.checksum = otaBootRollbackRecordChecksum(
+    retainedRollback.version,
+    static_cast<OtaBootHealthReason>(encoded),
+    retainedRollback.errorCode);
+  // The magic commit marker is always written last. CRC32 protects the actual
+  // version/reason/error payload against torn/corrupted RTC retained memory.
+  __sync_synchronize();
+  retainedRollback.magic = OTA_BOOT_ROLLBACK_RECORD_MAGIC;
   __sync_synchronize();
 }
 
@@ -119,12 +136,17 @@ struct EspBootHealthAdapter {
     return true;
   }
 
-  void persistReason(OtaBootHealthReason reason) {
-    retainRollbackReason(reason);
+  void persistReason(OtaBootHealthReason reason, int32_t errorCode) {
+    retainRollbackReason(reason, errorCode);
   }
 
-  int markInvalidRollbackAndReboot() {
+  int32_t markInvalidRollbackAndReboot() {
     return esp_ota_mark_app_invalid_rollback_and_reboot();
+  }
+
+  void boundedDelay(uint32_t milliseconds) {
+    TickType_t ticks = pdMS_TO_TICKS(milliseconds);
+    vTaskDelay(ticks ? ticks : 1);
   }
 
   void restart() { esp_restart(); }
@@ -136,14 +158,24 @@ struct EspBootHealthAdapter {
 
 [[noreturn]] void performRollback(OtaBootHealthReason reason) {
   EspBootHealthAdapter adapter;
-  adapter.persistReason(reason);
-  (void)adapter.markInvalidRollbackAndReboot();
+  // On the normal path the API reboots and never returns, so save the reason
+  // with a zero return code first. A returned API error replaces it below.
+  adapter.persistReason(reason, 0);
+  int32_t error = adapter.markInvalidRollbackAndReboot();
+  adapter.persistReason(reason, error);
+  esp_rom_printf("[ota-boot] rollback_return=%ld\n", (long)error);
   // Returning from the rollback API means it failed to reboot. The supervisor
   // has already latched HALTED, so no other task can resume or mark valid.
-  for (uint8_t i = 0; i < OTA_BOOT_RESTART_FALLBACK_ATTEMPTS; ++i) {
-    adapter.restart();
-  }
+  adapter.boundedDelay(OTA_BOOT_ROLLBACK_RESTART_DELAY_MS);
+  adapter.restart();
   adapter.fatalStop();
+}
+
+[[noreturn]] void stopNonOwnerCaller() {
+  // Another task already owns rollback. Suspend this caller permanently so it
+  // cannot continue normal startup while the owner calls the reboot API.
+  vTaskSuspend(nullptr);
+  abort();
 }
 
 void bootHealthWatchdogTask(void*) {
@@ -203,24 +235,22 @@ void otaBootHealthCriticalFailure(OtaBootHealthReason reason) {
 void otaBootHealthPoll(uint32_t nowMs) {
   EspBootHealthAdapter adapter;
   portENTER_CRITICAL(&supervisorMux);
-  OtaBootHealthAction action = otaBootHealthNextAction(&supervisor, nowMs);
+  OtaBootHealthAction action = otaBootHealthClaimAction(&supervisor, nowMs);
   OtaBootHealthReason rollbackReason = supervisor.reason;
+  bool executionAllowed = otaBootHealthNormalExecutionAllowed(&supervisor);
   portEXIT_CRITICAL(&supervisorMux);
 
   if (action == OTA_BOOT_ACTION_MARK_VALID) {
     bool success = adapter.markValid();
     portENTER_CRITICAL(&supervisorMux);
     otaBootHealthMarkValidResult(&supervisor, success);
-    action = otaBootHealthNextAction(&supervisor, nowMs);
+    action = otaBootHealthClaimAction(&supervisor, nowMs);
     rollbackReason = supervisor.reason;
+    executionAllowed = otaBootHealthNormalExecutionAllowed(&supervisor);
     portEXIT_CRITICAL(&supervisorMux);
   }
-  if (action != OTA_BOOT_ACTION_ROLLBACK) return;
-
-  portENTER_CRITICAL(&supervisorMux);
-  supervisor.phase = OTA_BOOT_PHASE_HALTED;
-  portEXIT_CRITICAL(&supervisorMux);
-  performRollback(rollbackReason);
+  if (action == OTA_BOOT_ACTION_ROLLBACK) performRollback(rollbackReason);
+  if (!executionAllowed) stopNonOwnerCaller();
 }
 
 bool otaBootHealthSupervising() {
@@ -242,12 +272,17 @@ const char* otaBootHealthLastRollbackReason() {
   return otaBootHealthReasonLabel(observedRollbackReason);
 }
 
+int32_t otaBootHealthLastRollbackError() {
+  return observedRollbackError;
+}
+
 void otaBootHealthLogStatus() {
   portENTER_CRITICAL(&supervisorMux);
   uint8_t readyBits = supervisor.readyBits;
   portEXIT_CRITICAL(&supervisorMux);
   Serial.printf(
-    "[ota-boot] state=%s ready=0x%02x rollback=%s query=0x%x\n",
+    "[ota-boot] state=%s ready=0x%02x rollback=%s rollbackErr=%ld query=0x%x\n",
     otaBootHealthStatusLabel(), readyBits,
-    otaBootHealthLastRollbackReason(), lastStateQueryError);
+    otaBootHealthLastRollbackReason(),
+    (long)otaBootHealthLastRollbackError(), lastStateQueryError);
 }

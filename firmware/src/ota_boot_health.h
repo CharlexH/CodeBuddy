@@ -18,5 +18,5 @@ void otaBootHealthPoll(uint32_t nowMs);
 bool otaBootHealthSupervising();
 const char* otaBootHealthStatusLabel();
 const char* otaBootHealthLastRollbackReason();
+int32_t otaBootHealthLastRollbackError();
 void otaBootHealthLogStatus();
-

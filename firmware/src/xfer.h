@@ -124,7 +124,8 @@ inline bool xferCommand(JsonDocument& doc) {
       "\"name\":\"%s\",\"owner\":\"%s\",\"sec\":%s,"
       "\"bat\":{\"pct\":%d,\"mV\":%d,\"mA\":%d,\"usb\":%s},"
       "\"sys\":{\"up\":%lu,\"heap\":%u,\"fsFree\":%lu,\"fsTotal\":%lu},"
-      "\"otaBoot\":{\"state\":\"%s\",\"rollback\":\"%s\"},"
+      "\"otaBoot\":{\"state\":\"%s\",\"rollback\":\"%s\","
+      "\"rollbackError\":%ld},"
       "\"stats\":{\"appr\":%u,\"deny\":%u,\"vel\":%u,\"nap\":%lu,\"lvl\":%u}"
       "}}\n",
       petName(), ownerName(), bleSecure() ? "true" : "false",
@@ -133,6 +134,7 @@ inline bool xferCommand(JsonDocument& doc) {
       (unsigned long)(LittleFS.totalBytes() - LittleFS.usedBytes()),
       (unsigned long)LittleFS.totalBytes(),
       otaBootHealthStatusLabel(), otaBootHealthLastRollbackReason(),
+      (long)otaBootHealthLastRollbackError(),
       stats().approvals, stats().denials, statsMedianVelocity(),
       (unsigned long)stats().napSeconds, stats().level
     );

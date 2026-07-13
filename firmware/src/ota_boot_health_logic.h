@@ -3,7 +3,9 @@
 #include <stdint.h>
 
 constexpr uint32_t OTA_BOOT_HEALTH_TIMEOUT_MS = 30000;
-constexpr uint8_t OTA_BOOT_RESTART_FALLBACK_ATTEMPTS = 3;
+constexpr uint32_t OTA_BOOT_ROLLBACK_RESTART_DELAY_MS = 100;
+constexpr uint32_t OTA_BOOT_ROLLBACK_RECORD_MAGIC = 0x43425242;  // "CBRB"
+constexpr uint8_t OTA_BOOT_ROLLBACK_RECORD_VERSION = 1;
 
 enum OtaBootStateQuery : uint8_t {
   OTA_BOOT_QUERY_NON_PENDING = 0,
@@ -87,6 +89,50 @@ inline const char* otaBootHealthReasonLabel(OtaBootHealthReason reason) {
   return "unknown";
 }
 
+inline bool otaBootHealthReasonIsPersistable(uint8_t reason) {
+  return reason >= OTA_BOOT_REASON_LAYOUT &&
+    reason <= OTA_BOOT_REASON_SUPERVISOR;
+}
+
+inline uint32_t otaBootRollbackRecordChecksum(
+  uint8_t version,
+  OtaBootHealthReason reason,
+  int32_t errorCode
+) {
+  // CRC-32/ISO-HDLC over an explicit, endian-stable version/reason/error
+  // encoding. This is integrity for retained diagnostics, not authentication.
+  const uint8_t bytes[6] = {
+    version,
+    static_cast<uint8_t>(reason),
+    static_cast<uint8_t>(static_cast<uint32_t>(errorCode)),
+    static_cast<uint8_t>(static_cast<uint32_t>(errorCode) >> 8),
+    static_cast<uint8_t>(static_cast<uint32_t>(errorCode) >> 16),
+    static_cast<uint8_t>(static_cast<uint32_t>(errorCode) >> 24),
+  };
+  uint32_t crc = 0xFFFFFFFFU;
+  for (uint8_t byte : bytes) {
+    crc ^= byte;
+    for (uint8_t bit = 0; bit < 8; ++bit) {
+      uint32_t mask = 0U - (crc & 1U);
+      crc = (crc >> 1) ^ (0xEDB88320U & mask);
+    }
+  }
+  return ~crc;
+}
+
+inline bool otaBootRollbackRecordValid(
+  uint32_t magic,
+  uint8_t version,
+  OtaBootHealthReason reason,
+  int32_t errorCode,
+  uint32_t checksum
+) {
+  return magic == OTA_BOOT_ROLLBACK_RECORD_MAGIC &&
+    version == OTA_BOOT_ROLLBACK_RECORD_VERSION &&
+    otaBootHealthReasonIsPersistable(static_cast<uint8_t>(reason)) &&
+    checksum == otaBootRollbackRecordChecksum(version, reason, errorCode);
+}
+
 inline const char* otaBootHealthPhaseLabel(OtaBootHealthPhase phase) {
   switch (phase) {
     case OTA_BOOT_PHASE_INERT: return "ordinary";
@@ -166,6 +212,27 @@ inline OtaBootHealthAction otaBootHealthNextAction(
   return OTA_BOOT_ACTION_NONE;
 }
 
+// The caller must hold its supervisor lock while invoking this helper. A
+// rollback action and the irreversible HALTED latch are claimed together, so
+// a second loop/watchdog caller can never observe "action issued" and resume.
+inline OtaBootHealthAction otaBootHealthClaimAction(
+  OtaBootHealthState* state,
+  uint32_t now
+) {
+  OtaBootHealthAction action = otaBootHealthNextAction(state, now);
+  if (state && action == OTA_BOOT_ACTION_ROLLBACK) {
+    state->phase = OTA_BOOT_PHASE_HALTED;
+  }
+  return action;
+}
+
+inline bool otaBootHealthNormalExecutionAllowed(
+  const OtaBootHealthState* state
+) {
+  return state && state->phase != OTA_BOOT_PHASE_ROLLBACK &&
+    state->phase != OTA_BOOT_PHASE_HALTED;
+}
+
 inline void otaBootHealthMarkValidResult(
   OtaBootHealthState* state,
   bool success
@@ -182,8 +249,9 @@ inline void otaBootHealthMarkValidResult(
 
 // Adapter contract:
 //   bool markValid();
-//   void persistReason(OtaBootHealthReason);
+//   void persistReason(OtaBootHealthReason, int32_t errorCode);
 //   int markInvalidRollbackAndReboot();  // returns only on failure
+//   void boundedDelay(uint32_t);
 //   void restart();                      // expected not to return on device
 //   void fatalStop();                    // expected not to return on device
 template <typename Adapter>
@@ -193,22 +261,19 @@ inline void otaBootHealthRun(
   Adapter* adapter
 ) {
   if (!state || !adapter) return;
-  OtaBootHealthAction action = otaBootHealthNextAction(state, now);
+  OtaBootHealthAction action = otaBootHealthClaimAction(state, now);
   if (action == OTA_BOOT_ACTION_MARK_VALID) {
     otaBootHealthMarkValidResult(state, adapter->markValid());
-    action = otaBootHealthNextAction(state, now);
+    action = otaBootHealthClaimAction(state, now);
   }
   if (action != OTA_BOOT_ACTION_ROLLBACK) return;
 
-  // Persistence is diagnostic only. It must never gate the active rollback.
-  adapter->persistReason(state->reason);
-  (void)adapter->markInvalidRollbackAndReboot();
-
-  // Any return from the IDF rollback-and-reboot API is fatal. Latch before
-  // fallback so even a test adapter (whose restart returns) cannot resume.
-  state->phase = OTA_BOOT_PHASE_HALTED;
-  for (uint8_t i = 0; i < OTA_BOOT_RESTART_FALLBACK_ATTEMPTS; ++i) {
-    adapter->restart();
-  }
+  // Record the reason before calling an API which normally never returns. If
+  // it does return, replace the provisional zero with its exact numeric error.
+  adapter->persistReason(state->reason, 0);
+  int32_t error = adapter->markInvalidRollbackAndReboot();
+  adapter->persistReason(state->reason, error);
+  adapter->boundedDelay(OTA_BOOT_ROLLBACK_RESTART_DELAY_MS);
+  adapter->restart();
   adapter->fatalStop();
 }

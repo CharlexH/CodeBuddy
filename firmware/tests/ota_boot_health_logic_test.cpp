@@ -23,6 +23,7 @@ static void signalAll(OtaBootHealthState* state) {
 struct FakeAdapter {
   char events[256] = "";
   bool markValidSucceeds = true;
+  int rollbackError = 0x1505;  // ESP_ERR_OTA_ROLLBACK_FAILED
 
   void event(const char* value) {
     if (events[0]) strncat(events, ",", sizeof(events) - strlen(events) - 1);
@@ -33,14 +34,20 @@ struct FakeAdapter {
     event("mark-valid");
     return markValidSucceeds;
   }
-  void persistReason(OtaBootHealthReason reason) {
-    char value[32];
-    snprintf(value, sizeof(value), "reason:%s", otaBootHealthReasonLabel(reason));
+  void persistReason(OtaBootHealthReason reason, int32_t errorCode) {
+    char value[48];
+    snprintf(value, sizeof(value), "reason:%s:%ld",
+             otaBootHealthReasonLabel(reason), (long)errorCode);
     event(value);
   }
   int markInvalidRollbackAndReboot() {
     event("rollback");
-    return -1;  // The real API returns only when rollback/reboot failed.
+    return rollbackError;  // The real API returns only on failure.
+  }
+  void boundedDelay(uint32_t ms) {
+    char value[24];
+    snprintf(value, sizeof(value), "delay:%lu", (unsigned long)ms);
+    event(value);
   }
   void restart() { event("restart"); }
   void fatalStop() { event("abort"); }
@@ -89,7 +96,7 @@ static void testEveryReadinessBitIsRequired() {
            "incomplete readiness must not mark the image valid early");
     otaBootHealthRun(&state, 100 + OTA_BOOT_HEALTH_TIMEOUT_MS, &adapter);
     expect(state.phase == OTA_BOOT_PHASE_HALTED &&
-             strstr(adapter.events, "reason:timeout,rollback") == adapter.events,
+             strstr(adapter.events, "reason:timeout:0,rollback") == adapter.events,
            "every missing readiness bit must end in active timeout rollback");
   }
 }
@@ -117,7 +124,7 @@ static void testDeadlineExactAndWrapSafe() {
   otaBootHealthRun(&exact, 100 + OTA_BOOT_HEALTH_TIMEOUT_MS, &adapter);
   expect(exact.phase == OTA_BOOT_PHASE_HALTED,
          "the exact deadline must time out even if readiness was not polled earlier");
-  expect(strstr(adapter.events, "reason:timeout,rollback") == adapter.events,
+  expect(strstr(adapter.events, "reason:timeout:0,rollback") == adapter.events,
          "deadline timeout must actively request rollback before fallback restart");
 
   OtaBootHealthState wrapped = otaBootHealthInitial();
@@ -140,7 +147,7 @@ static void testExplicitFailureAndInvalidLayoutRollbackOnce() {
   otaBootHealthFail(&state, OTA_BOOT_REASON_STORAGE);
   FakeAdapter adapter;
   otaBootHealthRun(&state, 1, &adapter);
-  expect(strstr(adapter.events, "reason:storage,rollback") == adapter.events,
+  expect(strstr(adapter.events, "reason:storage:0,rollback") == adapter.events,
          "an explicit critical init failure must immediately roll back");
   char once[sizeof(adapter.events)];
   strcpy(once, adapter.events);
@@ -152,7 +159,7 @@ static void testExplicitFailureAndInvalidLayoutRollbackOnce() {
   otaBootHealthArm(&layout, OTA_BOOT_QUERY_PENDING_VERIFY, 0, false);
   FakeAdapter layoutAdapter;
   otaBootHealthRun(&layout, 0, &layoutAdapter);
-  expect(strstr(layoutAdapter.events, "reason:layout,rollback") ==
+  expect(strstr(layoutAdapter.events, "reason:layout:0,rollback") ==
            layoutAdapter.events,
          "a pending image without the exact OTA layout must fail closed");
 }
@@ -165,8 +172,9 @@ static void testMarkValidFailureFallsThroughToRollback() {
   adapter.markValidSucceeds = false;
   otaBootHealthRun(&state, 1, &adapter);
   expect(strcmp(adapter.events,
-    "mark-valid,reason:mark-valid,rollback,restart,restart,restart,abort") == 0,
-    "mark-valid errors must roll back, then use bounded restart/abort fallback");
+    "mark-valid,reason:mark-valid:0,rollback,reason:mark-valid:5381,"
+    "delay:100,restart,abort") == 0,
+    "mark-valid errors must capture rollback failure then restart exactly once");
   expect(state.phase == OTA_BOOT_PHASE_HALTED,
          "a returned rollback API must irreversibly halt the supervisor");
 }
@@ -178,12 +186,12 @@ static void testRollbackReturnUsesBoundedFallbackAndNeverResumes() {
   FakeAdapter adapter;
   otaBootHealthRun(&state, 1, &adapter);
   expect(strcmp(adapter.events,
-    "reason:ble,rollback,restart,restart,restart,abort") == 0,
-    "rollback API return must trigger exactly three restart attempts then abort");
+    "reason:ble:0,rollback,reason:ble:5381,delay:100,restart,abort") == 0,
+    "rollback API return must delay, restart exactly once, then abort");
   otaBootHealthSignal(&state, OTA_BOOT_READY_EVENT_LOOP);
   otaBootHealthRun(&state, 2, &adapter);
   expect(strcmp(adapter.events,
-    "reason:ble,rollback,restart,restart,restart,abort") == 0,
+    "reason:ble:0,rollback,reason:ble:5381,delay:100,restart,abort") == 0,
     "halted supervisor must never resume or validate later");
 
   OtaBootHealthState prior = otaBootHealthInitial();
@@ -194,6 +202,69 @@ static void testRollbackReturnUsesBoundedFallbackAndNeverResumes() {
          "the prior valid slot after rollback must boot without a rollback loop");
 }
 
+static void testRollbackClaimIsAtomicAcrossTwoCallers() {
+  OtaBootHealthState state = otaBootHealthInitial();
+  otaBootHealthArm(&state, OTA_BOOT_QUERY_PENDING_VERIFY, 0, true);
+  otaBootHealthFail(&state, OTA_BOOT_REASON_STORAGE);
+
+  OtaBootHealthAction first = otaBootHealthClaimAction(&state, 1);
+  expect(first == OTA_BOOT_ACTION_ROLLBACK &&
+           state.phase == OTA_BOOT_PHASE_HALTED,
+         "rollback claimant must latch HALTED before releasing ownership");
+  OtaBootHealthAction second = otaBootHealthClaimAction(&state, 1);
+  expect(second == OTA_BOOT_ACTION_NONE &&
+           state.phase == OTA_BOOT_PHASE_HALTED,
+         "an interleaved second caller must observe HALTED and no action");
+  expect(!otaBootHealthNormalExecutionAllowed(&state),
+         "the second caller must not be allowed to resume normal startup");
+  otaBootHealthSignal(&state, OTA_BOOT_READY_EVENT_LOOP);
+  expect(state.phase == OTA_BOOT_PHASE_HALTED,
+         "normal startup cannot resume after rollback ownership is claimed");
+}
+
+static void testRetainedRollbackRecordUsesRealChecksum() {
+  const int32_t error = 0x1505;  // ESP_ERR_OTA_ROLLBACK_FAILED
+  uint32_t checksum = otaBootRollbackRecordChecksum(
+    OTA_BOOT_ROLLBACK_RECORD_VERSION, OTA_BOOT_REASON_BLE, error);
+  expect(checksum == 0x9F4D6CDFU,
+         "retained record must use standard CRC-32/ISO-HDLC bytes");
+  expect(otaBootRollbackRecordValid(
+           OTA_BOOT_ROLLBACK_RECORD_MAGIC,
+           OTA_BOOT_ROLLBACK_RECORD_VERSION,
+           OTA_BOOT_REASON_BLE,
+           error,
+           checksum),
+         "exact version/reason/error CRC32 record must validate");
+  expect(!otaBootRollbackRecordValid(
+           OTA_BOOT_ROLLBACK_RECORD_MAGIC,
+           OTA_BOOT_ROLLBACK_RECORD_VERSION + 1,
+           OTA_BOOT_REASON_BLE,
+           error,
+           checksum),
+         "version corruption must invalidate retained reason");
+  expect(!otaBootRollbackRecordValid(
+           OTA_BOOT_ROLLBACK_RECORD_MAGIC,
+           OTA_BOOT_ROLLBACK_RECORD_VERSION,
+           OTA_BOOT_REASON_STORAGE,
+           error,
+           checksum),
+         "reason corruption must invalidate retained reason");
+  expect(!otaBootRollbackRecordValid(
+           OTA_BOOT_ROLLBACK_RECORD_MAGIC,
+           OTA_BOOT_ROLLBACK_RECORD_VERSION,
+           OTA_BOOT_REASON_BLE,
+           error + 1,
+           checksum),
+         "error-code corruption must invalidate retained reason");
+  expect(!otaBootRollbackRecordValid(
+           OTA_BOOT_ROLLBACK_RECORD_MAGIC,
+           OTA_BOOT_ROLLBACK_RECORD_VERSION,
+           OTA_BOOT_REASON_BLE,
+           error,
+           checksum ^ 0x01000000U),
+         "checksum corruption must be ignored on the next boot");
+}
+
 int main() {
   testNonPendingAndUnknownAreInert();
   testEveryReadinessBitIsRequired();
@@ -202,5 +273,7 @@ int main() {
   testExplicitFailureAndInvalidLayoutRollbackOnce();
   testMarkValidFailureFallsThroughToRollback();
   testRollbackReturnUsesBoundedFallbackAndNeverResumes();
+  testRollbackClaimIsAtomicAcrossTwoCallers();
+  testRetainedRollbackRecordUsesRealChecksum();
   return 0;
 }
