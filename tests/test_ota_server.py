@@ -114,7 +114,7 @@ def test_endpoint_token_byte_bounds_match_firmware_parser():
     assert not ota_server_module._TOKEN.fullmatch("x" * 128)
 
 
-def test_ephemeral_leaf_is_p256_ip_scoped_server_certificate_and_private(tmp_path):
+def test_ephemeral_leaf_has_exact_ip_and_legacy_dns_sans_and_is_private(tmp_path):
     trust = generate_ota_trust(tmp_path / "trust")
     sessions = tmp_path / "sessions"
 
@@ -131,8 +131,18 @@ def test_ephemeral_leaf_is_p256_ip_scoped_server_certificate_and_private(tmp_pat
         check=True,
         capture_output=True,
     ).stdout
+    san_lines = details.decode("utf-8").split("X509v3 Subject Alternative Name:", 1)[1]
+    san_line = next(line.strip() for line in san_lines.splitlines() if line.strip())
+    san_entries = [
+        entry.strip()
+        for entry in san_line.split(",")
+        if entry.strip()
+    ]
     assert b"prime256v1" in details
-    assert b"IP Address:192.168.44.8" in details
+    assert san_entries == [
+        "IP Address:192.168.44.8",
+        "DNS:192.168.44.8",
+    ]
     assert b"TLS Web Server Authentication" in details
     assert b"CA:FALSE" in details
     subprocess.run(
@@ -306,6 +316,29 @@ def test_server_rejects_signed_manifest_url_mismatch_and_closes_reservation(tmp_
         )
 
     assert reservation.closed is True
+
+
+def test_server_constructs_after_closed_loop_and_starts_in_fresh_loop(tmp_path):
+    asyncio.run(asyncio.sleep(0))
+    server = OtaHttpsServer(
+        release_factory=lambda firmware_url: _release(
+            tmp_path / "release",
+            artifact_url=firmware_url,
+        ),
+        trust=generate_ota_trust(tmp_path / "trust"),
+        token_factory=lambda: TOKEN,
+        session_root=tmp_path / "sessions",
+    )
+
+    async def exercise():
+        offer = await server.start()
+        await server.close()
+        return offer
+
+    offer = asyncio.run(exercise())
+
+    assert offer.host == server.offer.host
+    assert server.session_dir is not None and not server.session_dir.exists()
 
 
 def test_start_failure_releases_reserved_port_and_private_tls_session(tmp_path):

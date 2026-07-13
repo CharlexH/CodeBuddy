@@ -162,6 +162,7 @@ def create_ephemeral_tls_material(
 ) -> EphemeralTlsMaterial:
     if not _is_rfc1918_ipv4(ip_address):
         raise ValueError("OTA HTTPS certificate requires an RFC1918 IPv4 address")
+    canonical_ip = str(ipaddress.IPv4Address(ip_address))
     if (
         trust.local_ca_private_key.is_symlink()
         or not trust.local_ca_private_key.is_file()
@@ -192,7 +193,7 @@ def create_ephemeral_tls_material(
             "extendedKeyUsage = serverAuth\n"
             "subjectKeyIdentifier = hash\n"
             "authorityKeyIdentifier = keyid,issuer\n"
-            f"subjectAltName = IP:{ip_address}\n",
+            f"subjectAltName = IP:{canonical_ip},DNS:{canonical_ip}\n",
             encoding="utf-8",
         )
         extensions.chmod(0o600)
@@ -510,8 +511,9 @@ class OtaHttpsServer:
         self._max_concurrency = max_concurrency
         self._server: Optional[asyncio.AbstractServer] = None
         self._material: Optional[EphemeralTlsMaterial] = None
-        self._complete = asyncio.Event()
-        self._close_lock = asyncio.Lock()
+        self._complete: Optional[asyncio.Event] = None
+        self._close_lock: Optional[asyncio.Lock] = None
+        self._close_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._clients: Dict[asyncio.Task, asyncio.StreamWriter] = {}
         self._started = False
         self.session_dir: Optional[Path] = None
@@ -524,10 +526,25 @@ class OtaHttpsServer:
     def active_connection_count(self) -> int:
         return len(self._clients)
 
+    def _completion_event(self) -> asyncio.Event:
+        if self._complete is None:
+            self._complete = asyncio.Event()
+        return self._complete
+
+    def _close_guard(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._close_lock is None or self._close_lock_loop is not loop:
+            if self._close_lock is not None and self._close_lock.locked():
+                raise RuntimeError("OTA HTTPS server is closing on another event loop")
+            self._close_lock = asyncio.Lock()
+            self._close_lock_loop = loop
+        return self._close_lock
+
     async def start(self) -> OtaServerOffer:
         if self._started:
             raise RuntimeError("OTA HTTPS server has already been started")
         self._started = True
+        self._completion_event()
         host = self.offer.host
         listening_socket: Optional[socket.socket] = None
         try:
@@ -567,12 +584,12 @@ class OtaHttpsServer:
 
     async def wait_until_complete(self, *, timeout: float) -> None:
         try:
-            await asyncio.wait_for(self._complete.wait(), timeout=timeout)
+            await asyncio.wait_for(self._completion_event().wait(), timeout=timeout)
         finally:
             await self.close()
 
     async def close(self) -> None:
-        async with self._close_lock:
+        async with self._close_guard():
             server = self._server
             self._server = None
             if server is not None:
@@ -617,6 +634,7 @@ class OtaHttpsServer:
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        complete = self._completion_event()
         task = asyncio.current_task()
         if task is None:
             writer.close()
@@ -650,7 +668,7 @@ class OtaHttpsServer:
             except asyncio.TimeoutError:
                 return
             if response.completes_offer:
-                self._complete.set()
+                complete.set()
                 if self._server is not None:
                     self._server.close()
         except asyncio.CancelledError:

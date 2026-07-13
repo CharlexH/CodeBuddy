@@ -73,6 +73,61 @@ def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(
     assert agent._snapshot().as_ble_payload()["usage"] is None
 
 
+def test_agent_constructs_after_closed_loop_and_runs_in_fresh_loop(tmp_path):
+    asyncio.run(asyncio.sleep(0))
+    socket_path = Path(f"/tmp/code-buddy-loop-{id(tmp_path)}.sock")
+    agent = BuddyAgent(
+        tmp_path / "state.json",
+        socket_path=socket_path,
+        watcher=None,
+        readonly_poll_interval=60.0,
+        keepalive_interval=60.0,
+        reconnect_interval=60.0,
+    )
+
+    async def exercise():
+        task = asyncio.create_task(agent.run())
+        for _ in range(100):
+            if agent._server is not None:
+                break
+            await asyncio.sleep(0.001)
+        assert agent._server is not None
+        assert await agent._handle_command({"cmd": "stop"}) == {"ok": True}
+        await task
+
+    asyncio.run(exercise())
+
+    assert not agent.socket_path.exists()
+
+
+def test_agent_ota_session_lock_is_recreated_for_sequential_event_loops(tmp_path):
+    agent = BuddyAgent(tmp_path / "state.json", watcher=None)
+
+    async def exercise_contention():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        visits = []
+
+        async def visit(name):
+            async with agent.ota_session():
+                visits.append(name)
+                if name == "first":
+                    entered.set()
+                    await release.wait()
+
+        first = asyncio.create_task(visit("first"))
+        await entered.wait()
+        second = asyncio.create_task(visit("second"))
+        await asyncio.sleep(0)
+        assert visits == ["first"]
+        release.set()
+        await asyncio.gather(first, second)
+        assert visits == ["first", "second"]
+
+    asyncio.run(exercise_contention())
+    asyncio.run(exercise_contention())
+
+
 def test_agent_ota_session_suspends_snapshots_and_releases_after_failure(tmp_path):
     async def exercise():
         agent = BuddyAgent(tmp_path / "state.json", watcher=None)
@@ -252,7 +307,7 @@ def test_agent_ble_loop_recreates_transport_after_connect_failure(tmp_path):
         )
         task = asyncio.create_task(agent._ble_loop())
         await asyncio.sleep(0.08)
-        agent._stopped.set()
+        await agent._handle_command({"cmd": "stop"})
         await task
         return agent
 

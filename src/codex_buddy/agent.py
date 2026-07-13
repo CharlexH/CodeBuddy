@@ -197,21 +197,32 @@ class BuddyAgent:
         self._request_to_control: dict[str, str] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._server: Optional[asyncio.AbstractServer] = None
-        self._stopped = asyncio.Event()
+        self._stopped: Optional[asyncio.Event] = None
+        self._stop_requested = False
         self._ble: Optional[BleBuddyTransport] = None
         self._ble_connected = False
         self._last_payload: Optional[dict[str, object]] = None
         self._launch_sequence = 0
-        self._ota_session_lock = asyncio.Lock()
+        self._ota_session_lock: Optional[asyncio.Lock] = None
+        self._ota_session_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._ota_session_active = False
 
     @property
     def ota_session_active(self) -> bool:
         return self._ota_session_active
 
+    def _ota_lock_for_running_loop(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._ota_session_lock is None or self._ota_session_lock_loop is not loop:
+            if self._ota_session_active:
+                raise RuntimeError("OTA session is active on another event loop")
+            self._ota_session_lock = asyncio.Lock()
+            self._ota_session_lock_loop = loop
+        return self._ota_session_lock
+
     @contextlib.asynccontextmanager
     async def ota_session(self):
-        async with self._ota_session_lock:
+        async with self._ota_lock_for_running_loop():
             self._ota_session_active = True
             try:
                 yield
@@ -219,22 +230,33 @@ class BuddyAgent:
                 self._ota_session_active = False
 
     async def run(self) -> None:
-        self.socket_path.parent.mkdir(parents=True, exist_ok=True)
-        if self.socket_path.exists():
-            self.socket_path.unlink()
-
-        self._server = await asyncio.start_unix_server(self._handle_client, path=str(self.socket_path))
-        await self._start_account_usage_monitor()
-        self._tasks = [
-            asyncio.create_task(self._readonly_loop()),
-            asyncio.create_task(self._ble_loop()),
-            asyncio.create_task(self._keepalive_loop()),
-        ]
-        await self._publish_state(force=True)
+        if self._stopped is not None:
+            raise RuntimeError("buddy agent is already running")
+        self._stop_requested = False
+        stopped = asyncio.Event()
+        self._stopped = stopped
         try:
-            await self._stopped.wait()
+            self.socket_path.parent.mkdir(parents=True, exist_ok=True)
+            if self.socket_path.exists():
+                self.socket_path.unlink()
+
+            self._server = await asyncio.start_unix_server(
+                self._handle_client,
+                path=str(self.socket_path),
+            )
+            await self._start_account_usage_monitor()
+            self._tasks = [
+                asyncio.create_task(self._readonly_loop()),
+                asyncio.create_task(self._ble_loop()),
+                asyncio.create_task(self._keepalive_loop()),
+            ]
+            await self._publish_state(force=True)
+            await stopped.wait()
         finally:
-            await self.shutdown()
+            try:
+                await self.shutdown()
+            finally:
+                self._stopped = None
 
     async def shutdown(self) -> None:
         if self._server is not None:
@@ -330,12 +352,14 @@ class BuddyAgent:
             workdir = Path(str(payload.get("workdir", ""))).expanduser()
             return await self.launch(workdir)
         if command == "stop":
-            self._stopped.set()
+            self._stop_requested = True
+            if self._stopped is not None:
+                self._stopped.set()
             return {"ok": True}
         raise AgentClientError("Unknown agent command: {}".format(command))
 
     async def _readonly_loop(self) -> None:
-        while not self._stopped.is_set():
+        while not self._stop_requested:
             if self._watcher is not None:
                 readonly = self._watcher.poll(now=self.clock())
                 self.catalog.replace_readonly(readonly)
@@ -343,7 +367,7 @@ class BuddyAgent:
             await asyncio.sleep(self.readonly_poll_interval)
 
     async def _ble_loop(self) -> None:
-        while not self._stopped.is_set():
+        while not self._stop_requested:
             current = self.store.load()
             paired_device_id = current.paired_device_id
             paired_device_name = current.paired_device_name
@@ -375,7 +399,7 @@ class BuddyAgent:
             await asyncio.sleep(self.reconnect_interval)
 
     async def _keepalive_loop(self) -> None:
-        while not self._stopped.is_set():
+        while not self._stop_requested:
             await asyncio.sleep(self.keepalive_interval)
             await self._publish_state(force=True)
 
