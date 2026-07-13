@@ -172,6 +172,22 @@ static void testSignatureDeviceAndTimeChecks() {
 }
 
 static void testReplayAndFieldValidation() {
+  expect_true(otaAuthorizationMayReportRejection(OTA_AUTHORIZATION_OK),
+              "a signed offer may report later policy rejection after authorization passes");
+  const OtaAuthorizationResult silentResults[] = {
+    OTA_AUTHORIZATION_ARGUMENT_INVALID,
+    OTA_AUTHORIZATION_FIELD_INVALID,
+    OTA_AUTHORIZATION_DEVICE_MISMATCH,
+    OTA_AUTHORIZATION_TIME_UNTRUSTED,
+    OTA_AUTHORIZATION_NOT_YET_VALID,
+    OTA_AUTHORIZATION_EXPIRED,
+    OTA_AUTHORIZATION_REPLAY,
+    OTA_AUTHORIZATION_SIGNATURE_INVALID,
+  };
+  for (OtaAuthorizationResult result : silentResults) {
+    expect_true(!otaAuthorizationMayReportRejection(result),
+                "authorization failures must remain silent on the host transport");
+  }
   expect_true(otaAuthorizationSignedOfferShapeValid(10) &&
               !otaAuthorizationSignedOfferShapeValid(9) &&
               !otaAuthorizationSignedOfferShapeValid(11),

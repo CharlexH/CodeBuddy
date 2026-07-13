@@ -143,6 +143,7 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
       bool externalPower = compatVbusVoltageMv() > 4000;
       bool exactLegacyShape = offer.size() == 6;
       bool exactSignedShape = otaAuthorizationSignedOfferShapeValid(offer.size());
+      bool reportRejection = exactLegacyShape;
       if (exactLegacyShape) {
         accepted = nonce && generationTyped && version && manifestUrl &&
           signatureUrl && sizeTyped && otaOfferAcceptBoundHint(
@@ -213,9 +214,10 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
             &out->otaOffer,
             &authorizationResult
           );
+        reportRejection = otaAuthorizationMayReportRejection(authorizationResult);
       }
       if (accepted) otaStatusBindOffer(out->otaOffer);
-      else if (nonce && generationTyped)
+      else if (reportRejection && nonce && generationTyped)
         otaStatusReject(nonce, generation, "rejected");
     }
     if (!accepted) otaOfferReject(&out->otaOffer);

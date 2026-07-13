@@ -63,6 +63,10 @@ inline bool otaAuthorizationSignedOfferShapeValid(size_t fieldCount) {
   return fieldCount == 10;
 }
 
+inline bool otaAuthorizationMayReportRejection(OtaAuthorizationResult result) {
+  return result == OTA_AUTHORIZATION_OK;
+}
+
 inline bool otaAuthorizationDeviceNameValid(const char* value) {
   if (!value || strlen(value) != 10 || memcmp(value, "Codex-", 6) != 0) return false;
   for (size_t i = 6; i < 10; ++i) {
