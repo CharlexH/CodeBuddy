@@ -4,7 +4,10 @@ import errno
 import contextlib
 import fcntl
 import os
+import socket
 import stat
+import struct
+import sys
 from pathlib import Path
 from pathlib import PurePath
 from typing import Iterable, Optional
@@ -24,9 +27,7 @@ class AgentProcessLock:
     def acquire(self) -> None:
         if self._descriptor is not None:
             raise RuntimeError("buddy agent lock is already held by this instance")
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if self.path.parent.is_symlink() or not self.path.parent.is_dir():
-            raise RuntimeError("buddy agent lock parent must be a real directory")
+        ensure_private_runtime_root(self.path.parent)
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC
@@ -98,6 +99,75 @@ def _metadata(descriptor: int, name: str, *, description: str) -> os.stat_result
         return os.stat(name, dir_fd=descriptor, follow_symlinks=False)
     except OSError as exc:
         raise ValueError(f"cannot inspect {description}") from exc
+
+
+def ensure_private_runtime_root(path: Path) -> None:
+    """Create or tighten a runtime root without following a symlink."""
+
+    path = Path(path)
+    parent = _open_real_directory(path.parent)
+    if parent is None:
+        raise RuntimeError("buddy runtime parent must be a real directory")
+    directory: Optional[int] = None
+    try:
+        try:
+            os.mkdir(path.name, mode=0o700, dir_fd=parent)
+        except FileExistsError:
+            pass
+        try:
+            metadata = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        except OSError as exc:
+            raise RuntimeError("buddy runtime root must be a real directory") from exc
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise RuntimeError("buddy runtime root must be a real directory")
+        try:
+            directory = os.open(path.name, _DIRECTORY_FLAGS, dir_fd=parent)
+        except OSError as exc:
+            raise RuntimeError("buddy runtime root must be a real directory") from exc
+        opened = os.fstat(directory)
+        if not stat.S_ISDIR(opened.st_mode):
+            raise RuntimeError("buddy runtime root must be a real directory")
+        os.fchmod(directory, 0o700)
+    finally:
+        if directory is not None:
+            os.close(directory)
+        os.close(parent)
+
+
+def restrict_unix_socket(path: Path) -> None:
+    """Limit a newly bound local control socket to its owner."""
+
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise RuntimeError("buddy agent socket is unavailable") from exc
+    if not stat.S_ISSOCK(metadata.st_mode):
+        raise RuntimeError("buddy agent socket must be a real Unix socket")
+    os.chmod(path, 0o600, follow_symlinks=False)
+
+
+def require_current_user_peer(
+    peer_socket: object,
+    *,
+    platform: str = sys.platform,
+    expected_uid: Optional[int] = None,
+) -> None:
+    """Reject a Darwin local-socket peer owned by a different user."""
+
+    if platform != "darwin" or not hasattr(socket, "LOCAL_PEERCRED"):
+        return
+    if peer_socket is None or not hasattr(peer_socket, "getsockopt"):
+        raise PermissionError("local agent client is not authorized")
+    level = getattr(socket, "SOL_LOCAL", 0)
+    try:
+        credentials = peer_socket.getsockopt(level, socket.LOCAL_PEERCRED, 8)
+        if not isinstance(credentials, bytes) or len(credentials) < 8:
+            raise ValueError("invalid peer credentials")
+        version, peer_uid = struct.unpack_from("=II", credentials)
+    except (OSError, TypeError, ValueError, struct.error) as exc:
+        raise PermissionError("local agent client is not authorized") from exc
+    if version != 0 or peer_uid != (os.geteuid() if expected_uid is None else expected_uid):
+        raise PermissionError("local agent client is not authorized")
 
 
 def _open_child_directory(descriptor: int, name: str, *, description: str) -> int:

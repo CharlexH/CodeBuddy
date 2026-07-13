@@ -43,6 +43,18 @@ def test_migrate_legacy_state_moves_old_state_file(tmp_path):
     assert (runtime_root / "state.json").read_text(encoding="utf-8") == '{"paired_device_id":"dev-1"}\n'
 
 
+def test_migrate_legacy_state_restricts_existing_runtime_root(tmp_path):
+    legacy_root = tmp_path / ".codex-buddy"
+    runtime_root = tmp_path / ".code-buddy"
+    runtime_root.mkdir(mode=0o755)
+
+    assert setup_flow.migrate_legacy_state(
+        legacy_root=legacy_root, runtime_root=runtime_root
+    ) is False
+
+    assert runtime_root.stat().st_mode & 0o777 == 0o700
+
+
 def test_resolve_real_codex_path_skips_code_buddy_shim_dir(tmp_path, monkeypatch):
     shim_dir = tmp_path / ".code-buddy" / "bin"
     shim_dir.mkdir(parents=True)

@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Deque, Optional
 
 from . import runtime
-from .agent_runtime import AgentProcessLock, cleanup_stale_ota_runtime
+from .agent_runtime import (
+    AgentProcessLock,
+    cleanup_stale_ota_runtime,
+    require_current_user_peer,
+    restrict_unix_socket,
+)
 from .ble_transport import BleBuddyTransport
 from .bridge import ManagedSessionBridge
 from .catalog import SessionCatalog, SessionPrompt, SessionRecord
@@ -325,6 +330,7 @@ class BuddyAgent:
                     self._handle_client,
                     path=str(self.socket_path),
                 )
+                restrict_unix_socket(self.socket_path)
                 await self._start_account_usage_monitor()
                 self._tasks = [
                     asyncio.create_task(self._readonly_loop()),
@@ -419,6 +425,7 @@ class BuddyAgent:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         response: dict[str, object]
         try:
+            require_current_user_peer(writer.get_extra_info("socket"))
             raw = await reader.readline()
             if not raw:
                 return

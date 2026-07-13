@@ -13,7 +13,69 @@ from codex_buddy.agent import AgentClient, BuddyAgent
 from codex_buddy.agent_runtime import (
     AgentProcessLock,
     cleanup_stale_ota_runtime,
+    ensure_private_runtime_root,
+    require_current_user_peer,
 )
+
+
+class _PeerSocket:
+    def __init__(self, credentials: bytes) -> None:
+        self.credentials = credentials
+        self.calls = []
+
+    def getsockopt(self, level, option, size):
+        self.calls.append((level, option, size))
+        return self.credentials
+
+
+def test_runtime_root_is_created_or_corrected_to_owner_only(tmp_path):
+    root = tmp_path / ".code-buddy"
+    root.mkdir(mode=0o755)
+
+    ensure_private_runtime_root(root)
+
+    assert root.stat().st_mode & 0o777 == 0o700
+
+
+def test_runtime_root_rejects_symlink(tmp_path):
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    root = tmp_path / ".code-buddy"
+    root.symlink_to(actual, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="real directory"):
+        ensure_private_runtime_root(root)
+
+
+def test_darwin_peer_credentials_accept_the_current_user(monkeypatch):
+    import socket
+    import struct
+
+    monkeypatch.setattr(socket, "LOCAL_PEERCRED", 1, raising=False)
+    peer = _PeerSocket(struct.pack("=II", 0, os.geteuid()))
+
+    require_current_user_peer(peer, platform="darwin")
+
+    assert peer.calls == [(0, 1, 8)]
+
+
+def test_darwin_peer_credentials_reject_another_user(monkeypatch):
+    import socket
+    import struct
+
+    monkeypatch.setattr(socket, "LOCAL_PEERCRED", 1, raising=False)
+    peer = _PeerSocket(struct.pack("=II", 0, os.geteuid() + 1))
+
+    with pytest.raises(PermissionError, match="not authorized"):
+        require_current_user_peer(peer, platform="darwin")
+
+
+def test_non_darwin_peer_check_is_a_noop():
+    class _UnexpectedSocket:
+        def getsockopt(self, *args):
+            raise AssertionError("non-Darwin must not request Darwin credentials")
+
+    require_current_user_peer(_UnexpectedSocket(), platform="linux")
 
 
 def test_process_lock_is_exclusive_until_owner_releases_it(tmp_path):

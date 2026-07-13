@@ -94,12 +94,53 @@ def test_agent_constructs_after_closed_loop_and_runs_in_fresh_loop(tmp_path):
                 break
             await asyncio.sleep(0.001)
         assert agent._server is not None
+        assert agent.socket_path.stat().st_mode & 0o777 == 0o600
         assert await agent._handle_command({"cmd": "stop"}) == {"ok": True}
         await task
 
     asyncio.run(exercise())
 
     assert not agent.socket_path.exists()
+
+
+def test_agent_rejects_wrong_uid_before_reading_a_command(tmp_path, monkeypatch):
+    class _Reader:
+        async def readline(self):
+            raise AssertionError("command must not be read from an unauthorized peer")
+
+    class _Writer:
+        def __init__(self):
+            self.output = bytearray()
+            self.closed = False
+
+        def get_extra_info(self, name):
+            assert name == "socket"
+            return object()
+
+        def write(self, data):
+            self.output.extend(data)
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            pass
+
+    def reject(_peer_socket):
+        raise PermissionError("local agent client is not authorized")
+
+    monkeypatch.setattr("codex_buddy.agent.require_current_user_peer", reject)
+    writer = _Writer()
+    agent = BuddyAgent(tmp_path / "state.json", watcher=None)
+
+    asyncio.run(agent._handle_client(_Reader(), writer))
+
+    assert writer.closed is True
+    assert b'"ok":false' in writer.output
+    assert b"credential" not in writer.output
 
 
 def test_agent_ota_session_lock_is_recreated_for_sequential_event_loops(tmp_path):

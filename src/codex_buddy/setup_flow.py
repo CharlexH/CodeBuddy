@@ -14,6 +14,7 @@ from .native_helper_build import (
     cleanup_bundled_native_helper_build,
 )
 from .ota_release import inspect_esp32s3_application_image
+from .agent_runtime import ensure_private_runtime_root
 from .state_store import PersistedState
 
 SETUP_VERSION = 1
@@ -26,6 +27,7 @@ def migrate_legacy_state(
 ) -> bool:
     legacy_root = runtime.legacy_runtime_root() if legacy_root is None else legacy_root
     runtime_root = runtime.runtime_root() if runtime_root is None else runtime_root
+    ensure_private_runtime_root(runtime_root)
     legacy_state_path = legacy_root / "state.json"
     next_state_path = runtime_root / "state.json"
     if not legacy_state_path.exists() or next_state_path.exists():
