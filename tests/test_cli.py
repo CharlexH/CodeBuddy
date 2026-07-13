@@ -376,6 +376,8 @@ def test_firmware_update_reports_sanitized_agent_progress(monkeypatch, tmp_path,
     responses = iter(
         [
             {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "preparing", "terminal": False}},
+            {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "offer-sent", "percent": 0, "terminal": False}},
+            {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "offer-received", "percent": 0, "terminal": False}},
             {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "await-confirm", "percent": 0, "terminal": False}},
             {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "readback", "percent": 90, "terminal": False}},
             {"ok": True, "ota": {"nonce": "secret-nonce", "phase": "running", "percent": 100, "terminal": True, "success": True, "version": "0.1.5"}},
@@ -409,6 +411,44 @@ def test_firmware_update_reports_sanitized_agent_progress(monkeypatch, tmp_path,
     assert "90%" in output
     assert "0.1.5" in output
     assert "secret-nonce" not in output
+
+
+def test_firmware_update_direct_sequence_never_prompts_for_button_confirmation(
+    monkeypatch, tmp_path, capsys
+):
+    image = tmp_path / "firmware.bin"
+    image.write_bytes(b"not-inspected-by-cli")
+    responses = iter(
+        [
+            {"ok": True, "ota": {"nonce": "n", "phase": "preparing", "terminal": False}},
+            {"ok": True, "ota": {"nonce": "n", "phase": "offer-sent", "percent": 0, "terminal": False}},
+            {"ok": True, "ota": {"nonce": "n", "phase": "offer-received", "percent": 0, "terminal": False}},
+            {"ok": True, "ota": {"nonce": "n", "phase": "accepted", "percent": 0, "terminal": False}},
+            {"ok": True, "ota": {"nonce": "n", "phase": "download", "percent": 50, "terminal": False}},
+            {"ok": True, "ota": {"nonce": "n", "phase": "running", "percent": 100, "terminal": True, "success": True, "version": "0.1.7"}},
+        ]
+    )
+
+    async def fake_request(_, __):
+        return next(responses)
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(cli, "_ensure_agent_running", no_sleep)
+    monkeypatch.setattr(cli, "_agent_request", fake_request)
+    monkeypatch.setattr(cli.asyncio, "sleep", no_sleep)
+
+    result = asyncio.run(
+        cli._firmware_update(
+            argparse.Namespace(state_path=tmp_path / "state.json", firmware=image)
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "Press A" not in output
+    assert "Downloading: 50%" in output
 
 
 def test_firmware_update_sends_cancel_on_keyboard_interrupt(monkeypatch, tmp_path, capsys):

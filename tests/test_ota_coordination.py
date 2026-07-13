@@ -134,6 +134,170 @@ def test_coordination_ignores_foreign_status_and_requires_version_plus_health(tm
     assert server.closed is True
 
 
+def test_stale_running_during_offer_handshake_is_not_acceptance(tmp_path):
+    async def exercise():
+        ble = _Ble(
+            [
+                _status("running", version="0.1.4", health="valid"),
+                _status("running", version="0.1.4", health="ordinary"),
+                _status("offer-received", version="0.1.4"),
+                _status("accepted"),
+                _status("download", percent=40),
+                _status("readback", percent=90),
+                _status("boot-committed", percent=100),
+                _status("running", percent=100, health="valid"),
+            ]
+        )
+        trust = SimpleNamespace(
+            manifest_private_key=tmp_path / "private.pem",
+            manifest_public_key=tmp_path / "public.pem",
+        )
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            reconnect_interval=0,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.5", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        await coordinator.run(session, image)
+        return session, ble
+
+    session, ble = asyncio.run(exercise())
+    assert session.success is True and session.accepted is True
+    assert len([item for item in ble.sent if "ota_offer" in item]) == 2
+
+
+def test_precommit_running_from_current_boot_is_ignored(tmp_path):
+    async def exercise():
+        ble = _Ble(
+            [
+                _status("running", version="0.1.4", health="valid"),
+                _status("offer-received", version="0.1.4"),
+                _status("accepted"),
+                _status("running", version="0.1.4", health="ordinary"),
+                _status("download", percent=40),
+                _status("readback", percent=90),
+                _status("boot-committed", percent=100),
+                _status("running", percent=100, health="valid"),
+            ]
+        )
+        trust = SimpleNamespace(
+            manifest_private_key=tmp_path / "private.pem",
+            manifest_public_key=tmp_path / "public.pem",
+        )
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            reconnect_interval=0,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.5", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        await coordinator.run(session, image)
+        return session
+
+    session = asyncio.run(exercise())
+    assert session.success is True and session.error == ""
+
+
+@pytest.mark.parametrize("health", ["ordinary", "valid", "rollback"])
+def test_old_running_after_irreversible_commit_is_rollback(tmp_path, health):
+    async def exercise():
+        ble = _Ble(
+            [
+                _status("running", version="0.1.4", health="valid"),
+                _status("offer-received", version="0.1.4"),
+                _status("accepted"),
+                _status("boot-committed", percent=100),
+                _status("running", version="0.1.4", percent=100, health=health),
+            ]
+        )
+        trust = SimpleNamespace(
+            manifest_private_key=tmp_path / "private.pem",
+            manifest_public_key=tmp_path / "public.pem",
+        )
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            install_timeout=0.05,
+            reconnect_interval=0,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.5", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        await coordinator.run(session, image)
+        return session
+
+    session = asyncio.run(exercise())
+    assert session.terminal is True and session.success is False
+    assert session.error == "rollback"
+
+
+def test_target_running_waits_for_valid_health_after_irreversible_commit(tmp_path):
+    async def exercise():
+        ble = _Ble(
+            [
+                _status("running", version="0.1.4", health="valid"),
+                _status("offer-received", version="0.1.4"),
+                _status("accepted"),
+                _status("boot-committed", percent=100),
+                _status("running", percent=100, health="monitoring"),
+                _status("running", percent=100, health="valid"),
+            ]
+        )
+        trust = SimpleNamespace(
+            manifest_private_key=tmp_path / "private.pem",
+            manifest_public_key=tmp_path / "public.pem",
+        )
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            install_timeout=0.1,
+            reconnect_interval=0,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.5", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        await coordinator.run(session, image)
+        return session
+
+    session = asyncio.run(exercise())
+    assert session.success is True and session.health == "valid"
+
+
 @pytest.mark.parametrize(
     ("current_version", "expected_fields"),
     [
@@ -492,6 +656,7 @@ def test_cancel_is_terminal_only_after_device_applies_it(tmp_path):
             [
                 _status("running", version="0.1.4", health="valid"),
                 _status("offer-received", version="0.1.4"),
+                _status("await-confirm", version="0.1.4"),
             ]
         )
         trust = SimpleNamespace(
@@ -553,6 +718,7 @@ def test_cancel_waits_through_false_cancelled_cadence_for_applied_ack(tmp_path):
             [
                 _status("running", version="0.1.4", health="valid"),
                 _status("offer-received", version="0.1.4"),
+                _status("await-confirm", version="0.1.4"),
             ]
         )
         trust = SimpleNamespace(
@@ -615,6 +781,7 @@ def test_false_cancelled_cadence_can_advance_to_boot_commit_and_healthy_run(tmp_
             [
                 _status("running", version="0.1.4", health="valid"),
                 _status("offer-received", version="0.1.4"),
+                _status("await-confirm", version="0.1.4"),
             ]
         )
         trust = SimpleNamespace(
@@ -718,6 +885,7 @@ def test_cancel_rejected_at_boot_commit_keeps_irreversible_session_running(tmp_p
             [
                 _status("running", version="0.1.4", health="valid"),
                 _status("offer-received", version="0.1.4"),
+                _status("await-confirm", version="0.1.4"),
             ]
         )
         trust = SimpleNamespace(
@@ -772,6 +940,7 @@ def test_cancel_send_or_ack_failure_is_unconfirmed_and_run_continues(tmp_path, f
             [
                 _status("running", version="0.1.4", health="valid"),
                 _status("offer-received", version="0.1.4"),
+                _status("await-confirm", version="0.1.4"),
             ]
         )
         release_statuses = asyncio.Event()

@@ -30,6 +30,11 @@ _DEVICE_ERRORS = {
     "power", "reconnect", "rejected", "rollback", "timeout", "trust",
     "version", "wifi",
 }
+_ACCEPTED_PHASES = {
+    "accepted", "authenticated", "download", "readback",
+    "boot-committed", "restarting", "boot-health",
+}
+_IRREVERSIBLE_PHASES = {"boot-committed", "restarting", "boot-health"}
 
 
 @dataclass
@@ -262,7 +267,7 @@ class OtaCoordinator:
                 else:
                     offer = build_ota_offer(**offer_arguments)
 
-                session.phase = "await-confirm"
+                session.phase = "offer-sent"
                 accepted = False
                 for _ in range(3):
                     ble = self._get_ble()
@@ -273,21 +278,30 @@ class OtaCoordinator:
                         status = await self._receive(session, timeout=2.0)
                     except asyncio.TimeoutError:
                         continue
+                    if status.phase == "running":
+                        if (
+                            status.version == inspected.version
+                            and status.health == "valid"
+                        ):
+                            session.phase = status.phase
+                            session.percent = 100
+                            session.health = status.health
+                            session.success = session.terminal = True
+                            return
+                        continue
                     if status.phase in {"offer-received", "await-confirm"}:
+                        session.phase = status.phase
+                        session.percent = status.percent
                         break
-                    if status.phase in {
-                        "accepted", "authenticated", "download", "readback",
-                        "boot-committed", "restarting", "boot-health", "running",
-                    }:
+                    if status.phase in _ACCEPTED_PHASES:
                         accepted = session.accepted = True
                         session.phase = status.phase
                         session.percent = status.percent
-                        if status.phase in {
-                            "boot-committed", "restarting", "boot-health"
-                        }:
+                        session.health = status.health
+                        if status.phase in _IRREVERSIBLE_PHASES:
                             session.irreversible = True
                         break
-                    if status.phase in {"rejected", "busy", "error"}:
+                    if status.phase in {"rejected", "busy", "cancelled", "error"}:
                         raise RuntimeError(status.error or status.phase)
                 else:
                     raise RuntimeError("timeout")
@@ -338,29 +352,37 @@ class OtaCoordinator:
                         if awaiting_restart_health:
                             continue
                         raise
+                    if status.phase == "running":
+                        if (
+                            status.version == inspected.version
+                            and status.health == "valid"
+                        ):
+                            session.phase = status.phase
+                            session.percent = 100
+                            session.health = status.health
+                            session.success = session.terminal = True
+                            return
+                        if session.irreversible and (
+                            status.version != inspected.version
+                            or status.health == "rollback"
+                        ):
+                            raise RuntimeError("rollback")
+                        continue
+
                     session.phase = status.phase
                     session.percent = status.percent
                     session.health = status.health
-                    if status.phase == "accepted":
+                    if status.phase in _ACCEPTED_PHASES:
                         accepted = session.accepted = True
-                    elif status.phase in {"rejected", "busy", "cancelled", "error"}:
-                        raise RuntimeError(status.error or status.phase)
-                    elif status.phase == "running":
-                        if status.version == inspected.version and status.health == "valid":
-                            session.percent = 100
-                            session.success = session.terminal = True
-                            return
-                        if accepted and not session.irreversible:
-                            raise RuntimeError("rollback")
-                        if session.irreversible:
+                        if status.phase in _IRREVERSIBLE_PHASES:
+                            session.irreversible = True
                             awaiting_restart_health = True
+                            if status.phase == "restarting":
+                                await asyncio.sleep(self._reconnect_interval)
                     elif status.phase in {
-                        "boot-committed", "restarting", "boot-health"
+                        "rejected", "busy", "cancelled", "error"
                     }:
-                        session.irreversible = True
-                        awaiting_restart_health = True
-                        if status.phase == "restarting":
-                            await asyncio.sleep(self._reconnect_interval)
+                        raise RuntimeError(status.error or status.phase)
         except asyncio.CancelledError:
             session.phase, session.error = "cancelled", "cancelled"
             session.terminal = True
