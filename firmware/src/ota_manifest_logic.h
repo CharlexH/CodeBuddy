@@ -43,6 +43,7 @@ struct OtaManifestDescriptor {
 struct OtaOfferState {
   bool windowOpen;
   bool pending;
+  bool signedAuthorized;
   uint32_t windowDeadlineMs;
   uint32_t offerDeadlineMs;
   uint32_t sizeBytes;
@@ -559,6 +560,35 @@ inline bool otaOfferAcceptBoundHint(
   output->generation = generation;
   memcpy(output->nonce, nonce, nonceLength + 1);
   return true;
+}
+
+inline bool otaOfferAcceptVerifiedBoundHint(
+  const char* nonce,
+  uint32_t generation,
+  const char* version,
+  uint32_t sizeBytes,
+  const char* manifestUrl,
+  const char* signatureUrl,
+  const char* currentVersion,
+  uint32_t now,
+  bool connected,
+  bool approvalConflict,
+  bool transferConflict,
+  bool otherConflict,
+  bool externalPower,
+  uint8_t batteryPercent,
+  OtaOfferState* output
+) {
+  if (!output) return false;
+  otaOfferReset(output);
+  output->windowOpen = true;
+  output->signedAuthorized = true;
+  output->windowDeadlineMs = now + OTA_RECEIVE_WINDOW_MS;
+  return otaOfferAcceptBoundHint(
+    nonce, generation, version, sizeBytes, manifestUrl, signatureUrl,
+    currentVersion, now, connected, approvalConflict, transferConflict,
+    otherConflict, externalPower, batteryPercent, output
+  );
 }
 
 inline void otaOfferLifecyclePoll(

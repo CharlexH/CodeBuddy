@@ -5,6 +5,8 @@
 #include "clock_time_logic.h"
 #include "data_log_logic.h"
 #include "firmware_version.h"
+#include "ota_authorization_logic.h"
+#include "ota_manifest.h"
 #include "ota_manifest_logic.h"
 #include "utf8_text_logic.h"
 #include "usage_meter_json.h"
@@ -80,6 +82,20 @@ inline const char* dataScenarioName() {
 static bool _rtcValid = false;
 inline bool dataRtcValid() { return _rtcValid; }
 
+static OtaAuthorizationReplayState _otaAuthorizationReplay =
+  otaAuthorizationReplayInitial();
+
+inline bool dataOtaExpectedDeviceName(char output[11]) {
+  if (!output) return false;
+  uint8_t mac[6] = {};
+  if (esp_read_mac(mac, ESP_MAC_BT) != ESP_OK) {
+    output[0] = 0;
+    return false;
+  }
+  snprintf(output, 11, "Codex-%02X%02X", mac[4], mac[5]);
+  return true;
+}
+
 static void _applyJson(const char* line, TamaState* out, bool trustedTransport) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, line);
@@ -125,24 +141,79 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
       if (batteryPercent < 0) batteryPercent = 0;
       if (batteryPercent > 100) batteryPercent = 100;
       bool externalPower = compatVbusVoltageMv() > 4000;
-      accepted = offer.size() == 6 && nonce && generationTyped && version &&
-        manifestUrl && signatureUrl && sizeTyped && otaOfferAcceptBoundHint(
-          nonce,
+      bool exactLegacyShape = offer.size() == 6;
+      bool exactSignedShape = otaAuthorizationSignedOfferShapeValid(offer.size());
+      if (exactLegacyShape) {
+        accepted = nonce && generationTyped && version && manifestUrl &&
+          signatureUrl && sizeTyped && otaOfferAcceptBoundHint(
+            nonce,
+            generation,
+            version,
+            sizeBytes,
+            manifestUrl,
+            signatureUrl,
+            CODE_BUDDY_FIRMWARE_VERSION,
+            millis(),
+            bleConnected(),
+            promptConflict,
+            xferActive(),
+            wifiManagerUiActive(),
+            externalPower,
+            static_cast<uint8_t>(batteryPercent),
+            &out->otaOffer
+          );
+      } else if (exactSignedShape) {
+        const char* device = offer["device"].is<const char*>()
+          ? offer["device"].as<const char*>() : nullptr;
+        const char* authorization = offer["authorization"].is<const char*>()
+          ? offer["authorization"].as<const char*>() : nullptr;
+        bool issuedAtTyped = offer["issuedAt"].is<uint32_t>() &&
+          !offer["issuedAt"].is<bool>();
+        bool expiresAtTyped = offer["expiresAt"].is<uint32_t>() &&
+          !offer["expiresAt"].is<bool>();
+        uint32_t issuedAt = issuedAtTyped ? offer["issuedAt"].as<uint32_t>() : 0;
+        uint32_t expiresAt = expiresAtTyped ? offer["expiresAt"].as<uint32_t>() : 0;
+        char expectedDevice[11] = {};
+        time_t systemEpoch = time(nullptr);
+        bool epochInRange = systemEpoch >= 0 &&
+          static_cast<uint64_t>(systemEpoch) <= UINT32_MAX;
+        OtaAuthorizationInput authorizationInput = {
+          OTA_AUTHORIZATION_ACTION,
+          device,
+          expiresAt,
           generation,
-          version,
-          sizeBytes,
+          issuedAt,
           manifestUrl,
+          nonce,
           signatureUrl,
-          CODE_BUDDY_FIRMWARE_VERSION,
-          millis(),
-          bleConnected(),
-          promptConflict,
-          xferActive(),
-          wifiManagerUiActive(),
-          externalPower,
-          static_cast<uint8_t>(batteryPercent),
-          &out->otaOffer
-        );
+          sizeBytes,
+          version,
+          authorization,
+        };
+        OtaAuthorizationResult authorizationResult = OTA_AUTHORIZATION_FIELD_INVALID;
+        accepted = nonce && generationTyped && version && manifestUrl && signatureUrl &&
+          sizeTyped && device && authorization && issuedAtTyped && expiresAtTyped &&
+          dataOtaExpectedDeviceName(expectedDevice) && epochInRange &&
+          otaAuthorizationVerifyThenAccept(
+            authorizationInput,
+            expectedDevice,
+            wifiManagerSystemTimeTrusted(),
+            static_cast<uint32_t>(systemEpoch),
+            otaVerifyDetachedSignature,
+            nullptr,
+            &_otaAuthorizationReplay,
+            CODE_BUDDY_FIRMWARE_VERSION,
+            millis(),
+            bleConnected(),
+            promptConflict,
+            xferActive(),
+            wifiManagerUiActive(),
+            externalPower,
+            static_cast<uint8_t>(batteryPercent),
+            &out->otaOffer,
+            &authorizationResult
+          );
+      }
       if (accepted) otaStatusBindOffer(out->otaOffer);
       else if (nonce && generationTyped)
         otaStatusReject(nonce, generation, "rejected");

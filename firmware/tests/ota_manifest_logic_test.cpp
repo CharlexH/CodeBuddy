@@ -417,7 +417,8 @@ static void testMacLocalUrlPolicyAndBinding() {
 }
 
 int main() {
-  expect_true(strcmp(CODE_BUDDY_FIRMWARE_VERSION, "0.1.4") == 0,
+  OtaSemanticVersion currentVersion = {};
+  expect_true(otaParseSemanticVersion(CODE_BUDDY_FIRMWARE_VERSION, &currentVersion),
               "firmware must expose an explicit semantic current version");
   testExactCanonicalManifestAndDetachedDescriptor();
   testAuthenticationAlwaysPrecedesParsing();

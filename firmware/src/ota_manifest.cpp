@@ -8,18 +8,16 @@
 #include "firmware_version.h"
 #include "ota_trust.h"
 
-namespace {
-
-bool verifyDetachedP256Sha256(
-  const uint8_t* manifest,
-  size_t manifestLength,
+bool otaVerifyDetachedSignature(
+  const uint8_t* payload,
+  size_t payloadLength,
   const uint8_t* signature,
   size_t signatureLength,
   void*
 ) {
 #if !CODE_BUDDY_OTA_ENABLED
-  (void)manifest;
-  (void)manifestLength;
+  (void)payload;
+  (void)payloadLength;
   (void)signature;
   (void)signatureLength;
   return false;
@@ -36,7 +34,7 @@ bool verifyDetachedP256Sha256(
   if (result == 0 &&
       (!mbedtls_pk_can_do(&publicKey, MBEDTLS_PK_ECDSA) ||
        mbedtls_pk_get_bitlen(&publicKey) != 256)) result = MBEDTLS_ERR_PK_TYPE_MISMATCH;
-  if (result == 0) result = mbedtls_sha256_ret(manifest, manifestLength, digest, 0);
+  if (result == 0) result = mbedtls_sha256_ret(payload, payloadLength, digest, 0);
   if (result == 0) {
     result = mbedtls_pk_verify(
       &publicKey,
@@ -53,8 +51,6 @@ bool verifyDetachedP256Sha256(
 #endif
 }
 
-}  // namespace
-
 OtaManifestResult otaManifestAuthenticateAndParse(
   const uint8_t* rawManifest,
   size_t rawManifestLength,
@@ -68,7 +64,7 @@ OtaManifestResult otaManifestAuthenticateAndParse(
     derSignature,
     derSignatureLength,
     CODE_BUDDY_FIRMWARE_VERSION,
-    verifyDetachedP256Sha256,
+    otaVerifyDetachedSignature,
     nullptr,
     descriptor
   );
