@@ -1667,6 +1667,17 @@ void loop() {
 
   bool inPrompt = tama.promptId[0] && !responseSent;
   wifiManagerPoll(inPrompt);
+  OtaOfferPolicy incomingOtaPolicy = otaOfferPolicy(
+    tama.otaOffer.pending,
+    tama.otaOffer.signedAuthorized,
+    settings().autoOta
+  );
+  if (incomingOtaPolicy.automatic) {
+    // Ordinary navigation is safe to dismiss for an explicit Direct command.
+    // Prompt/xfer/provisioning/passkey remain live inputs to the execution gate.
+    displayMode = DISP_NORMAL;
+    menuOpen = settingsOpen = wifiMenuOpen = wifiStatusOpen = resetOpen = false;
+  }
   int batteryVoltageMv = compatBatteryVoltageMv();
   int batteryPercent = (batteryVoltageMv - 3200) / 10;
   if (batteryPercent < 0) batteryPercent = 0;

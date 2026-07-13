@@ -49,6 +49,50 @@ static void testSignedOfferPolicy() {
          "verified signed Direct offers should wake and auto-authorize");
 }
 
+static void testDirectOfferStartsAtomically() {
+  OtaPollStartPlan direct = otaPollStartPlan(false, true, true, true);
+  expect(direct.arm && direct.continueSamePoll,
+         "new verified Direct offer must continue in its arrival poll");
+
+  OtaOfferState shared = {};
+  shared.windowOpen = true;
+  shared.pending = true;
+  shared.signedAuthorized = true;
+  shared.windowDeadlineMs = 10000;
+  shared.offerDeadlineMs = 9000;
+  OtaOfferState privateOffer = {};
+  expect(otaOfferExecutionAllowed(
+           &shared, 1000, true, false, false, false, true, 82) &&
+         otaOfferConsume(&shared, &privateOffer),
+         "Direct arrival poll should atomically move the verified offer private");
+
+  OtaUpdateMachine machine = otaUpdateMachineInitial();
+  OtaUpdateInputs in = ready();
+  in.offerPending = privateOffer.pending;
+  in.offerFresh = otaOfferWindowActive(privateOffer, in.nowMs) &&
+    otaOfferDeadlineActive(in.nowMs, privateOffer.offerDeadlineMs);
+  otaUpdateStep(&machine, in, true, false);
+  expect(machine.phase == OTA_PHASE_OPEN_MANIFEST,
+         "atomic Direct confirmation should leave CONFIRM in frame one");
+
+  otaOfferLifecyclePoll(&shared, 1001, false, false, false, false);
+  expect(privateOffer.pending && machine.phase == OTA_PHASE_OPEN_MANIFEST,
+         "later shared-offer disconnect must not cancel the private transaction");
+
+  OtaPollStartPlan ask = otaPollStartPlan(false, true, true, false);
+  expect(ask.arm && !ask.continueSamePoll,
+         "Ask must remain live until physical A on a later poll");
+  OtaPollStartPlan legacy = otaPollStartPlan(false, true, false, true);
+  expect(legacy.arm && !legacy.continueSamePoll,
+         "legacy unsigned offers must never continue as Direct");
+
+  OtaOfferState blocked = privateOffer;
+  expect(!otaOfferExecutionAllowed(
+           &blocked, 1000, true, true, false, false, true, 82) &&
+         !blocked.pending,
+         "Direct still fails closed on approval conflicts");
+}
+
 static void testReadinessAndPowerGates() {
   OtaUpdateInputs in = ready();
   expect(otaUpdateGate(in, true) == OTA_GATE_READY,
@@ -911,6 +955,7 @@ static void testCancellationApplicabilityAndFailureMapping() {
 
 int main() {
   testSignedOfferPolicy();
+  testDirectOfferStartsAtomically();
   testReadinessAndPowerGates();
   testCoordinationEndsOnlyAfterAuthentication();
   testBoundedReadinessWaitAndWrap();

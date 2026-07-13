@@ -778,8 +778,14 @@ bool consumeOfferAfterAuthorization(bool automatic) {
 void otaUpdatePoll(OtaOfferState* offer, const OtaUpdateRuntimeInputs& inputs) {
   runtime.inputs = inputs;
   if (!runtime.active) {
-    if (offer && offer->pending) arm(offer);
-    return;
+    OtaPollStartPlan start = otaPollStartPlan(
+      false,
+      offer && offer->pending,
+      offer && offer->signedAuthorized,
+      inputs.automaticPolicy
+    );
+    if (start.arm) arm(offer);
+    if (!start.continueSamePoll) return;
   }
   if (otaUpdateTerminal(runtime.machine)) {
     if (!runtime.terminalSinceMs) cleanupTerminal();
