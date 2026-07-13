@@ -165,6 +165,82 @@ def test_non_codex_limit_buckets_are_never_used_as_codex_usage():
     assert limits.display_pair(now=101.0) == UsageDisplay(seven_day_remaining=99)
 
 
+def test_by_limit_id_extra_bucket_never_falls_back_to_top_level_legacy_limits():
+    limits = UsageLimits.from_read_result(
+        {
+            "rateLimitsByLimitId": {
+                "codex_bengalfox": {
+                    "primary": _window(80, 300, 10),
+                    "secondary": _window(70, 10_080, 20),
+                }
+            },
+            "rateLimits": {
+                "primary": _window(28, 300, 10),
+                "secondary": _window(9, 10_080, 20),
+            },
+        },
+        observed_at=100.0,
+    )
+
+    assert limits.display_windows(now=101.0) is None
+
+
+def test_empty_by_limit_id_mapping_never_falls_back_to_top_level_legacy_limits():
+    limits = UsageLimits.from_read_result(
+        {
+            "rateLimitsByLimitId": {},
+            "rateLimits": {
+                "primary": _window(28, 300, 10),
+                "secondary": _window(9, 10_080, 20),
+            },
+        },
+        observed_at=100.0,
+    )
+
+    assert limits.display_windows(now=101.0) is None
+
+
+@pytest.mark.parametrize("include_reset", [False, True])
+def test_missing_or_null_reset_time_is_optional(include_reset: bool):
+    window = {"usedPercent": 1, "windowDurationMins": 10_080}
+    if include_reset:
+        window["resetsAt"] = None
+    limits = UsageLimits.from_read_result(
+        {"rateLimits": {"primary": window, "secondary": None}},
+        observed_at=100.0,
+    )
+
+    assert limits.primary is not None
+    assert limits.primary.resets_at is None
+    assert limits.display_windows(now=101.0) == UsageDisplay(seven_day_remaining=99)
+
+
+@pytest.mark.parametrize("resets_at", [-1, math.nan, math.inf, "1700000000"])
+def test_invalid_present_reset_time_rejects_that_window(resets_at: object):
+    limits = UsageLimits.from_read_result(
+        {"rateLimits": {"primary": _window(1, 10_080, resets_at), "secondary": None}},
+        observed_at=100.0,
+    )
+
+    assert limits.display_windows(now=101.0) is None
+
+
+def test_sparse_explicit_null_clears_reset_metadata_without_clearing_the_window():
+    limits = UsageLimits.from_read_result(
+        {"rateLimits": {"primary": _window(28, 300, 10), "secondary": None}},
+        observed_at=100.0,
+    )
+
+    updated = limits.merge_update(
+        {"rateLimits": {"primary": {"usedPercent": 40, "resetsAt": None}}},
+        observed_at=125.0,
+    )
+
+    assert updated.primary is not None
+    assert updated.primary.resets_at is None
+    assert updated.display_windows(now=126.0) == UsageDisplay(five_hour_remaining=60)
+
+
 def test_usage_display_requires_at_least_one_known_window():
     with pytest.raises(ValueError, match="window"):
         UsageDisplay()

@@ -1106,7 +1106,7 @@ static void drawApproval() {
   const Palette& p = characterPalette();
   const int AREA = 84;
   const PortraitApprovalLayout layout = portraitApprovalLayout(
-    usageMeterBottomInset() > 0
+    usageMeterBottomInset()
   );
   const int FOOTER_Y = layout.footerY;
   spr.fillRect(0, H - AREA, W, AREA, p.bg);
@@ -1356,7 +1356,7 @@ static uint8_t runtimePromptScrollOffset(uint32_t now) {
 
 static void drawLandscapeApproval(const Palette& p, uint8_t hintOffset) {
   const int LW = 240, LH = 135, AREA = 88;
-  const int FOOTER_Y = LH - 12 - usageMeterBottomInset();
+  const int FOOTER_Y = landscapeApprovalFooterY(LH, usageMeterBottomInset());
   M5.Lcd.fillRect(0, LH - AREA, LW, AREA, p.bg);
   M5.Lcd.drawFastHLine(0, LH - AREA, LW, p.textDim);
 

@@ -102,8 +102,10 @@ def _rate_limits_payload(payload: object) -> Optional[Mapping[str, object]]:
     if not isinstance(payload, Mapping):
         return None
 
-    by_limit_id = payload.get("rateLimitsByLimitId")
-    if isinstance(by_limit_id, Mapping) and "codex" in by_limit_id:
+    if "rateLimitsByLimitId" in payload:
+        by_limit_id = payload.get("rateLimitsByLimitId")
+        if not isinstance(by_limit_id, Mapping) or "codex" not in by_limit_id:
+            return None
         codex_limits = by_limit_id["codex"]
         return codex_limits if isinstance(codex_limits, Mapping) else None
 
@@ -138,12 +140,12 @@ def _merge_window(existing: Optional[UsageWindow], payload: object) -> Optional[
 def _make_window(used_percent: object, window_duration_mins: object, resets_at: object) -> Optional[UsageWindow]:
     used_value = _finite_number(used_percent)
     duration_value = _finite_number(window_duration_mins)
-    reset_value = None if resets_at is _MISSING else _finite_number(resets_at)
+    reset_value = None if resets_at is _MISSING or resets_at is None else _finite_number(resets_at)
     if used_value is None or not 0.0 <= used_value <= 100.0:
         return None
     if duration_value is None or duration_value <= 0.0:
         return None
-    if resets_at is not _MISSING and (reset_value is None or reset_value < 0.0):
+    if resets_at is not _MISSING and resets_at is not None and (reset_value is None or reset_value < 0.0):
         return None
     return UsageWindow(
         used_percent=used_value,
