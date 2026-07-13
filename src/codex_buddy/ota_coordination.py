@@ -3,13 +3,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import runtime
-from .ota_protocol import OtaProtocolError, build_ota_offer, parse_ota_status
-from .ota_release import OtaImageInfo, build_ota_release
+from .ota_protocol import (
+    OtaProtocolError,
+    build_ota_offer,
+    build_signed_ota_offer,
+    parse_ota_status,
+    valid_ota_device_name,
+)
+from .ota_release import OtaImageInfo, build_ota_release, compare_semantic_versions
 from .ota_server import OtaHttpsServer
 from .ota_trust import require_existing_ota_trust
 from .ble_transport import NativeBleHelperError
@@ -78,6 +85,7 @@ class OtaCoordinator:
         install_timeout: float = 600.0,
         reconnect_interval: float = 5.0,
         cancel_timeout: float = 1.5,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self._get_ble = get_ble
         self._is_ble_connected = is_ble_connected
@@ -90,6 +98,7 @@ class OtaCoordinator:
         self._install_timeout = install_timeout
         self._reconnect_interval = reconnect_interval
         self._cancel_timeout = cancel_timeout
+        self._clock = clock
 
     async def cancel(self, session: OtaAgentSession) -> bool:
         if session.phase == "cancelled" and session.cancel_complete.is_set():
@@ -229,14 +238,29 @@ class OtaCoordinator:
                     trust=trust,
                 )
                 endpoint = await server.start()
-                offer = build_ota_offer(
-                    nonce=session.nonce,
-                    generation=session.generation,
-                    version=inspected.version,
-                    size_bytes=inspected.size_bytes,
-                    manifest_url=endpoint.manifest_url,
-                    signature_url=endpoint.signature_url,
-                )
+                offer_arguments = {
+                    "nonce": session.nonce,
+                    "generation": session.generation,
+                    "version": inspected.version,
+                    "size_bytes": inspected.size_bytes,
+                    "manifest_url": endpoint.manifest_url,
+                    "signature_url": endpoint.signature_url,
+                }
+                if compare_semantic_versions(current.version, "0.1.6") >= 0:
+                    ble = self._get_ble()
+                    device_name = getattr(ble, "device_name", None)
+                    if not valid_ota_device_name(device_name):
+                        raise RuntimeError("trust")
+                    issued_at = int(self._clock())
+                    offer = build_signed_ota_offer(
+                        **offer_arguments,
+                        device=device_name,
+                        issued_at=issued_at,
+                        expires_at=issued_at + 120,
+                        signing_private_key=trust.manifest_private_key,
+                    )
+                else:
+                    offer = build_ota_offer(**offer_arguments)
 
                 session.phase = "await-confirm"
                 accepted = False

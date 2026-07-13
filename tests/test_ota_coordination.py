@@ -10,6 +10,7 @@ import pytest
 from codex_buddy.ota_coordination import OtaAgentSession, OtaCoordinator
 from codex_buddy.ble_transport import NativeBleHelperError
 from codex_buddy.ota_release import OtaImageInfo
+from codex_buddy.ota_trust import generate_ota_trust
 
 
 NONCE = "n" * 24
@@ -39,11 +40,13 @@ def _status(
 
 
 class _Ble:
-    def __init__(self, statuses):
+    def __init__(self, statuses, *, device_name=None):
         self.statuses = asyncio.Queue()
         for status in statuses:
             self.statuses.put_nowait(status)
         self.sent = []
+        if device_name is not None:
+            self.device_name = device_name
 
     async def send_json(self, payload):
         self.sent.append(payload)
@@ -129,6 +132,103 @@ def test_coordination_ignores_foreign_status_and_requires_version_plus_health(tm
     offers = [item for item in ble.sent if "ota_offer" in item]
     assert len(offers) == 1
     assert server.closed is True
+
+
+@pytest.mark.parametrize(
+    ("current_version", "expected_fields"),
+    [
+        (
+            "0.1.5",
+            {"nonce", "generation", "version", "sizeBytes", "manifestUrl", "signatureUrl"},
+        ),
+        (
+            "0.1.6",
+            {
+                "nonce", "generation", "version", "sizeBytes", "manifestUrl",
+                "signatureUrl", "device", "issuedAt", "expiresAt", "authorization",
+            },
+        ),
+    ],
+)
+def test_coordination_negotiates_legacy_and_signed_offer_shapes(
+    tmp_path, current_version, expected_fields
+):
+    async def exercise():
+        target_version = "0.1.7"
+        ble = _Ble(
+            [
+                _status("running", version=current_version, health="valid"),
+                _status("offer-received", version=current_version),
+                _status("accepted", version=target_version),
+                _status("running", version=target_version, percent=100, health="valid"),
+            ],
+            device_name="Codex-4DAD",
+        )
+        trust = generate_ota_trust(tmp_path / f"trust-{current_version}")
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            reconnect_interval=0,
+            clock=lambda: 1_700_000_000.75,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", target_version, 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        await coordinator.run(session, image)
+        return session, [item["ota_offer"] for item in ble.sent if "ota_offer" in item]
+
+    session, offers = asyncio.run(exercise())
+    assert session.success is True
+    assert len(offers) == 1
+    assert set(offers[0]) == expected_fields
+    if current_version == "0.1.6":
+        assert offers[0]["device"] == "Codex-4DAD"
+        assert offers[0]["issuedAt"] == 1_700_000_000
+        assert offers[0]["expiresAt"] == 1_700_000_120
+        assert bytes.fromhex(offers[0]["authorization"])
+
+
+@pytest.mark.parametrize("device_name", [None, "Codex-4dad", "Other-4DAD"])
+def test_modern_coordination_fails_closed_without_canonical_transport_device_name(
+    tmp_path, device_name
+):
+    async def exercise():
+        ble = _Ble(
+            [_status("running", version="0.1.6", health="valid")],
+            device_name=device_name,
+        )
+        trust = generate_ota_trust(tmp_path / "trust")
+
+        @asynccontextmanager
+        async def lock():
+            yield
+
+        coordinator = OtaCoordinator(
+            get_ble=lambda: ble,
+            is_ble_connected=lambda: True,
+            ota_session=lock,
+            trust_loader=lambda: trust,
+            server_factory=_Server,
+            release_builder=lambda **_: SimpleNamespace(),
+            clock=lambda: 1_700_000_000,
+        )
+        image = OtaImageInfo(tmp_path / "firmware.bin", "0.1.7", 1234, "a" * 64)
+        session = OtaAgentSession(NONCE, 1, image.path, image.version)
+        await coordinator.run(session, image)
+        return session, ble
+
+    session, ble = asyncio.run(exercise())
+    assert session.terminal is True and session.success is False
+    assert session.error == "trust"
+    assert not [item for item in ble.sent if "ota_offer" in item]
 
 
 def test_coordination_rejection_stops_server_before_transfer(tmp_path):

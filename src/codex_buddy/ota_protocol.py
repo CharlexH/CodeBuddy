@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping, Optional
 
-from .ota_release import _parse_semantic_version
+from .ota_release import _parse_semantic_version, sign_manifest
 
 
 _NONCE = re.compile(r"^[0-9A-Za-z_-]{24,48}$")
+_DEVICE_NAME = re.compile(r"^Codex-[0-9A-F]{4}$")
+_AUTHORIZATION_ACTION = "code-buddy-firmware-install-v1"
+_AUTHORIZATION_MAX_LIFETIME_SECONDS = 300
+_UINT32_MAX = 0xFFFFFFFF
 _PHASES = {
     "running",
     "offer-received",
@@ -75,7 +81,11 @@ def valid_ota_nonce(nonce: object) -> bool:
     return isinstance(nonce, str) and _NONCE.fullmatch(nonce) is not None
 
 
-def build_ota_offer(
+def valid_ota_device_name(device: object) -> bool:
+    return isinstance(device, str) and _DEVICE_NAME.fullmatch(device) is not None
+
+
+def _validated_offer_payload(
     *,
     nonce: str,
     generation: int,
@@ -104,15 +114,132 @@ def build_ota_offer(
         ):
             raise OtaProtocolError("invalid OTA endpoint")
     return {
-        "ota_offer": {
-            "nonce": nonce,
-            "generation": generation,
-            "version": version,
-            "sizeBytes": size_bytes,
-            "manifestUrl": manifest_url,
-            "signatureUrl": signature_url,
-        }
+        "nonce": nonce,
+        "generation": generation,
+        "version": version,
+        "sizeBytes": size_bytes,
+        "manifestUrl": manifest_url,
+        "signatureUrl": signature_url,
     }
+
+
+def build_ota_offer(
+    *,
+    nonce: str,
+    generation: int,
+    version: str,
+    size_bytes: int,
+    manifest_url: str,
+    signature_url: str,
+) -> dict[str, object]:
+    return {
+        "ota_offer": _validated_offer_payload(
+            nonce=nonce,
+            generation=generation,
+            version=version,
+            size_bytes=size_bytes,
+            manifest_url=manifest_url,
+            signature_url=signature_url,
+        )
+    }
+
+
+def canonical_ota_authorization_bytes(
+    *,
+    device: str,
+    issued_at: int,
+    expires_at: int,
+    nonce: str,
+    generation: int,
+    version: str,
+    size_bytes: int,
+    manifest_url: str,
+    signature_url: str,
+) -> bytes:
+    if not valid_ota_device_name(device):
+        raise OtaProtocolError("invalid OTA device name")
+    if (
+        not isinstance(issued_at, int)
+        or isinstance(issued_at, bool)
+        or not isinstance(expires_at, int)
+        or isinstance(expires_at, bool)
+        or not 0 <= issued_at <= _UINT32_MAX
+        or not issued_at < expires_at <= _UINT32_MAX
+        or expires_at - issued_at > _AUTHORIZATION_MAX_LIFETIME_SECONDS
+    ):
+        raise OtaProtocolError("invalid OTA authorization time window")
+    payload = _validated_offer_payload(
+        nonce=nonce,
+        generation=generation,
+        version=version,
+        size_bytes=size_bytes,
+        manifest_url=manifest_url,
+        signature_url=signature_url,
+    )
+    authorization = {
+        "action": _AUTHORIZATION_ACTION,
+        "device": device,
+        "expiresAt": expires_at,
+        "generation": payload["generation"],
+        "issuedAt": issued_at,
+        "manifestUrl": payload["manifestUrl"],
+        "nonce": payload["nonce"],
+        "signatureUrl": payload["signatureUrl"],
+        "sizeBytes": payload["sizeBytes"],
+        "version": payload["version"],
+    }
+    return json.dumps(
+        authorization,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+
+
+def build_signed_ota_offer(
+    *,
+    device: str,
+    issued_at: int,
+    expires_at: int,
+    nonce: str,
+    generation: int,
+    version: str,
+    size_bytes: int,
+    manifest_url: str,
+    signature_url: str,
+    signing_private_key: Path,
+) -> dict[str, object]:
+    canonical = canonical_ota_authorization_bytes(
+        device=device,
+        issued_at=issued_at,
+        expires_at=expires_at,
+        nonce=nonce,
+        generation=generation,
+        version=version,
+        size_bytes=size_bytes,
+        manifest_url=manifest_url,
+        signature_url=signature_url,
+    )
+    payload = _validated_offer_payload(
+        nonce=nonce,
+        generation=generation,
+        version=version,
+        size_bytes=size_bytes,
+        manifest_url=manifest_url,
+        signature_url=signature_url,
+    )
+    payload.update(
+        {
+            "device": device,
+            "issuedAt": issued_at,
+            "expiresAt": expires_at,
+            "authorization": sign_manifest(
+                canonical, Path(signing_private_key)
+            ).hex(),
+        }
+    )
+    return {"ota_offer": payload}
 
 
 def parse_ota_status(
