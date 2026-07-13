@@ -145,6 +145,24 @@ static void testTargetAndHttpValidation() {
   running.pendingVerify = true;
   expect(!otaTargetValid(&running, &target, 1000),
          "pending-verify running image must fail closed");
+  expect(otaRunningStateAllowsUpdate(
+           OTA_STATE_QUERY_OK, OTA_RUNNING_IMAGE_VALID, false),
+         "explicit valid running state should allow OTA");
+  expect(!otaRunningStateAllowsUpdate(
+           OTA_STATE_QUERY_OK, OTA_RUNNING_IMAGE_PENDING_VERIFY, true),
+         "pending-verify state must fail even when initial layout is trusted");
+  expect(!otaRunningStateAllowsUpdate(
+           OTA_STATE_QUERY_OK, OTA_RUNNING_IMAGE_OTHER, true),
+         "unexpected recorded image state must fail closed");
+  expect(otaRunningStateAllowsUpdate(
+           OTA_STATE_QUERY_NOT_FOUND, OTA_RUNNING_IMAGE_OTHER, true),
+         "documented initial no-record state may pass only after layout verification");
+  expect(!otaRunningStateAllowsUpdate(
+           OTA_STATE_QUERY_NOT_FOUND, OTA_RUNNING_IMAGE_OTHER, false),
+         "unverified no-record state must fail closed");
+  expect(!otaRunningStateAllowsUpdate(
+           OTA_STATE_QUERY_ERROR, OTA_RUNNING_IMAGE_VALID, true),
+         "unexpected state-query errors must fail closed");
 
   OtaHttpMeta response = {200, 1000, false, true};
   expect(otaHttpMetaExactValid(response, 1000, OTA_SLOT_CAPACITY_BYTES),
@@ -262,6 +280,7 @@ struct Fake {
   bool pendingFirmwareOnce;
   bool manifestPendingReturned;
   bool firmwarePendingReturned;
+  bool restartReturns;
   uint32_t firmwareReadSizes[8];
   size_t firmwareReadCount;
   size_t firmwareReadIndex;
@@ -277,6 +296,9 @@ static OtaUpdateActionResult fakeAction(
   Fake* fake = static_cast<Fake*>(opaque);
   fake->events[fake->eventCount++] = event;
   if (fake->failEnabled && event == fake->failEvent)
+    return otaActionFailure();
+  if ((event == OTA_EVENT_RESTART || event == OTA_EVENT_RESTART_FALLBACK) &&
+      fake->restartReturns)
     return otaActionFailure();
   if (event == OTA_EVENT_DIGEST_MATCH)
     return fake->digestMatches ? otaActionComplete() : otaActionFailure();
@@ -319,8 +341,11 @@ static void tickUntilTerminal(
   OtaUpdateInputs inputs,
   bool confirm = true
 ) {
-  for (int i = 0; i < 100 && !otaUpdateTerminal(*machine); ++i)
+  for (int i = 0; i < 100 && !otaUpdateTerminal(*machine); ++i) {
     otaUpdateStep(machine, inputs, confirm && i == 0, false);
+    inputs.nowMs += OTA_UPDATE_RESTART_RETRY_MS;
+    if (machine->bootCommitted) break;
+  }
 }
 
 static bool saw(const Fake& fake, OtaUpdateEvent event) {
@@ -366,14 +391,13 @@ static void testNoActionBeforePhysicalConfirmAndSuccessOrder() {
     OTA_EVENT_DIGEST_MATCH,
     OTA_EVENT_FINAL_GATE,
     OTA_EVENT_SET_BOOT,
-    OTA_EVENT_RESTART,
   };
   expect(fake.eventCount == sizeof(expected) / sizeof(expected[0]),
          "successful OTA should have the exact bounded event count");
   expect(memcmp(fake.events, expected, sizeof(expected)) == 0,
          "successful OTA event order must be strict");
-  expect(update.phase == OTA_PHASE_RESTARTING,
-         "successful OTA should reach restart");
+  expect(update.bootCommitted && update.phase == OTA_PHASE_RESTART,
+         "successful set_boot must latch an irreversible restart-only state");
   expect(update.receivedBytes == update.imageSize &&
            update.readbackBytes == update.imageSize,
          "successful OTA must write and read back the exact signed size");
@@ -390,8 +414,8 @@ static void testPendingAndPartialNetworkReadsStayBounded() {
   fake.firmwareReadCount = 3;
   OtaUpdateMachine update = machine(&fake);
   tickUntilTerminal(&update, ready());
-  expect(update.phase == OTA_PHASE_RESTARTING,
-         "pending and partial reads should resume successfully");
+  expect(update.bootCommitted && update.phase == OTA_PHASE_RESTART,
+         "pending and partial reads should reach restart-only state");
   expect(count(fake, OTA_EVENT_READ_MANIFEST) == 2,
          "manifest pending result consumes one poll and no other action");
   expect(count(fake, OTA_EVENT_DOWNLOAD) == 4,
@@ -495,6 +519,92 @@ static void testMalformedActionAccountingFailsClosed() {
          "adapter may not report more bytes than requested");
 }
 
+static void testBootCommitIgnoresAllCancellationAndGateChanges() {
+  Fake fake = {};
+  fake.digestMatches = true;
+  fake.restartReturns = true;
+  OtaUpdateMachine update = machine(&fake);
+  OtaUpdateInputs inputs = ready();
+  tickUntilTerminal(&update, inputs);
+  expect(update.bootCommitted && count(fake, OTA_EVENT_SET_BOOT) == 1,
+         "test must first commit the verified boot partition exactly once");
+  size_t committedEventCount = fake.eventCount;
+
+  auto expectRestartOnly = [&](OtaUpdateInputs changed, bool cancel,
+                               const char* message) {
+    size_t before = fake.eventCount;
+    changed.nowMs = update.nextRestartAttemptMs;
+    otaUpdateStep(&update, changed, false, cancel);
+    OtaUpdateEvent last = fake.events[fake.eventCount - 1];
+    expect(update.bootCommitted && update.phase == OTA_PHASE_RESTART &&
+             !otaUpdateTerminal(update) && fake.eventCount == before + 1 &&
+             (last == OTA_EVENT_RESTART ||
+              last == OTA_EVENT_RESTART_FALLBACK),
+           message);
+  };
+  expectRestartOnly(inputs, true, "post-commit physical B must be ignored");
+  OtaUpdateInputs changed = inputs;
+  changed.prompt = true;
+  expectRestartOnly(changed, false, "post-commit approval prompt must be ignored");
+  changed = inputs;
+  changed.transfer = true;
+  expectRestartOnly(changed, false, "post-commit transfer conflict must be ignored");
+  changed = inputs;
+  changed.provisioning = true;
+  expectRestartOnly(changed, false, "post-commit provisioning conflict must be ignored");
+  changed = inputs;
+  changed.passkey = true;
+  expectRestartOnly(changed, false, "post-commit passkey conflict must be ignored");
+  changed = inputs;
+  changed.functional = true;
+  expectRestartOnly(changed, false, "post-commit functional conflict must be ignored");
+  changed = inputs;
+  changed.wifiProvisioned = false;
+  expectRestartOnly(changed, false, "post-commit provisioning gate drop must be ignored");
+  changed = inputs;
+  changed.wifiOnline = false;
+  expectRestartOnly(changed, false, "post-commit Wi-Fi drop must be ignored");
+  changed = inputs;
+  changed.trustedTime = false;
+  expectRestartOnly(changed, false, "post-commit trusted-time drop must be ignored");
+  changed = inputs;
+  changed.externalPower = false;
+  changed.batteryKnown = false;
+  expectRestartOnly(changed, false, "post-commit power drop must be ignored");
+  changed = inputs;
+  changed.offerPending = false;
+  changed.offerFresh = false;
+  changed.bleConnected = false;
+  expectRestartOnly(changed, false, "post-commit coordination drop must be ignored");
+  expect(fake.eventCount > committedEventCount,
+         "restart-only checks must exercise the committed state");
+  expect(count(fake, OTA_EVENT_ABORT) == 0,
+         "post-commit state must never abort or clean staged flash");
+  expect(saw(fake, OTA_EVENT_RESTART_FALLBACK),
+         "bounded normal restart returns must escalate to the fallback reset");
+  expect(update.bootCommitted && !otaUpdateTerminal(update) &&
+           update.phase != OTA_PHASE_ERROR && update.phase != OTA_PHASE_CANCELLED,
+         "even a returning fallback reset remains irreversible restart-only state");
+}
+
+static void testTerminalScrubPreservesOnlyOutcome() {
+  Fake fake = {};
+  OtaUpdateMachine update = machine(&fake, 4096);
+  update.phase = OTA_PHASE_ERROR;
+  update.receivedBytes = 123;
+  update.readbackBytes = 45;
+  update.pendingChunkBytes = 6;
+  update.handleValid = true;
+  otaUpdateScrubMachine(&update);
+  expect(update.phase == OTA_PHASE_ERROR && !update.bootCommitted,
+         "pre-commit terminal scrub must preserve only the outcome");
+  expect(update.action == nullptr && update.actionContext == nullptr &&
+           update.imageSize == 0 && update.receivedBytes == 0 &&
+           update.readbackBytes == 0 && update.pendingChunkBytes == 0 &&
+           !update.handleValid,
+         "terminal scrub must remove lengths, handles, and callback pointers");
+}
+
 int main() {
   testReadinessAndPowerGates();
   testCoordinationEndsOnlyAfterAuthentication();
@@ -507,6 +617,8 @@ int main() {
   testFailureCleanupAndNoBootSwitch();
   testCancellationAndApprovalConflict();
   testMalformedActionAccountingFailsClosed();
+  testBootCommitIgnoresAllCancellationAndGateChanges();
+  testTerminalScrubPreservesOnlyOutcome();
   puts("ota update logic tests passed");
   return 0;
 }

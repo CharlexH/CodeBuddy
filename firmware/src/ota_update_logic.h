@@ -11,6 +11,8 @@ constexpr uint32_t OTA_UPDATE_READY_TIMEOUT_MS = 30000;
 constexpr uint32_t OTA_UPDATE_IO_IDLE_TIMEOUT_MS = 5000;
 constexpr uint32_t OTA_UPDATE_RESOURCE_TIMEOUT_MS = 30000;
 constexpr uint32_t OTA_UPDATE_FIRMWARE_TIMEOUT_MS = 300000;
+constexpr uint32_t OTA_UPDATE_RESTART_RETRY_MS = 100;
+constexpr uint8_t OTA_UPDATE_RESTART_API_ATTEMPTS = 3;
 
 enum OtaUpdateGate : uint8_t {
   OTA_GATE_READY = 0,
@@ -97,6 +99,29 @@ inline bool otaTargetValid(
     otaPartitionSubtypeIsOta(target->subtype) && signedSize > 0 &&
     signedSize <= OTA_SLOT_CAPACITY_BYTES && signedSize <= target->size &&
     !running->pendingVerify;
+}
+
+enum OtaPartitionStateQuery : uint8_t {
+  OTA_STATE_QUERY_OK = 0,
+  OTA_STATE_QUERY_NOT_FOUND,
+  OTA_STATE_QUERY_ERROR,
+};
+
+enum OtaRunningImageState : uint8_t {
+  OTA_RUNNING_IMAGE_VALID = 0,
+  OTA_RUNNING_IMAGE_PENDING_VERIFY,
+  OTA_RUNNING_IMAGE_OTHER,
+};
+
+inline bool otaRunningStateAllowsUpdate(
+  OtaPartitionStateQuery query,
+  OtaRunningImageState state,
+  bool initialLayoutVerified
+) {
+  if (query == OTA_STATE_QUERY_OK)
+    return state == OTA_RUNNING_IMAGE_VALID;
+  if (query == OTA_STATE_QUERY_NOT_FOUND) return initialLayoutVerified;
+  return false;
 }
 
 struct OtaHttpMeta {
@@ -266,6 +291,7 @@ enum OtaUpdateEvent : uint8_t {
   OTA_EVENT_FINAL_GATE,
   OTA_EVENT_SET_BOOT,
   OTA_EVENT_RESTART,
+  OTA_EVENT_RESTART_FALLBACK,
 };
 
 enum OtaUpdatePhase : uint8_t {
@@ -357,6 +383,9 @@ struct OtaUpdateMachine {
   bool handleValid;
   bool endAttempted;
   bool authenticated;
+  bool bootCommitted;
+  uint8_t restartAttempts;
+  uint32_t nextRestartAttemptMs;
   uint32_t readyDeadlineMs;
 };
 
@@ -368,6 +397,7 @@ inline OtaUpdateMachine otaUpdateMachineInitial() {
 }
 
 inline bool otaUpdateTerminal(const OtaUpdateMachine& machine) {
+  if (machine.bootCommitted) return false;
   return machine.phase == OTA_PHASE_RESTARTING ||
     machine.phase == OTA_PHASE_CANCELLED || machine.phase == OTA_PHASE_ERROR;
 }
@@ -395,15 +425,28 @@ inline void otaUpdateAbortHandle(OtaUpdateMachine* machine) {
 }
 
 inline void otaUpdateFail(OtaUpdateMachine* machine) {
-  if (!machine) return;
+  if (!machine || machine->bootCommitted) return;
   otaUpdateAbortHandle(machine);
   machine->phase = OTA_PHASE_ERROR;
 }
 
 inline void otaUpdateCancelMachine(OtaUpdateMachine* machine) {
-  if (!machine) return;
+  if (!machine || machine->bootCommitted) return;
   otaUpdateAbortHandle(machine);
   machine->phase = OTA_PHASE_CANCELLED;
+}
+
+inline void otaUpdateScrubMachine(OtaUpdateMachine* machine) {
+  if (!machine) return;
+  OtaUpdatePhase phase = machine->phase;
+  bool bootCommitted = machine->bootCommitted;
+  uint8_t restartAttempts = machine->restartAttempts;
+  uint32_t nextRestartAttemptMs = machine->nextRestartAttemptMs;
+  *machine = {};
+  machine->phase = phase;
+  machine->bootCommitted = bootCommitted;
+  machine->restartAttempts = restartAttempts;
+  machine->nextRestartAttemptMs = nextRestartAttemptMs;
 }
 
 inline bool otaUpdateReadResultValid(
@@ -422,6 +465,17 @@ inline void otaUpdateStep(
   bool physicalCancel
 ) {
   if (!machine || otaUpdateTerminal(*machine)) return;
+  if (machine->bootCommitted) {
+    machine->phase = OTA_PHASE_RESTART;
+    if (!otaDeadlineExpired(inputs.nowMs, machine->nextRestartAttemptMs)) return;
+    OtaUpdateEvent event = machine->restartAttempts <
+        OTA_UPDATE_RESTART_API_ATTEMPTS
+      ? OTA_EVENT_RESTART : OTA_EVENT_RESTART_FALLBACK;
+    otaUpdateAct(machine, event);
+    if (machine->restartAttempts < UINT8_MAX) ++machine->restartAttempts;
+    machine->nextRestartAttemptMs = inputs.nowMs + OTA_UPDATE_RESTART_RETRY_MS;
+    return;
+  }
   if (physicalCancel) {
     otaUpdateCancelMachine(machine);
     return;
@@ -595,12 +649,10 @@ inline void otaUpdateStep(
     case OTA_PHASE_SET_BOOT:
       result = otaUpdateAct(machine, OTA_EVENT_SET_BOOT);
       if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
+      machine->bootCommitted = true;
+      machine->restartAttempts = 0;
+      machine->nextRestartAttemptMs = inputs.nowMs;
       machine->phase = OTA_PHASE_RESTART;
-      break;
-    case OTA_PHASE_RESTART:
-      result = otaUpdateAct(machine, OTA_EVENT_RESTART);
-      if (!otaUpdateAtomicSucceeded(result)) return otaUpdateFail(machine);
-      machine->phase = OTA_PHASE_RESTARTING;
       break;
     default:
       otaUpdateFail(machine);

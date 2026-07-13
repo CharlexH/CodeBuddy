@@ -6,6 +6,7 @@
 #include <esp_partition.h>
 #include <mbedtls/platform_util.h>
 #include <mbedtls/sha256.h>
+#include <new>
 
 #include "ota_manifest.h"
 #include "ota_trust.h"
@@ -87,6 +88,12 @@ void closeRequest() {
   runtime.request.tls.stop();
   runtime.request.open = false;
   runtime.request.body = {};
+}
+
+void reconstructRequest() {
+  closeRequest();
+  runtime.request.~OtaHttpRequest();
+  new (&runtime.request) OtaHttpRequest();
 }
 
 bool openRequest(
@@ -193,9 +200,33 @@ bool partitionSelectionValid() {
   runtime.running = esp_ota_get_running_partition();
   runtime.target = esp_ota_get_next_update_partition(runtime.running);
   esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
-  bool pendingVerify = runtime.running &&
-    esp_ota_get_state_partition(runtime.running, &state) == ESP_OK &&
-    state == ESP_OTA_IMG_PENDING_VERIFY;
+  esp_err_t stateResult = runtime.running
+    ? esp_ota_get_state_partition(runtime.running, &state)
+    : ESP_ERR_INVALID_ARG;
+  OtaPartitionStateQuery stateQuery = OTA_STATE_QUERY_ERROR;
+  if (stateResult == ESP_OK) stateQuery = OTA_STATE_QUERY_OK;
+  else if (stateResult == ESP_ERR_NOT_FOUND ||
+           (stateResult == ESP_ERR_NOT_SUPPORTED && runtime.running &&
+            runtime.running->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY))
+    stateQuery = OTA_STATE_QUERY_NOT_FOUND;
+  OtaRunningImageState runningState = OTA_RUNNING_IMAGE_OTHER;
+  if (state == ESP_OTA_IMG_VALID) runningState = OTA_RUNNING_IMAGE_VALID;
+  else if (state == ESP_OTA_IMG_PENDING_VERIFY)
+    runningState = OTA_RUNNING_IMAGE_PENDING_VERIFY;
+  const esp_partition_t* configuredBoot = esp_ota_get_boot_partition();
+  bool runningSubtypeEligible = runtime.running &&
+    (runtime.running->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY ||
+     (runtime.running->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN &&
+      runtime.running->subtype < ESP_PARTITION_SUBTYPE_APP_OTA_MAX));
+  bool initialLayoutVerified = runtime.running && configuredBoot &&
+    runtime.running->type == ESP_PARTITION_TYPE_APP &&
+    configuredBoot->type == ESP_PARTITION_TYPE_APP &&
+    runtime.running->address == configuredBoot->address &&
+    runtime.running->size == configuredBoot->size && runningSubtypeEligible;
+  if (!otaRunningStateAllowsUpdate(
+        stateQuery, runningState, initialLayoutVerified
+      ))
+    return false;
   OtaPartitionInfo running = {
     reinterpret_cast<uintptr_t>(runtime.running),
     runtime.running ? runtime.running->address : 0,
@@ -205,7 +236,7 @@ bool partitionSelectionValid() {
     static_cast<uint8_t>(
       runtime.running ? runtime.running->subtype : ESP_PARTITION_SUBTYPE_ANY
     ),
-    pendingVerify,
+    runningState == OTA_RUNNING_IMAGE_PENDING_VERIFY,
   };
   OtaPartitionInfo target = {
     reinterpret_cast<uintptr_t>(runtime.target),
@@ -390,21 +421,49 @@ OtaUpdateActionResult otaAction(
       setStatus("Finishing update");
       return currentFinalGate() ? otaActionComplete() : otaActionFailure();
     case OTA_EVENT_SET_BOOT:
-      return runtime.target &&
-        esp_ota_set_boot_partition(runtime.target) == ESP_OK
-        ? otaActionComplete() : otaActionFailure();
+      if (!runtime.target ||
+          esp_ota_set_boot_partition(runtime.target) != ESP_OK)
+        return otaActionFailure();
+      // Latch before any cleanup work: after ESP-IDF commits otadata there is
+      // no safe path back to ordinary cancellation or error handling.
+      runtime.machine.bootCommitted = true;
+      runtime.machine.phase = OTA_PHASE_RESTART;
+      runtime.machine.restartAttempts = 0;
+      runtime.machine.nextRestartAttemptMs = millis();
+      setStatus("Restarting");
+      // The boot selection is committed and must never be treated as a
+      // cancellable transaction again. Scrub endpoint tokens now; restart
+      // needs only the latched pure-machine state.
+      reconstructRequest();
+      mbedtls_platform_zeroize(&runtime.descriptor, sizeof(runtime.descriptor));
+      mbedtls_platform_zeroize(runtime.buffer, sizeof(runtime.buffer));
+      mbedtls_platform_zeroize(runtime.manifest, sizeof(runtime.manifest));
+      mbedtls_platform_zeroize(runtime.signature, sizeof(runtime.signature));
+      mbedtls_platform_zeroize(runtime.expectedDigest, sizeof(runtime.expectedDigest));
+      mbedtls_platform_zeroize(runtime.readbackDigest, sizeof(runtime.readbackDigest));
+      runtime.manifestLength = 0;
+      runtime.signatureLength = 0;
+      if (runtime.sourceOffer) otaOfferReset(runtime.sourceOffer);
+      runtime.sourceOffer = nullptr;
+      otaOfferReset(&runtime.offer);
+      runtime.offerConsumed = false;
+      runtime.running = nullptr;
+      runtime.target = nullptr;
+      return otaActionComplete();
     case OTA_EVENT_RESTART:
       setStatus("Restarting");
-      if (runtime.sourceOffer) otaOfferReset(runtime.sourceOffer);
-      otaOfferReset(&runtime.offer);
       esp_restart();
+      return otaActionFailure();
+    case OTA_EVENT_RESTART_FALLBACK:
+      setStatus("Forcing restart");
+      abort();
       return otaActionFailure();
   }
   return otaActionFailure();
 }
 
 void cleanupTerminal() {
-  closeRequest();
+  reconstructRequest();
   if (runtime.readbackHashReady) {
     mbedtls_sha256_free(&runtime.readbackHash);
     runtime.readbackHashReady = false;
@@ -415,11 +474,18 @@ void cleanupTerminal() {
   mbedtls_platform_zeroize(runtime.signature, sizeof(runtime.signature));
   mbedtls_platform_zeroize(runtime.expectedDigest, sizeof(runtime.expectedDigest));
   mbedtls_platform_zeroize(runtime.readbackDigest, sizeof(runtime.readbackDigest));
+  mbedtls_platform_zeroize(&runtime.descriptor, sizeof(runtime.descriptor));
+  runtime.manifestLength = 0;
+  runtime.signatureLength = 0;
   if (runtime.sourceOffer) otaOfferReset(runtime.sourceOffer);
+  runtime.sourceOffer = nullptr;
   otaOfferReset(&runtime.offer);
   runtime.offerConsumed = false;
+  runtime.running = nullptr;
+  runtime.target = nullptr;
   if (runtime.machine.phase == OTA_PHASE_CANCELLED) setStatus("Update cancelled");
   else if (runtime.machine.phase == OTA_PHASE_ERROR) setStatus("Update failed");
+  otaUpdateScrubMachine(&runtime.machine);
   runtime.terminalSinceMs = millis();
 }
 
@@ -519,7 +585,8 @@ void otaUpdateConfirm() {
 }
 
 void otaUpdateCancel() {
-  if (runtime.active && !otaUpdateTerminal(runtime.machine))
+  if (runtime.active && !runtime.machine.bootCommitted &&
+      !otaUpdateTerminal(runtime.machine))
     runtime.cancelRequested = true;
 }
 
