@@ -291,6 +291,17 @@ static void testMacLocalUrlPolicyAndBinding() {
   expect_true(parse(raw, &descriptor) == OTA_MANIFEST_OK &&
               otaManifestMatchesOffer(descriptor, offer),
               "signed artifact must bind to the hinted endpoint/token");
+  uint32_t offeredSize = offer.sizeBytes;
+  offer.sizeBytes = offeredSize + 1;
+  expect_true(!otaManifestMatchesOffer(descriptor, offer),
+              "signed size must exactly match the physically accepted hint");
+  offer.sizeBytes = offeredSize;
+  char offeredVersion[OTA_VERSION_MAX_BYTES];
+  memcpy(offeredVersion, offer.version, sizeof(offeredVersion));
+  strcpy(offer.version, "1.2.4");
+  expect_true(!otaManifestMatchesOffer(descriptor, offer),
+              "signed version must exactly match the physically accepted hint");
+  memcpy(offer.version, offeredVersion, sizeof(offer.version));
 
   expect_true(!otaOfferAcceptHint(
                 "1.2.3", 1234, VALID_MANIFEST_URL,
@@ -352,8 +363,19 @@ static void testMacLocalUrlPolicyAndBinding() {
   expect_true(otaOfferExecutionAllowed(
                 &offer, 5200, true, false, false, false, false, 50),
               "execution recheck should accept a conflict-free 50 percent battery");
+  OtaOfferState consumed = otaOfferStateInitial();
+  expect_true(otaOfferConsume(&offer, &consumed) && consumed.pending &&
+                strcmp(consumed.manifestUrl, VALID_MANIFEST_URL) == 0 &&
+                !offer.pending && !offer.windowOpen,
+              "physical acceptance should move the hint into private runtime state");
+
+  expect_true(otaOfferOpenReceiveWindow(&offer, 5210, true) &&
+              otaOfferAcceptHint(
+                "1.2.3", 1234, VALID_MANIFEST_URL, VALID_SIGNATURE_URL,
+                "1.2.2", 5211, true, false, false, false, true, 0, &offer),
+              "offer should be recreated for a failed execution recheck");
   expect_true(!otaOfferExecutionAllowed(
-                &offer, 5201, true, false, false, false, false, 49) &&
+                &offer, 5212, true, false, false, false, false, 49) &&
               !offer.pending,
               "execution recheck must clear offer when power gate fails");
 

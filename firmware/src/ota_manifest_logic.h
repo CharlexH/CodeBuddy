@@ -45,6 +45,8 @@ struct OtaOfferState {
   bool pending;
   uint32_t windowDeadlineMs;
   uint32_t offerDeadlineMs;
+  uint32_t sizeBytes;
+  char version[OTA_VERSION_MAX_BYTES];
   char manifestUrl[OTA_URL_MAX_BYTES];
   char signatureUrl[OTA_URL_MAX_BYTES];
 };
@@ -447,6 +449,16 @@ inline bool otaOfferOpenReceiveWindow(
 inline void otaOfferCancel(OtaOfferState* offer) { otaOfferReset(offer); }
 inline void otaOfferReject(OtaOfferState* offer) { otaOfferReset(offer); }
 
+inline bool otaOfferConsume(OtaOfferState* source, OtaOfferState* destination) {
+  if (!source || !destination || source == destination || !source->pending) {
+    if (destination && destination != source) otaOfferReset(destination);
+    return false;
+  }
+  *destination = *source;
+  otaOfferReset(source);
+  return true;
+}
+
 inline bool otaOfferWindowActive(const OtaOfferState& offer, uint32_t now) {
   return offer.windowOpen && otaOfferDeadlineActive(now, offer.windowDeadlineMs);
 }
@@ -489,13 +501,17 @@ inline bool otaOfferAcceptHint(
   }
   size_t manifestLength = strnlen(manifestUrl, sizeof(output->manifestUrl));
   size_t signatureLength = strnlen(signatureUrl, sizeof(output->signatureUrl));
-  if (manifestLength >= sizeof(output->manifestUrl) ||
+  size_t versionLength = strnlen(version, sizeof(output->version));
+  if (versionLength >= sizeof(output->version) ||
+      manifestLength >= sizeof(output->manifestUrl) ||
       signatureLength >= sizeof(output->signatureUrl)) {
     otaOfferReset(output);
     return false;
   }
   memcpy(output->manifestUrl, manifestUrl, manifestLength + 1);
   memcpy(output->signatureUrl, signatureUrl, signatureLength + 1);
+  memcpy(output->version, version, versionLength + 1);
+  output->sizeBytes = sizeBytes;
   output->pending = true;
   output->offerDeadlineMs = now + OTA_OFFER_TTL_MS;
   return true;
@@ -540,7 +556,9 @@ inline bool otaManifestMatchesOffer(
   const OtaManifestDescriptor& manifest,
   const OtaOfferState& offer
 ) {
-  return offer.pending && otaLocalHttpsUrlsShareEndpoint(
+  return offer.pending && manifest.sizeBytes == offer.sizeBytes &&
+    strcmp(manifest.version, offer.version) == 0 &&
+    otaLocalHttpsUrlsShareEndpoint(
       manifest.artifactUrl, OTA_URL_FIRMWARE, offer.manifestUrl, OTA_URL_MANIFEST
     ) &&
     otaLocalHttpsUrlsShareEndpoint(

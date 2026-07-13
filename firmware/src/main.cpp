@@ -10,6 +10,7 @@
 #include "runtime_pet_layout_logic.h"
 #include "settings_menu_logic.h"
 #include "wifi_manager.h"
+#include "ota_update.h"
 #include "clock_time_logic.h"
 #include "data.h"
 #include "persona_logic.h"
@@ -485,27 +486,52 @@ static void drawWifiStatus() {
 
 static void drawOtaReceiveWindow() {
   const Palette& p = characterPalette();
+  OtaUpdateView update = otaUpdateView();
   int mw = 124, mh = 124;
   int mx = (W - mw) / 2, my = (H - mh) / 2;
   spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
   spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
   spr.setTextSize(1);
   spr.setTextColor(p.text, PANEL);
-  spr.setCursor(mx + 7, my + 9); spr.print("OTA READY");
+  spr.setCursor(mx + 7, my + 9);
+  spr.print(update.visible ? "OTA UPDATE" : "OTA READY");
   spr.setTextColor(p.textDim, PANEL);
-  spr.setCursor(mx + 7, my + 30); spr.print("Run on your Mac:");
-  spr.setTextColor(p.body, PANEL);
-  spr.setCursor(mx + 7, my + 47); spr.print(otaUpdateCommandLine(0));
-  spr.setCursor(mx + 7, my + 60); spr.print(otaUpdateCommandLine(1));
-  spr.setTextColor(p.textDim, PANEL);
-  uint32_t now = millis();
-  uint32_t remaining = otaOfferWindowActive(tama.otaOffer, now)
-    ? (tama.otaOffer.windowDeadlineMs - now + 999) / 1000 : 0;
-  spr.setCursor(mx + 7, my + 78);
-  spr.printf("Window: %lus", (unsigned long)remaining);
-  spr.setCursor(mx + 7, my + 94);
-  spr.print(tama.otaOffer.pending ? "Request received" : "Waiting for Mac");
-  drawMenuHints(p, mx, mw, my + mh - 12, "", "Cancel");
+  if (update.visible) {
+    spr.setCursor(mx + 7, my + 29);
+    spr.print(update.status[0] ? update.status : "Preparing update");
+    if (update.authenticated && update.version[0]) {
+      spr.setCursor(mx + 7, my + 45);
+      spr.printf("Version: %.12s", update.version);
+    }
+    if (update.phase >= OTA_PHASE_DOWNLOAD &&
+        update.phase <= OTA_PHASE_FINAL_GATE) {
+      int barW = mw - 14;
+      spr.drawRect(mx + 7, my + 66, barW, 8, p.textDim);
+      int fill = (barW - 2) * update.percent / 100;
+      if (fill > 0) spr.fillRect(mx + 8, my + 67, fill, 6, p.body);
+      spr.setCursor(mx + 7, my + 80);
+      spr.printf("%u%%", update.percent);
+    } else if (!update.authenticated) {
+      spr.setCursor(mx + 7, my + 54);
+      spr.print("Signed Mac update");
+    }
+    bool confirm = update.phase == OTA_PHASE_CONFIRM;
+    drawMenuHints(p, mx, mw, my + mh - 12, confirm ? "Install" : "", "Cancel");
+  } else {
+    spr.setCursor(mx + 7, my + 30); spr.print("Run on your Mac:");
+    spr.setTextColor(p.body, PANEL);
+    spr.setCursor(mx + 7, my + 47); spr.print(otaUpdateCommandLine(0));
+    spr.setCursor(mx + 7, my + 60); spr.print(otaUpdateCommandLine(1));
+    spr.setTextColor(p.textDim, PANEL);
+    uint32_t now = millis();
+    uint32_t remaining = otaOfferWindowActive(tama.otaOffer, now)
+      ? (tama.otaOffer.windowDeadlineMs - now + 999) / 1000 : 0;
+    spr.setCursor(mx + 7, my + 78);
+    spr.printf("Window: %lus", (unsigned long)remaining);
+    spr.setCursor(mx + 7, my + 94);
+    spr.print(tama.otaOffer.pending ? "Request received" : "Waiting for Mac");
+    drawMenuHints(p, mx, mw, my + mh - 12, "", "Cancel");
+  }
 }
 
 static void applyWifiMenuAction() {
@@ -1571,6 +1597,7 @@ void loop() {
       displayMode = DISP_NORMAL;
       menuOpen = settingsOpen = resetOpen = false;
       otaReceiveScreen = false;
+      otaUpdateCancel();
       otaOfferCancel(&tama.otaOffer);
       applyDisplayMode();
       characterInvalidate();
@@ -1580,7 +1607,31 @@ void loop() {
 
   bool inPrompt = tama.promptId[0] && !responseSent;
   wifiManagerPoll(inPrompt);
-  if (otaReceiveScreen && !otaOfferWindowActive(tama.otaOffer, now)) {
+  int batteryVoltageMv = compatBatteryVoltageMv();
+  int batteryPercent = (batteryVoltageMv - 3200) / 10;
+  if (batteryPercent < 0) batteryPercent = 0;
+  if (batteryPercent > 100) batteryPercent = 100;
+  OtaUpdateRuntimeInputs otaInputs = {};
+  otaInputs.bleConnected = bleConnected();
+  otaInputs.wifiProvisioned = wifiManagerProvisioned();
+  otaInputs.wifiOnline = wifiManagerOnline();
+  otaInputs.trustedTime = wifiManagerSystemTimeTrusted();
+  otaInputs.prompt = inPrompt;
+  otaInputs.transfer = xferActive();
+  otaInputs.provisioning = wifiManagerUiActive();
+  otaInputs.passkey = blePasskey() != 0;
+  otaInputs.functional = menuOpen || settingsOpen || wifiMenuOpen ||
+    wifiStatusOpen || resetOpen || displayMode != DISP_NORMAL;
+  otaInputs.externalPower = compatVbusVoltageMv() > 4000;
+  otaInputs.batteryKnown = batteryVoltageMv >= 2500 && batteryVoltageMv <= 5000;
+  otaInputs.batteryPercent = static_cast<uint8_t>(batteryPercent);
+  otaUpdatePoll(&tama.otaOffer, otaInputs);
+  if (otaUpdateActive()) {
+    napping = false;
+    wake();
+  }
+  if (otaReceiveScreen && !otaUpdateActive() &&
+      !otaOfferWindowActive(tama.otaOffer, now)) {
     otaReceiveScreen = false;
     invalidatePortraitSurface();
   }
@@ -1635,7 +1686,9 @@ void loop() {
   // AXP power button (left side): short-press toggles screen off.
   // Long-press (6s) still powers off the device via AXP hardware.
   if (compatPowerKeyState() == 0x02) {
-    if (screenOff) {
+    if (otaUpdateActive()) {
+      wake();
+    } else if (screenOff) {
       wake();
     } else {
       compatSetDisplayEnabled(false);
@@ -1647,10 +1700,14 @@ void loop() {
     btnALong = true;
     beep(800, 60);
     if (otaReceiveScreen) {
-      otaOfferCancel(&tama.otaOffer);
-      otaReceiveScreen = false;
-      settingsOpen = true;
-      invalidatePortraitSurface();
+      if (otaUpdateActive()) {
+        otaUpdateCancel();
+      } else {
+        otaOfferCancel(&tama.otaOffer);
+        otaReceiveScreen = false;
+        settingsOpen = true;
+        invalidatePortraitSurface();
+      }
     }
     else if (wifiStatusOpen) {
       if (wifiManagerUiActive()) wifiManagerCancelProvisioning();
@@ -1686,7 +1743,10 @@ void loop() {
         beep(2400, 60);
         if (tookS < 5) triggerOneShot(P_HEART, 2000);
       } else if (otaReceiveScreen) {
-        // Receive window is informational; B cancels it.
+        if (otaUpdateActive() && otaUpdateView().phase == OTA_PHASE_CONFIRM) {
+          beep(1800, 40);
+          otaUpdateConfirm();
+        }
       } else if (resetOpen) {
         beep(1800, 30);
         resetSel = (resetSel + 1) % RESET_N;
@@ -1727,10 +1787,14 @@ void loop() {
       beep(600, 60);
     } else if (otaReceiveScreen) {
       beep(600, 40);
-      otaOfferCancel(&tama.otaOffer);
-      otaReceiveScreen = false;
-      settingsOpen = true;
-      invalidatePortraitSurface();
+      if (otaUpdateActive()) {
+        otaUpdateCancel();
+      } else {
+        otaOfferCancel(&tama.otaOffer);
+        otaReceiveScreen = false;
+        settingsOpen = true;
+        invalidatePortraitSurface();
+      }
     } else if (wifiStatusOpen) {
       beep(2400, 30);
       if (wifiManagerUiActive()) wifiManagerCancelProvisioning();
@@ -1774,7 +1838,7 @@ void loop() {
   sharedContext.promptVisible = inPrompt;
   sharedContext.functionalOverrideVisible = xferActive() || wifiManagerUiActive()
     || otaReceiveScreen;
-  sharedContext.otaProgressVisible = false;
+  sharedContext.otaProgressVisible = otaUpdateActive();
   // Show the clock when nothing is happening — bridge heartbeat alone
   // doesn't count as activity (it's the only way to get the RTC synced).
   bool clocking = tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
@@ -1993,7 +2057,7 @@ void loop() {
   // Exit needs sustained not-down so IMU noise at the threshold doesn't
   // bounce brightness between 8 and full every few frames.
   static int8_t faceDownFrames = 0;
-  if (!inPrompt) {
+  if (!inPrompt && !otaUpdateActive()) {
     bool down = isFaceDown();
     if (down)       { if (faceDownFrames < 20) faceDownFrames++; }
     else            { if (faceDownFrames > -10) faceDownFrames--; }
@@ -2016,6 +2080,7 @@ void loop() {
   // No auto-off on USB power — clock face wants to stay visible while charging.
   if (!screenOff && !inPrompt && !_onUsb
       && !wifiManagerUiActive()
+      && !otaUpdateActive()
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     compatSetDisplayEnabled(false);
     screenOff = true;

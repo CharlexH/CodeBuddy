@@ -1,0 +1,554 @@
+#include "ota_update.h"
+
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <mbedtls/platform_util.h>
+#include <mbedtls/sha256.h>
+
+#include "ota_manifest.h"
+#include "ota_trust.h"
+
+namespace {
+
+struct OtaHttpRequest {
+  HTTPClient http;
+  WiFiClientSecure tls;
+  OtaHttpBodyState body;
+  bool open;
+};
+
+struct OtaRuntime {
+  OtaUpdateMachine machine;
+  OtaOfferState* sourceOffer;
+  OtaOfferState offer;
+  bool offerConsumed;
+  OtaUpdateRuntimeInputs inputs;
+  OtaManifestDescriptor descriptor;
+  uint8_t manifest[OTA_MANIFEST_MAX_BYTES];
+  size_t manifestLength;
+  uint8_t signature[OTA_SIGNATURE_MAX_BYTES];
+  size_t signatureLength;
+  uint8_t buffer[OTA_UPDATE_CHUNK_BYTES];
+  uint8_t expectedDigest[32];
+  uint8_t readbackDigest[32];
+  mbedtls_sha256_context readbackHash;
+  bool readbackHashReady;
+  const esp_partition_t* running;
+  const esp_partition_t* target;
+  esp_ota_handle_t handle;
+  OtaHttpRequest request;
+  bool confirmRequested;
+  bool cancelRequested;
+  bool active;
+  uint32_t terminalSinceMs;
+  char status[24];
+};
+
+OtaRuntime runtime = {};
+
+void setStatus(const char* value) {
+  strncpy(runtime.status, value ? value : "", sizeof(runtime.status) - 1);
+  runtime.status[sizeof(runtime.status) - 1] = 0;
+}
+
+bool identityEncoding(HTTPClient& http) {
+  String encoding = http.header("Content-Encoding");
+  String transfer = http.header("Transfer-Encoding");
+  String location = http.header("Location");
+  return location.length() == 0 && transfer.length() == 0 &&
+    (encoding.length() == 0 || encoding.equalsIgnoreCase("identity"));
+}
+
+void configureTls(WiFiClientSecure& client) {
+  // The generated trust header contains only the pinned local CA certificate
+  // and detached-manifest public key. Never use setInsecure() on this path.
+  client.setCACert(otaTrustLocalCaPem());
+  client.setHandshakeTimeout(5);
+  client.setTimeout(OTA_UPDATE_IO_IDLE_TIMEOUT_MS);
+}
+
+void configureHttp(HTTPClient& http) {
+  http.setConnectTimeout(5000);
+  http.setTimeout(OTA_UPDATE_IO_IDLE_TIMEOUT_MS);
+  http.setReuse(false);
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  const char* headers[] = {
+    "Content-Encoding",
+    "Transfer-Encoding",
+    "Location",
+  };
+  http.collectHeaders(headers, 3);
+}
+
+void closeRequest() {
+  if (runtime.request.open) runtime.request.http.end();
+  runtime.request.tls.stop();
+  runtime.request.open = false;
+  runtime.request.body = {};
+}
+
+bool openRequest(
+  const char* url,
+  uint32_t maximumLength,
+  uint32_t exactLength,
+  uint32_t absoluteTimeoutMs
+) {
+  if (!url || !url[0] || !maximumLength || !absoluteTimeoutMs ||
+      !otaTrustLocalCaPem() || !otaTrustLocalCaPem()[0])
+    return false;
+  closeRequest();
+  configureTls(runtime.request.tls);
+  configureHttp(runtime.request.http);
+  uint32_t startedAt = millis();
+  if (!runtime.request.http.begin(runtime.request.tls, url)) return false;
+  runtime.request.open = true;
+  int status = runtime.request.http.GET();
+  int contentLength = runtime.request.http.getSize();
+  OtaHttpMeta meta = {
+    status,
+    contentLength,
+    status >= 300 && status < 400,
+    identityEncoding(runtime.request.http),
+  };
+  bool valid = exactLength
+    ? otaHttpMetaExactValid(meta, exactLength, maximumLength)
+    : otaHttpMetaBoundedValid(meta, maximumLength);
+  if (!valid) {
+    closeRequest();
+    return false;
+  }
+  runtime.request.body = otaHttpBodyState(
+    startedAt, static_cast<uint32_t>(contentLength), absoluteTimeoutMs
+  );
+  runtime.request.body.idleDeadlineMs =
+    millis() + OTA_UPDATE_IO_IDLE_TIMEOUT_MS;
+  return true;
+}
+
+OtaUpdateActionResult readRequest(
+  uint8_t* output,
+  size_t outputCapacity,
+  uint32_t maximumBytes,
+  bool append,
+  bool closeWhenComplete
+) {
+  if (!runtime.request.open || !output || !outputCapacity || !maximumBytes)
+    return otaActionFailure();
+  WiFiClient* stream = runtime.request.http.getStreamPtr();
+  if (!stream) return otaActionFailure();
+  uint32_t available = static_cast<uint32_t>(stream->available());
+  OtaHttpBodyPoll poll = otaHttpBodyPoll(
+    runtime.request.body,
+    millis(),
+    available,
+    stream->connected() || available > 0,
+    maximumBytes
+  );
+  if (poll.decision == OTA_HTTP_BODY_WAIT) return otaActionPending();
+  if (poll.decision == OTA_HTTP_BODY_COMPLETE) {
+    if (closeWhenComplete) closeRequest();
+    return otaActionComplete();
+  }
+  if (poll.decision != OTA_HTTP_BODY_READ) return otaActionFailure();
+
+  size_t destinationOffset = append ? runtime.request.body.receivedBytes : 0;
+  if (destinationOffset > outputCapacity ||
+      poll.bytes > outputCapacity - destinationOffset)
+    return otaActionFailure();
+  int got = stream->read(output + destinationOffset, poll.bytes);
+  if (got <= 0) return otaActionPending();
+  uint32_t actual = static_cast<uint32_t>(got);
+  if (actual > poll.bytes ||
+      !otaHttpBodyCommit(&runtime.request.body, millis(), actual))
+    return otaActionFailure();
+
+  bool complete = runtime.request.body.receivedBytes ==
+    runtime.request.body.expectedBytes;
+  if (complete && stream->available() > 0) return otaActionFailure();
+  if (complete && closeWhenComplete) closeRequest();
+  return complete ? otaActionComplete(actual) : otaActionProgress(actual);
+}
+
+OtaOfferState* coordinatedOffer() {
+  return runtime.offerConsumed ? &runtime.offer : runtime.sourceOffer;
+}
+
+bool currentFinalGate() {
+  if (!runtime.machine.authenticated || !runtime.target ||
+      esp_ota_get_running_partition() != runtime.running)
+    return false;
+  return !runtime.inputs.prompt && !runtime.inputs.transfer &&
+    !runtime.inputs.provisioning && !runtime.inputs.passkey &&
+    !runtime.inputs.functional && runtime.inputs.wifiProvisioned &&
+    runtime.inputs.wifiOnline && runtime.inputs.trustedTime &&
+    (runtime.inputs.externalPower ||
+      (runtime.inputs.batteryKnown &&
+       runtime.inputs.batteryPercent >= OTA_MIN_BATTERY_PERCENT &&
+       runtime.inputs.batteryPercent <= 100));
+}
+
+bool partitionSelectionValid() {
+  runtime.running = esp_ota_get_running_partition();
+  runtime.target = esp_ota_get_next_update_partition(runtime.running);
+  esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+  bool pendingVerify = runtime.running &&
+    esp_ota_get_state_partition(runtime.running, &state) == ESP_OK &&
+    state == ESP_OTA_IMG_PENDING_VERIFY;
+  OtaPartitionInfo running = {
+    reinterpret_cast<uintptr_t>(runtime.running),
+    runtime.running ? runtime.running->address : 0,
+    runtime.running ? runtime.running->size : 0,
+    runtime.running && runtime.running->type == ESP_PARTITION_TYPE_APP
+      ? OTA_PARTITION_APP : OTA_PARTITION_DATA,
+    static_cast<uint8_t>(
+      runtime.running ? runtime.running->subtype : ESP_PARTITION_SUBTYPE_ANY
+    ),
+    pendingVerify,
+  };
+  OtaPartitionInfo target = {
+    reinterpret_cast<uintptr_t>(runtime.target),
+    runtime.target ? runtime.target->address : 0,
+    runtime.target ? runtime.target->size : 0,
+    runtime.target && runtime.target->type == ESP_PARTITION_TYPE_APP
+      ? OTA_PARTITION_APP : OTA_PARTITION_DATA,
+    static_cast<uint8_t>(
+      runtime.target ? runtime.target->subtype : ESP_PARTITION_SUBTYPE_ANY
+    ),
+    false,
+  };
+  return otaTargetValid(
+    runtime.running ? &running : nullptr,
+    runtime.target ? &target : nullptr,
+    runtime.descriptor.sizeBytes
+  );
+}
+
+OtaUpdateActionResult otaAction(
+  void*,
+  OtaUpdateEvent event,
+  uint64_t offset,
+  uint32_t maximumBytes
+) {
+  switch (event) {
+    case OTA_EVENT_OPEN_MANIFEST:
+      setStatus("Checking update");
+      return openRequest(
+        runtime.offer.manifestUrl,
+        sizeof(runtime.manifest),
+        0,
+        OTA_UPDATE_RESOURCE_TIMEOUT_MS
+      ) ? otaActionComplete() : otaActionFailure();
+    case OTA_EVENT_READ_MANIFEST: {
+      OtaUpdateActionResult result = readRequest(
+        runtime.manifest,
+        sizeof(runtime.manifest),
+        maximumBytes,
+        true,
+        false
+      );
+      if (result.status == OTA_ACTION_COMPLETE) {
+        runtime.manifestLength = runtime.request.body.receivedBytes;
+        closeRequest();
+      }
+      return result;
+    }
+    case OTA_EVENT_OPEN_SIGNATURE:
+      setStatus("Checking update");
+      return openRequest(
+        runtime.offer.signatureUrl,
+        sizeof(runtime.signature),
+        0,
+        OTA_UPDATE_RESOURCE_TIMEOUT_MS
+      ) ? otaActionComplete() : otaActionFailure();
+    case OTA_EVENT_READ_SIGNATURE: {
+      OtaUpdateActionResult result = readRequest(
+        runtime.signature,
+        sizeof(runtime.signature),
+        maximumBytes,
+        true,
+        false
+      );
+      if (result.status == OTA_ACTION_COMPLETE) {
+        runtime.signatureLength = runtime.request.body.receivedBytes;
+        closeRequest();
+      }
+      return result;
+    }
+    case OTA_EVENT_AUTHENTICATE:
+      setStatus("Verifying update");
+      if (!runtime.manifestLength || !runtime.signatureLength ||
+          otaManifestAuthenticateAndParse(
+            runtime.manifest,
+            runtime.manifestLength,
+            runtime.signature,
+            runtime.signatureLength,
+            &runtime.descriptor
+          ) != OTA_MANIFEST_OK ||
+          !otaManifestMatchesOffer(runtime.descriptor, runtime.offer) ||
+          !otaDecodeSha256(runtime.descriptor.sha256, runtime.expectedDigest))
+        return otaActionFailure();
+      runtime.machine.imageSize = runtime.descriptor.sizeBytes;
+      mbedtls_platform_zeroize(runtime.manifest, sizeof(runtime.manifest));
+      mbedtls_platform_zeroize(runtime.signature, sizeof(runtime.signature));
+      return otaActionComplete();
+    case OTA_EVENT_SELECT:
+      setStatus("Preparing storage");
+      return partitionSelectionValid()
+        ? otaActionComplete() : otaActionFailure();
+    case OTA_EVENT_OPEN_FIRMWARE:
+      setStatus("Opening download");
+      return openRequest(
+        runtime.descriptor.artifactUrl,
+        OTA_SLOT_CAPACITY_BYTES,
+        runtime.descriptor.sizeBytes,
+        OTA_UPDATE_FIRMWARE_TIMEOUT_MS
+      ) ? otaActionComplete() : otaActionFailure();
+    case OTA_EVENT_BEGIN:
+      setStatus("Starting update");
+      if (!currentFinalGate() || !runtime.request.open || !runtime.target ||
+          maximumBytes != runtime.descriptor.sizeBytes)
+        return otaActionFailure();
+      runtime.handle = 0;
+      return esp_ota_begin(
+        runtime.target,
+        runtime.descriptor.sizeBytes,
+        &runtime.handle
+      ) == ESP_OK ? otaActionComplete() : otaActionFailure();
+    case OTA_EVENT_DOWNLOAD:
+      setStatus("Downloading");
+      if (offset != runtime.request.body.receivedBytes ||
+          offset >= runtime.descriptor.sizeBytes)
+        return otaActionFailure();
+      return readRequest(
+        runtime.buffer,
+        sizeof(runtime.buffer),
+        maximumBytes,
+        false,
+        false
+      );
+    case OTA_EVENT_WRITE:
+      if (!maximumBytes || maximumBytes > sizeof(runtime.buffer) ||
+          offset + maximumBytes > runtime.descriptor.sizeBytes || !runtime.handle)
+        return otaActionFailure();
+      return esp_ota_write(
+        runtime.handle, runtime.buffer, maximumBytes
+      ) == ESP_OK ? otaActionComplete() : otaActionFailure();
+    case OTA_EVENT_FINISH_DOWNLOAD:
+      if (!runtime.request.open ||
+          runtime.request.body.receivedBytes != runtime.descriptor.sizeBytes ||
+          runtime.request.http.getStreamPtr()->available() > 0)
+        return otaActionFailure();
+      closeRequest();
+      return otaActionComplete();
+    case OTA_EVENT_ABORT: {
+      closeRequest();
+      esp_ota_handle_t handle = runtime.handle;
+      runtime.handle = 0;
+      if (handle) esp_ota_abort(handle);
+      return otaActionComplete();
+    }
+    case OTA_EVENT_END: {
+      closeRequest();
+      esp_ota_handle_t handle = runtime.handle;
+      runtime.handle = 0;
+      if (!handle || esp_ota_end(handle) != ESP_OK) return otaActionFailure();
+      mbedtls_sha256_init(&runtime.readbackHash);
+      if (mbedtls_sha256_starts_ret(&runtime.readbackHash, 0) != 0) {
+        mbedtls_sha256_free(&runtime.readbackHash);
+        return otaActionFailure();
+      }
+      runtime.readbackHashReady = true;
+      setStatus("Verifying storage");
+      return otaActionComplete();
+    }
+    case OTA_EVENT_READBACK:
+      if (!runtime.readbackHashReady || !maximumBytes ||
+          maximumBytes > sizeof(runtime.buffer) ||
+          offset + maximumBytes > runtime.descriptor.sizeBytes ||
+          esp_partition_read(
+            runtime.target, offset, runtime.buffer, maximumBytes
+          ) != ESP_OK ||
+          mbedtls_sha256_update_ret(
+            &runtime.readbackHash, runtime.buffer, maximumBytes
+          ) != 0)
+        return otaActionFailure();
+      return otaActionComplete(maximumBytes);
+    case OTA_EVENT_DIGEST_MATCH:
+      if (!runtime.readbackHashReady ||
+          mbedtls_sha256_finish_ret(
+            &runtime.readbackHash, runtime.readbackDigest
+          ) != 0)
+        return otaActionFailure();
+      mbedtls_sha256_free(&runtime.readbackHash);
+      runtime.readbackHashReady = false;
+      return otaConstantTimeEqual(
+        runtime.expectedDigest, runtime.readbackDigest, 32
+      ) ? otaActionComplete() : otaActionFailure();
+    case OTA_EVENT_FINAL_GATE:
+      setStatus("Finishing update");
+      return currentFinalGate() ? otaActionComplete() : otaActionFailure();
+    case OTA_EVENT_SET_BOOT:
+      return runtime.target &&
+        esp_ota_set_boot_partition(runtime.target) == ESP_OK
+        ? otaActionComplete() : otaActionFailure();
+    case OTA_EVENT_RESTART:
+      setStatus("Restarting");
+      if (runtime.sourceOffer) otaOfferReset(runtime.sourceOffer);
+      otaOfferReset(&runtime.offer);
+      esp_restart();
+      return otaActionFailure();
+  }
+  return otaActionFailure();
+}
+
+void cleanupTerminal() {
+  closeRequest();
+  if (runtime.readbackHashReady) {
+    mbedtls_sha256_free(&runtime.readbackHash);
+    runtime.readbackHashReady = false;
+  }
+  runtime.handle = 0;
+  mbedtls_platform_zeroize(runtime.buffer, sizeof(runtime.buffer));
+  mbedtls_platform_zeroize(runtime.manifest, sizeof(runtime.manifest));
+  mbedtls_platform_zeroize(runtime.signature, sizeof(runtime.signature));
+  mbedtls_platform_zeroize(runtime.expectedDigest, sizeof(runtime.expectedDigest));
+  mbedtls_platform_zeroize(runtime.readbackDigest, sizeof(runtime.readbackDigest));
+  if (runtime.sourceOffer) otaOfferReset(runtime.sourceOffer);
+  otaOfferReset(&runtime.offer);
+  runtime.offerConsumed = false;
+  if (runtime.machine.phase == OTA_PHASE_CANCELLED) setStatus("Update cancelled");
+  else if (runtime.machine.phase == OTA_PHASE_ERROR) setStatus("Update failed");
+  runtime.terminalSinceMs = millis();
+}
+
+void arm(OtaOfferState* offer) {
+  runtime.machine = otaUpdateMachineInitial();
+  runtime.machine.action = otaAction;
+  runtime.machine.actionContext = &runtime;
+  runtime.machine.chunkSize = OTA_UPDATE_CHUNK_BYTES;
+  runtime.sourceOffer = offer;
+  otaOfferReset(&runtime.offer);
+  runtime.offerConsumed = false;
+  runtime.active = true;
+  runtime.confirmRequested = false;
+  runtime.cancelRequested = false;
+  runtime.terminalSinceMs = 0;
+  runtime.manifestLength = 0;
+  runtime.signatureLength = 0;
+  runtime.running = nullptr;
+  runtime.target = nullptr;
+  runtime.handle = 0;
+  memset(&runtime.descriptor, 0, sizeof(runtime.descriptor));
+  setStatus("Press A to install");
+}
+
+bool consumeOfferAfterPhysicalConfirmation() {
+  OtaOfferState* offer = runtime.sourceOffer;
+  uint8_t batteryPercent = runtime.inputs.batteryKnown
+    ? runtime.inputs.batteryPercent : 0;
+  bool allowed = otaOfferExecutionAllowed(
+    offer,
+    millis(),
+    runtime.inputs.bleConnected,
+    runtime.inputs.prompt,
+    runtime.inputs.transfer,
+    runtime.inputs.provisioning || runtime.inputs.passkey ||
+      runtime.inputs.functional,
+    runtime.inputs.externalPower,
+    batteryPercent
+  );
+  return allowed && otaOfferConsume(offer, &runtime.offer);
+}
+
+}  // namespace
+
+void otaUpdatePoll(OtaOfferState* offer, const OtaUpdateRuntimeInputs& inputs) {
+  if (!runtime.active) {
+    if (offer && offer->pending) arm(offer);
+    return;
+  }
+  runtime.inputs = inputs;
+  if (otaUpdateTerminal(runtime.machine)) {
+    if (!runtime.terminalSinceMs) cleanupTerminal();
+    if (millis() - runtime.terminalSinceMs > 2500) runtime.active = false;
+    return;
+  }
+
+  bool confirm = false;
+  bool cancel = runtime.cancelRequested;
+  if (runtime.confirmRequested) {
+    if (consumeOfferAfterPhysicalConfirmation()) {
+      runtime.offerConsumed = true;
+      confirm = true;
+      setStatus("Preparing update");
+    } else {
+      cancel = true;
+    }
+  }
+  runtime.confirmRequested = false;
+  runtime.cancelRequested = false;
+
+  OtaOfferState* activeOffer = coordinatedOffer();
+  uint32_t now = millis();
+  OtaUpdateInputs pure = {};
+  pure.nowMs = now;
+  pure.offerPending = activeOffer && activeOffer->pending;
+  pure.bleConnected = inputs.bleConnected;
+  pure.wifiProvisioned = inputs.wifiProvisioned;
+  pure.wifiOnline = inputs.wifiOnline;
+  pure.trustedTime = inputs.trustedTime;
+  pure.offerFresh = activeOffer && otaOfferWindowActive(*activeOffer, now) &&
+    otaOfferDeadlineActive(now, activeOffer->offerDeadlineMs);
+  pure.externalPower = inputs.externalPower;
+  pure.batteryKnown = inputs.batteryKnown;
+  pure.batteryPercent = inputs.batteryPercent;
+  pure.prompt = inputs.prompt;
+  pure.transfer = inputs.transfer;
+  pure.provisioning = inputs.provisioning;
+  pure.passkey = inputs.passkey;
+  pure.functional = inputs.functional;
+  otaUpdateStep(&runtime.machine, pure, confirm, cancel);
+  if (otaUpdateTerminal(runtime.machine)) cleanupTerminal();
+}
+
+void otaUpdateConfirm() {
+  if (runtime.active && runtime.machine.phase == OTA_PHASE_CONFIRM)
+    runtime.confirmRequested = true;
+}
+
+void otaUpdateCancel() {
+  if (runtime.active && !otaUpdateTerminal(runtime.machine))
+    runtime.cancelRequested = true;
+}
+
+bool otaUpdateActive() { return runtime.active; }
+
+bool otaUpdateTransferStarted() {
+  return runtime.active && runtime.machine.authenticated &&
+    runtime.machine.phase >= OTA_PHASE_OPEN_FIRMWARE &&
+    runtime.machine.phase < OTA_PHASE_RESTARTING;
+}
+
+OtaUpdateView otaUpdateView() {
+  OtaUpdateView view = {};
+  view.visible = runtime.active;
+  view.authenticated = runtime.machine.authenticated;
+  view.terminal = otaUpdateTerminal(runtime.machine);
+  view.error = runtime.machine.phase == OTA_PHASE_ERROR;
+  view.phase = runtime.machine.phase;
+  view.percent = otaUpdateOverallProgress(
+    runtime.machine.phase,
+    runtime.machine.receivedBytes,
+    runtime.machine.readbackBytes,
+    runtime.machine.imageSize
+  );
+  if (view.authenticated) {
+    strncpy(view.version, runtime.descriptor.version, sizeof(view.version) - 1);
+    view.version[sizeof(view.version) - 1] = 0;
+  }
+  strncpy(view.status, runtime.status, sizeof(view.status) - 1);
+  view.status[sizeof(view.status) - 1] = 0;
+  return view;
+}
