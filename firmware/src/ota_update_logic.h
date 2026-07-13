@@ -109,17 +109,44 @@ enum OtaPartitionStateQuery : uint8_t {
 
 enum OtaRunningImageState : uint8_t {
   OTA_RUNNING_IMAGE_VALID = 0,
+  OTA_RUNNING_IMAGE_UNDEFINED,
   OTA_RUNNING_IMAGE_PENDING_VERIFY,
   OTA_RUNNING_IMAGE_OTHER,
 };
+
+constexpr uint32_t OTA_IMAGE_STATE_NEW_RAW = 0x0U;
+constexpr uint32_t OTA_IMAGE_STATE_PENDING_VERIFY_RAW = 0x1U;
+constexpr uint32_t OTA_IMAGE_STATE_VALID_RAW = 0x2U;
+constexpr uint32_t OTA_IMAGE_STATE_INVALID_RAW = 0x3U;
+constexpr uint32_t OTA_IMAGE_STATE_ABORTED_RAW = 0x4U;
+constexpr uint32_t OTA_IMAGE_STATE_UNDEFINED_RAW = 0xffffffffU;
+
+inline uint32_t otaReadLittleEndianU32(const uint8_t* bytes) {
+  if (!bytes) return 0;
+  return static_cast<uint32_t>(bytes[0]) |
+    (static_cast<uint32_t>(bytes[1]) << 8) |
+    (static_cast<uint32_t>(bytes[2]) << 16) |
+    (static_cast<uint32_t>(bytes[3]) << 24);
+}
+
+inline OtaRunningImageState otaRunningImageStateFromRaw(uint32_t state) {
+  if (state == OTA_IMAGE_STATE_VALID_RAW) return OTA_RUNNING_IMAGE_VALID;
+  if (state == OTA_IMAGE_STATE_UNDEFINED_RAW)
+    return OTA_RUNNING_IMAGE_UNDEFINED;
+  if (state == OTA_IMAGE_STATE_PENDING_VERIFY_RAW)
+    return OTA_RUNNING_IMAGE_PENDING_VERIFY;
+  return OTA_RUNNING_IMAGE_OTHER;
+}
 
 inline bool otaRunningStateAllowsUpdate(
   OtaPartitionStateQuery query,
   OtaRunningImageState state,
   bool initialLayoutVerified
 ) {
-  if (query == OTA_STATE_QUERY_OK)
-    return state == OTA_RUNNING_IMAGE_VALID;
+  if (query == OTA_STATE_QUERY_OK) {
+    if (state == OTA_RUNNING_IMAGE_VALID) return true;
+    return state == OTA_RUNNING_IMAGE_UNDEFINED && initialLayoutVerified;
+  }
   if (query == OTA_STATE_QUERY_NOT_FOUND) return initialLayoutVerified;
   return false;
 }

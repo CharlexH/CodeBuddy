@@ -164,6 +164,43 @@ static void testTargetAndHttpValidation() {
            OTA_STATE_QUERY_ERROR, OTA_RUNNING_IMAGE_VALID, true),
          "unexpected state-query errors must fail closed");
 
+  // Exact first esp_ota_select_entry_t from Arduino-ESP32 boot_app0.bin:
+  // ota_seq=1, 20-byte label erased, ota_state=0xffffffff, crc=0x4743989a.
+  const uint8_t bootApp0Entry[32] = {
+    0x01, 0x00, 0x00, 0x00,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff,
+    0x9a, 0x98, 0x43, 0x47,
+  };
+  uint32_t otaSequence = otaReadLittleEndianU32(bootApp0Entry);
+  uint32_t otaState = otaReadLittleEndianU32(bootApp0Entry + 24);
+  expect(otaSequence == 1 && otaState == OTA_IMAGE_STATE_UNDEFINED_RAW,
+         "boot_app0 fixture must retain ota_seq=1 and erased undefined state");
+  OtaRunningImageState bootstrapState = otaRunningImageStateFromRaw(otaState);
+  expect(bootstrapState == OTA_RUNNING_IMAGE_UNDEFINED &&
+           otaRunningStateAllowsUpdate(
+             OTA_STATE_QUERY_OK, bootstrapState, true),
+         "verified USB bootstrap undefined state must allow the first wireless OTA");
+  expect(!otaRunningStateAllowsUpdate(
+           OTA_STATE_QUERY_OK, bootstrapState, false),
+         "undefined state with configured/running layout mismatch must fail");
+  const uint32_t rejectedStates[] = {
+    OTA_IMAGE_STATE_NEW_RAW,
+    OTA_IMAGE_STATE_PENDING_VERIFY_RAW,
+    OTA_IMAGE_STATE_INVALID_RAW,
+    OTA_IMAGE_STATE_ABORTED_RAW,
+    0x12345678U,
+  };
+  for (uint32_t rawState : rejectedStates) {
+    expect(!otaRunningStateAllowsUpdate(
+             OTA_STATE_QUERY_OK,
+             otaRunningImageStateFromRaw(rawState),
+             true),
+           "NEW/PENDING/INVALID/ABORTED/unknown states must stay fail-closed");
+  }
+
   OtaHttpMeta response = {200, 1000, false, true};
   expect(otaHttpMetaExactValid(response, 1000, OTA_SLOT_CAPACITY_BYTES),
          "strict exact firmware response should pass");

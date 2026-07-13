@@ -209,16 +209,16 @@ bool partitionSelectionValid() {
            (stateResult == ESP_ERR_NOT_SUPPORTED && runtime.running &&
             runtime.running->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY))
     stateQuery = OTA_STATE_QUERY_NOT_FOUND;
-  OtaRunningImageState runningState = OTA_RUNNING_IMAGE_OTHER;
-  if (state == ESP_OTA_IMG_VALID) runningState = OTA_RUNNING_IMAGE_VALID;
-  else if (state == ESP_OTA_IMG_PENDING_VERIFY)
-    runningState = OTA_RUNNING_IMAGE_PENDING_VERIFY;
+  OtaRunningImageState runningState = otaRunningImageStateFromRaw(
+    static_cast<uint32_t>(state)
+  );
   const esp_partition_t* configuredBoot = esp_ota_get_boot_partition();
   bool runningSubtypeEligible = runtime.running &&
     (runtime.running->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY ||
      (runtime.running->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN &&
       runtime.running->subtype < ESP_PARTITION_SUBTYPE_APP_OTA_MAX));
   bool initialLayoutVerified = runtime.running && configuredBoot &&
+    configuredBoot == runtime.running &&
     runtime.running->type == ESP_PARTITION_TYPE_APP &&
     configuredBoot->type == ESP_PARTITION_TYPE_APP &&
     runtime.running->address == configuredBoot->address &&
