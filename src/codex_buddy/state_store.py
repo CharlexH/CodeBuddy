@@ -71,4 +71,12 @@ class BridgeStateStore:
         if not self.path.exists():
             return PersistedState()
         data = json.loads(self.path.read_text())
+        completion_seq = data.get("completion_seq")
+        if "completion_seq" not in data:
+            snapshot = data.get("snapshot")
+            if isinstance(snapshot, dict):
+                completion_seq = snapshot.get("completion_seq")
+        if type(completion_seq) is not int or not 0 <= completion_seq <= 0xFFFFFFFF:
+            completion_seq = 0
+        data["completion_seq"] = completion_seq
         return PersistedState(**data)

@@ -228,7 +228,7 @@ class BridgeController:
                 paired_device_id=current.paired_device_id or self.config.paired_device_id,
                 paired_device_name=current.paired_device_name or self.config.paired_device_name,
                 tokens_today=snapshot.tokens_today,
-                tokens_date=self.store.load().tokens_date or "",
+                tokens_date=current.tokens_date or "",
                 tokens_total=snapshot.tokens,
                 completion_seq=current.completion_seq,
                 active_thread_id=self._active_thread_id,

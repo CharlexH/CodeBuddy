@@ -1,4 +1,7 @@
+import json
 from datetime import datetime, timezone
+
+import pytest
 
 from codex_buddy.state_store import BridgeStateStore, PersistedState
 
@@ -44,6 +47,43 @@ def test_state_store_round_trips_when_day_has_not_changed(tmp_path):
     loaded = store.load(now=datetime(2026, 4, 20, 10, 30, tzinfo=timezone.utc))
 
     assert loaded == original
+
+
+def test_state_store_migrates_completion_sequence_from_legacy_snapshot(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tokens_date": "2026-04-20",
+                "snapshot": {"completion_seq": 41},
+            }
+        )
+    )
+
+    loaded = BridgeStateStore(path).load(
+        now=datetime(2026, 4, 20, 10, 30, tzinfo=timezone.utc)
+    )
+
+    assert loaded.completion_seq == 41
+
+
+@pytest.mark.parametrize("completion_seq", [-1, 0x1_0000_0000, "41", True])
+def test_state_store_rejects_invalid_persisted_completion_sequence(tmp_path, completion_seq):
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tokens_date": "2026-04-20",
+                "completion_seq": completion_seq,
+            }
+        )
+    )
+
+    loaded = BridgeStateStore(path).load(
+        now=datetime(2026, 4, 20, 10, 30, tzinfo=timezone.utc)
+    )
+
+    assert loaded.completion_seq == 0
 
 
 def test_state_store_preserves_setup_metadata_across_midnight_reset(tmp_path):

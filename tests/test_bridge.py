@@ -1,6 +1,22 @@
 import asyncio
 
 from codex_buddy import bridge
+from codex_buddy.state_store import PersistedState
+
+
+class _ChangingStateStore:
+    def __init__(self) -> None:
+        self.load_calls = 0
+        self.saved = None
+
+    def load(self):
+        self.load_calls += 1
+        if self.load_calls == 1:
+            return PersistedState(tokens_date="2026-04-20", completion_seq=41)
+        return PersistedState(tokens_date="2026-04-21", completion_seq=42)
+
+    def save(self, state) -> None:
+        self.saved = state
 
 
 def test_shared_app_server_launcher_uses_real_binary_and_carefully_merged_environment(monkeypatch):
@@ -126,3 +142,23 @@ def test_managed_session_bridge_uses_saved_launch_path_for_codex_process(monkeyp
     assert env_path.index("/usr/local/bin") < env_path.index("/usr/bin")
     assert kwargs["env"]["CODE_BUDDY_SHIM_ACTIVE"] == "1"
     assert kwargs["start_new_session"] is True
+
+
+def test_legacy_bridge_persists_one_consistent_state_read(tmp_path):
+    controller = bridge.BridgeController(
+        bridge.RunConfig(
+            workdir=tmp_path,
+            prompt=None,
+            state_path=tmp_path / "state.json",
+            paired_device_id="device-1",
+            paired_device_name="Codex-4DAD",
+        )
+    )
+    store = _ChangingStateStore()
+    controller.store = store
+
+    controller._persist_snapshot(controller.reducer.snapshot(), buddy_connected=False)
+
+    assert store.load_calls == 1
+    assert store.saved.tokens_date == "2026-04-20"
+    assert store.saved.completion_seq == 41
