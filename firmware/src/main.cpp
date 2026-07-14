@@ -14,6 +14,7 @@
 #include "ota_update.h"
 #include "ota_ui_logic.h"
 #include "clock_time_logic.h"
+#include "completion_chime_logic.h"
 #include "data.h"
 #include "persona_logic.h"
 #include "utf8_text_logic.h"
@@ -49,6 +50,7 @@ static const bool VALIDATION_UI = false;
 const char* stateNames[] = { "sleep", "idle", "busy", "attention", "celebrate", "dizzy", "heart" };
 
 TamaState    tama;
+static CompletionChimeState completionChimeState = {};
 PersonaState baseState   = P_SLEEP;
 PersonaState activeState = P_SLEEP;
 UsageMeterRenderState clockUsageMeterRenderState = {};
@@ -157,6 +159,13 @@ static void clipDisplayText(char (&out)[N], const char* text, uint8_t maxCells) 
 
 static void beep(uint16_t freq, uint16_t dur) {
   if (settings().sound) M5.Beep.tone(freq, dur);
+}
+
+static void playCompletionSound() {
+  if (!settings().sound) return;
+  static const int COMPLETION_SOUND_CHANNEL = 0;
+  M5.Speaker.tone(1600, 70, COMPLETION_SOUND_CHANNEL, true);
+  M5.Speaker.tone(2400, 100, COMPLETION_SOUND_CHANNEL, false);
 }
 
 static void sendCmd(const char* json) {
@@ -1612,6 +1621,13 @@ void loop() {
   uint32_t now = millis();
 
   dataPoll(&tama);
+  if (completionChimeObserve(
+        &completionChimeState,
+        tama.hasCompletionSeq,
+        tama.completionSeq
+      )) {
+    playCompletionSound();
+  }
   if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
   baseState = derive(tama);
 

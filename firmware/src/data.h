@@ -19,6 +19,8 @@ struct TamaState {
   uint8_t  sessionsRunning;
   uint8_t  sessionsWaiting;
   bool     recentlyCompleted;
+  bool     hasCompletionSeq;
+  uint32_t completionSeq;
   uint32_t tokensToday;
   bool     hasFiveHourUsage;
   bool     hasSevenDayUsage;
@@ -265,6 +267,11 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
   out->sessionsRunning   = doc["running"]   | out->sessionsRunning;
   out->sessionsWaiting   = doc["waiting"]   | out->sessionsWaiting;
   out->recentlyCompleted = doc["completed"] | false;
+  JsonVariantConst completionSeq = doc["completion_seq"];
+  if (completionSeq.is<uint32_t>() && !completionSeq.is<bool>()) {
+    out->hasCompletionSeq = true;
+    out->completionSeq = completionSeq.as<uint32_t>();
+  }
   uint32_t bridgeTokens = doc["tokens"] | 0;
   if (doc["tokens"].is<uint32_t>()) statsOnBridgeTokens(bridgeTokens);
   out->tokensToday = doc["tokens_today"] | out->tokensToday;
