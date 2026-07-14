@@ -8,6 +8,14 @@ struct OtaUiPlan {
   bool showInstall;
   bool showCancel;
   bool readOnly;
+  bool compactOverlay;
+};
+
+struct OtaCompactOverlayLayout {
+  int16_t x;
+  int16_t y;
+  int16_t width;
+  int16_t height;
 };
 
 inline OtaUiPlan otaUiPlan(
@@ -19,10 +27,19 @@ inline OtaUiPlan otaUiPlan(
 ) {
   OtaUiPlan plan = {};
   if (!visible) return plan;
+  plan.compactOverlay = automatic;
   plan.readOnly = irreversible || !cancellable;
   plan.showInstall = confirm && !automatic && cancellable && !irreversible;
   plan.showCancel = cancellable && !irreversible;
   return plan;
+}
+
+inline constexpr OtaCompactOverlayLayout otaCompactOverlayLayout(
+  bool landscape
+) {
+  return landscape
+    ? OtaCompactOverlayLayout{40, 45, 160, 44}
+    : OtaCompactOverlayLayout{8, 94, 119, 52};
 }
 
 inline void otaFormatReadableSize(

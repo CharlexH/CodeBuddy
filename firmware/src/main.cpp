@@ -248,6 +248,7 @@ bool    wifiMenuOpen   = false;
 bool    wifiStatusOpen = false;
 uint8_t wifiMenuSel    = 0;
 bool    otaReceiveScreen = false;
+bool    otaCompactOverlay = false;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -291,6 +292,7 @@ static void applySetting(uint8_t idx) {
       } else {
         otaOfferOpenReceiveWindow(&tama.otaOffer, millis(), true);
         settingsOpen = false;
+        otaCompactOverlay = false;
         otaReceiveScreen = true;
       }
       invalidatePortraitSurface();
@@ -563,6 +565,57 @@ static void drawOtaReceiveWindow() {
     spr.print(tama.otaOffer.pending ? "Request received" : "Waiting for Mac");
     drawMenuHints(p, mx, mw, my + mh - 12, "", "Cancel");
   }
+}
+
+template <typename Canvas>
+static void drawOtaCompactOverlayTo(
+  Canvas& canvas,
+  bool landscape,
+  const OtaUpdateView& update
+) {
+  const Palette& p = characterPalette();
+  const OtaCompactOverlayLayout layout = otaCompactOverlayLayout(landscape);
+  canvas.fillRoundRect(layout.x, layout.y, layout.width, layout.height, 4, PANEL);
+  canvas.drawRoundRect(layout.x, layout.y, layout.width, layout.height, 4, p.textDim);
+  useDefaultTextFont(canvas);
+  canvas.setTextDatum(TL_DATUM);
+  canvas.setTextColor(p.text, PANEL);
+  canvas.setCursor(layout.x + 7, layout.y + 5);
+  if (update.version[0]) canvas.printf("OTA %.12s", update.version);
+  else canvas.print("OTA");
+
+  char percent[6] = {};
+  snprintf(percent, sizeof(percent), "%u%%", update.percent);
+  canvas.setTextDatum(TR_DATUM);
+  canvas.drawString(percent, layout.x + layout.width - 7, layout.y + 5);
+
+  char status[25] = {};
+  clipDisplayText(
+    status,
+    update.status[0] ? update.status : "Preparing update",
+    landscape ? 24 : 17
+  );
+  canvas.setTextDatum(TL_DATUM);
+  canvas.setTextColor(p.textDim, PANEL);
+  canvas.drawString(status, layout.x + 7, layout.y + 18);
+
+  const int16_t barX = layout.x + 7;
+  const int16_t barY = layout.y + layout.height - 10;
+  const int16_t barW = layout.width - 14;
+  canvas.drawRect(barX, barY, barW, 6, p.textDim);
+  const int16_t fill = (barW - 2) * update.percent / 100;
+  if (fill > 0) canvas.fillRect(barX + 1, barY + 1, fill, 4, p.body);
+  canvas.setTextDatum(TL_DATUM);
+  useDefaultTextFont(canvas);
+}
+
+static void drawLandscapeOtaCompactOverlay(
+  uint8_t orientation,
+  const OtaUpdateView& update
+) {
+  M5.Lcd.setRotation(orientation);
+  drawOtaCompactOverlayTo(M5.Lcd, true, update);
+  M5.Lcd.setRotation(0);
 }
 
 static void applyWifiMenuAction() {
@@ -1733,6 +1786,7 @@ void loop() {
       displayMode = DISP_NORMAL;
       menuOpen = settingsOpen = resetOpen = false;
       otaReceiveScreen = false;
+      otaCompactOverlay = false;
       otaUpdateCancel();
       otaOfferCancel(&tama.otaOffer);
       applyDisplayMode();
@@ -1753,6 +1807,7 @@ void loop() {
     // Prompt/xfer/provisioning/passkey remain live inputs to the execution gate.
     displayMode = DISP_NORMAL;
     menuOpen = settingsOpen = wifiMenuOpen = wifiStatusOpen = resetOpen = false;
+    otaReceiveScreen = false;
   }
   int batteryVoltageMv = compatBatteryVoltageMv();
   int batteryPercent = (batteryVoltageMv - 3200) / 10;
@@ -1775,13 +1830,31 @@ void loop() {
   otaInputs.automaticPolicy = settings().autoOta;
   otaUpdatePoll(&tama.otaOffer, otaInputs);
   OtaUpdateView updateView = otaUpdateView();
-  if (updateView.visible && !otaReceiveScreen) {
+  OtaUiPlan updateUiPlan = otaUiPlan(
+    updateView.visible,
+    updateView.phase == OTA_PHASE_CONFIRM,
+    updateView.automatic,
+    updateView.bootCommitted,
+    updateView.cancellable
+  );
+  bool compactOverlayWasVisible = otaCompactOverlay;
+  otaCompactOverlay = updateUiPlan.compactOverlay && !inPrompt;
+  if (otaCompactOverlay) {
+    otaReceiveScreen = false;
+  } else if (updateView.visible && !otaReceiveScreen && !updateView.automatic) {
     // A verified signed offer is a deliberate Mac-side action. Bring its
     // confirmation/progress surface forward without requiring menu navigation.
     displayMode = DISP_NORMAL;
     menuOpen = settingsOpen = wifiMenuOpen = wifiStatusOpen = resetOpen = false;
     otaReceiveScreen = true;
     applyDisplayMode();
+  }
+  if (compactOverlayWasVisible && !otaCompactOverlay) {
+    invalidatePortraitSurface();
+    clockSharedFaceCacheReset(&standbyClockFaceCache);
+    clockSharedFaceCacheReset(&runtimeClockFaceCache);
+    usageMeterRenderReset(&clockUsageMeterRenderState);
+    usageMeterRenderReset(&runtimeUsageMeterRenderState);
   }
   otaStatusPoll(updateView);
   if (otaUpdateActive()) {
@@ -1859,7 +1932,10 @@ void loop() {
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
     btnALong = true;
     beep(800, 60);
-    if (otaReceiveScreen) {
+    if (otaCompactOverlay) {
+      if (otaUpdateView().cancellable) otaUpdateCancel();
+    }
+    else if (otaReceiveScreen) {
       if (otaUpdateActive()) {
         if (otaUpdateView().cancellable) otaUpdateCancel();
       } else {
@@ -1902,6 +1978,8 @@ void loop() {
         statsOnApproval(tookS);
         beep(2400, 60);
         if (tookS < 5) triggerOneShot(P_HEART, 2000);
+      } else if (otaCompactOverlay) {
+        // Automatic OTA is informational; A does not change the transaction.
       } else if (otaReceiveScreen) {
         if (otaUpdateActive() && otaUpdateView().phase == OTA_PHASE_CONFIRM) {
           beep(1800, 40);
@@ -1945,6 +2023,9 @@ void loop() {
       responseSent = true;
       statsOnDenial();
       beep(600, 60);
+    } else if (otaCompactOverlay) {
+      beep(600, 40);
+      if (otaUpdateView().cancellable) otaUpdateCancel();
     } else if (otaReceiveScreen) {
       beep(600, 40);
       if (otaUpdateActive()) {
@@ -1998,7 +2079,7 @@ void loop() {
   sharedContext.promptVisible = inPrompt;
   sharedContext.functionalOverrideVisible = xferActive() || wifiManagerUiActive()
     || otaReceiveScreen;
-  sharedContext.otaProgressVisible = otaUpdateActive();
+  sharedContext.otaProgressVisible = otaUpdateActive() && !otaCompactOverlay;
   // Show the clock when nothing is happening — bridge heartbeat alone
   // doesn't count as activity (it's the only way to get the RTC synced).
   bool clocking = tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
@@ -2156,6 +2237,9 @@ void loop() {
         promptExited
       );
     }
+    if (otaCompactOverlay) {
+      drawLandscapeOtaCompactOverlay(runtimeOrient, updateView);
+    }
   } else if (inPrompt) {
     const Palette& p = characterPalette();
     UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
@@ -2172,6 +2256,9 @@ void loop() {
       &standbyClockFaceCache,
       &clockUsageMeterRenderState
     );
+    if (otaCompactOverlay) {
+      drawLandscapeOtaCompactOverlay(clockOrient, updateView);
+    }
   } else if (!napping && !screenOff) {
     if (clocking) {
       drawSharedClockFace(
@@ -2180,6 +2267,7 @@ void loop() {
         &standbyClockFaceCache,
         &clockUsageMeterRenderState
       );
+      if (otaCompactOverlay) drawOtaCompactOverlayTo(spr, false, updateView);
       spr.pushSprite(0, 0);
     } else if (runtimeSharedFace) {
       drawSharedClockFace(
@@ -2190,6 +2278,7 @@ void loop() {
         false,
         promptExited
       );
+      if (otaCompactOverlay) drawOtaCompactOverlayTo(spr, false, updateView);
       spr.pushSprite(0, 0);
     } else {
       const Palette& p = characterPalette();
@@ -2207,6 +2296,7 @@ void loop() {
       else if (settingsOpen) drawSettings();
       else if (menuOpen) drawMenu();
       if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
+      if (otaCompactOverlay) drawOtaCompactOverlayTo(spr, false, updateView);
       spr.pushSprite(0, 0);
     }
   }
