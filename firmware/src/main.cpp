@@ -21,6 +21,8 @@
 #include "buddy.h"
 
 TFT_eSprite spr = TFT_eSprite(&M5.Lcd);
+TFT_eSprite landscapeClockPetSprite = TFT_eSprite(&M5.Lcd);
+static bool landscapeClockPetSpriteReady = false;
 
 // Advertise as "Codex-XXXX" (last two BT MAC bytes) so multiple sticks
 // in one room are distinguishable in the desktop picker. Name persists in
@@ -820,53 +822,101 @@ static void drawSharedClockFaceTo(
     canvas.setTextSize(layout.time.textSize);
     canvas.setTextColor(p.text, p.bg);
     canvas.drawString(hm, layout.time.primary.x, layout.time.primary.y);
-    canvas.setTextColor(p.textDim, p.bg);
-    canvas.drawString(seconds, layout.time.seconds.x, layout.time.seconds.y);
+    if (layout.time.showSeconds) {
+      canvas.setTextColor(p.textDim, p.bg);
+      canvas.drawString(seconds, layout.time.seconds.x, layout.time.seconds.y);
+    }
   }
 
   if (decision.drawDate) {
-    char dateLine[16];
-    clockFormatSharedDateLine(
-      dateLine,
-      sizeof(dateLine),
-      landscape,
-      fieldsValid,
-      _clkDt.WeekDay,
-      _clkDt.Month,
-      _clkDt.Date
-    );
-    canvas.setTextDatum(MC_DATUM);
-    canvas.setTextSize(layout.date.textSize);
-    canvas.setTextColor(p.textDim, p.bg);
-    canvas.drawString(dateLine, layout.date.centerX, layout.date.centerY);
+    if (layout.date.mode == SHARED_CLOCK_DATE_STACKED_NUMERIC) {
+      char month[3];
+      char day[3];
+      if (fieldsValid) {
+        snprintf(month, sizeof(month), "%02d", _clkDt.Month);
+        snprintf(day, sizeof(day), "%02d", _clkDt.Date);
+      } else {
+        snprintf(month, sizeof(month), "--");
+        snprintf(day, sizeof(day), "--");
+      }
+      canvas.setTextDatum(TL_DATUM);
+      canvas.setTextSize(layout.date.textSize);
+      canvas.setTextColor(p.textDim, p.bg);
+      canvas.drawString(month, layout.date.month.x, layout.date.month.y);
+      canvas.drawString(day, layout.date.day.x, layout.date.day.y);
+    } else {
+      char dateLine[16];
+      clockFormatSharedDateLine(
+        dateLine,
+        sizeof(dateLine),
+        false,
+        fieldsValid,
+        _clkDt.WeekDay,
+        _clkDt.Month,
+        _clkDt.Date
+      );
+      canvas.setTextDatum(MC_DATUM);
+      canvas.setTextSize(layout.date.textSize);
+      canvas.setTextColor(p.textDim, p.bg);
+      canvas.drawString(dateLine, layout.date.centerX, layout.date.centerY);
+    }
   }
 
   if (decision.drawPet) {
-    if (buddyMode) {
+    lgfx::LovyanGFX* petCanvas = &canvas;
+    int16_t petX = layout.pet.x;
+    int16_t petY = layout.pet.y;
+    bool renderPetContent = true;
+    if (layout.pet.useLocalSurface) {
+      if (landscapeClockPetSpriteReady) {
+        petCanvas = &landscapeClockPetSprite;
+        petX = 0;
+        petY = 0;
+        if (sharedClockPetLocalSurfaceNeedsClear(buddyMode, decision.fullRepaint)) {
+          landscapeClockPetSprite.fillSprite(p.bg);
+        }
+      } else {
+        canvas.fillRect(
+          layout.pet.x,
+          layout.pet.y,
+          layout.pet.width,
+          layout.pet.height,
+          p.bg
+        );
+        renderPetContent = false;
+      }
+    }
+
+    if (renderPetContent && buddyMode) {
       // ASCII species paint sparse glyphs and particles, so clear only the
       // shared compact pet rectangle. The time and usage regions stay intact.
-      canvas.fillRect(layout.pet.x, layout.pet.y, layout.pet.width, layout.pet.height, p.bg);
+      if (!layout.pet.useLocalSurface) {
+        petCanvas->fillRect(petX, petY, layout.pet.width, layout.pet.height, p.bg);
+      }
       buddyRenderTo(
-        &canvas,
+        petCanvas,
         activeState,
-        layout.pet.x + layout.pet.width / 2,
-        layout.pet.y,
-        1
+        petX + layout.pet.width / 2,
+        petY + layout.pet.asciiYOffset,
+        layout.pet.asciiScale
       );
-    } else {
+    } else if (renderPetContent) {
       // The compact character renderer routes both GIF and text manifests.
       // Text frames clear only this pet rectangle; GIF frames self-erase so
       // they avoid a black flash before each decoded scanline.
       characterRenderCompactTo(
-        &canvas,
-        layout.pet.x + layout.pet.width / 2,
-        layout.pet.y + layout.pet.height / 2,
-        layout.pet.x,
-        layout.pet.y,
+        petCanvas,
+        petX + layout.pet.width / 2,
+        petY + layout.pet.height / 2,
+        petX,
+        petY,
         layout.pet.width,
         layout.pet.height,
         decision.fullRepaint
       );
+    }
+    if (layout.pet.useLocalSurface && landscapeClockPetSpriteReady) {
+      landscapeClockPetSprite.pushSprite(layout.pet.x, layout.pet.y);
     }
   }
 
@@ -1561,6 +1611,16 @@ void setup() {
   if (displayUsable) otaBootHealthReady(OTA_BOOT_READY_DISPLAY);
   else otaBootHealthCriticalFailure(OTA_BOOT_REASON_DISPLAY);
   otaBootHealthPoll(millis());
+
+  const SharedClockFaceLayout landscapeFace = sharedClockFaceLayout(true);
+  landscapeClockPetSprite.setColorDepth(16);
+  landscapeClockPetSpriteReady = landscapeClockPetSprite.createSprite(
+    landscapeFace.pet.width,
+    landscapeFace.pet.height
+  ) != nullptr;
+  if (!landscapeClockPetSpriteReady) {
+    Serial.println("[display] landscape pet sprite allocation failed");
+  }
 
   characterInit(nullptr);  // scan /characters/ for whatever is installed
   // A missing custom character is healthy because the built-in ASCII buddy is

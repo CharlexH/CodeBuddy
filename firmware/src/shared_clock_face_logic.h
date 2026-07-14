@@ -13,11 +13,19 @@ enum SharedClockActivity : uint8_t {
   SHARED_CLOCK_WAITING,
 };
 
-struct SharedClockRect {
+enum SharedClockDateMode : uint8_t {
+  SHARED_CLOCK_DATE_SINGLE_LINE,
+  SHARED_CLOCK_DATE_STACKED_NUMERIC,
+};
+
+struct SharedClockPetLayout {
   int16_t x;
   int16_t y;
   uint16_t width;
   uint16_t height;
+  uint8_t asciiScale;
+  int16_t asciiYOffset;
+  bool useLocalSurface;
 };
 
 struct SharedClockTextRect {
@@ -33,18 +41,22 @@ struct SharedClockTimeLayout {
   SharedClockTextRect seconds;
   int16_t centerY;
   uint8_t textSize;
+  bool showSeconds;
 };
 
 struct SharedClockDateLayout {
+  SharedClockDateMode mode;
   int16_t centerX;
   int16_t centerY;
+  SharedClockTextRect month;
+  SharedClockTextRect day;
   uint8_t textSize;
 };
 
 struct SharedClockFaceLayout {
   uint16_t screenWidth;
   uint16_t screenHeight;
-  SharedClockRect pet;
+  SharedClockPetLayout pet;
   SharedClockTimeLayout time;
   SharedClockDateLayout date;
   uint16_t meterY;
@@ -90,33 +102,56 @@ struct SharedClockTimePolicy {
 
 static constexpr uint32_t SHARED_CLOCK_PET_FRAME_INTERVAL_MS = 200;
 
+inline constexpr bool sharedClockPetLocalSurfaceNeedsClear(
+  bool asciiMode,
+  bool fullRepaint
+) {
+  return asciiMode || fullRepaint;
+}
+
 inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
   return landscape
     ? SharedClockFaceLayout{
         240,
         135,
-        {0, 0, 115, 90},
+        {50, 0, 140, 58, 1, -13, true},
         {
-          {129, 46, 60, 16, SHARED_CLOCK_TEXT_PRIMARY},
-          {189, 46, 36, 16, SHARED_CLOCK_TEXT_DIM},
-          54,
+          {8, 73, 120, 32, SHARED_CLOCK_TEXT_PRIMARY},
+          {0, 0, 0, 0, SHARED_CLOCK_TEXT_DIM},
+          89,
+          4,
+          false,
+        },
+        {
+          SHARED_CLOCK_DATE_STACKED_NUMERIC,
+          0,
+          0,
+          {208, 64, 24, 16, SHARED_CLOCK_TEXT_DIM},
+          {208, 96, 24, 16, SHARED_CLOCK_TEXT_DIM},
           2,
         },
-        {177, 86, 1},
         119,
         16,
       }
     : SharedClockFaceLayout{
         135,
         240,
-        {0, 0, 135, 90},
+        {0, 0, 135, 90, 1, 0, false},
         {
           {19, 166, 60, 16, SHARED_CLOCK_TEXT_PRIMARY},
           {79, 166, 36, 16, SHARED_CLOCK_TEXT_DIM},
           174,
           2,
+          true,
         },
-        {67, 202, 1},
+        {
+          SHARED_CLOCK_DATE_SINGLE_LINE,
+          67,
+          202,
+          {0, 0, 0, 0, SHARED_CLOCK_TEXT_DIM},
+          {0, 0, 0, 0, SHARED_CLOCK_TEXT_DIM},
+          1,
+        },
         224,
         16,
       };

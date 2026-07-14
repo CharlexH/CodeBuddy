@@ -18,6 +18,9 @@ int main() {
   expect_true(portrait.pet.x == 0 && portrait.pet.y == 0 &&
                   portrait.pet.width == 135 && portrait.pet.height == 90,
               "portrait shared face should reserve the top 135x90 for the compact pet");
+  expect_true(!portrait.pet.useLocalSurface && portrait.pet.asciiScale == 1 &&
+                  portrait.pet.asciiYOffset == 0,
+              "portrait pet rendering should retain its existing direct 1x placement");
   expect_true(portrait.time.primary.x == 19 && portrait.time.primary.y == 166 &&
                   portrait.time.primary.width == 60 && portrait.time.primary.height == 16,
               "portrait HH:MM should start the centered 96-pixel time line at y 174");
@@ -26,10 +29,13 @@ int main() {
               "portrait :SS should continue on the same line at the same size");
   expect_true(portrait.time.textSize == 2 && portrait.time.centerY == 174,
               "portrait time should use text size 2 centered at y 174");
+  expect_true(portrait.time.showSeconds,
+              "portrait time should retain its existing seconds segment");
   expect_true(portrait.time.primary.role == SHARED_CLOCK_TEXT_PRIMARY &&
                   portrait.time.seconds.role == SHARED_CLOCK_TEXT_DIM,
               "portrait seconds should use the dim role while staying the same size");
-  expect_true(portrait.date.centerX == 67 && portrait.date.centerY == 202 &&
+  expect_true(portrait.date.mode == SHARED_CLOCK_DATE_SINGLE_LINE &&
+                  portrait.date.centerX == 67 && portrait.date.centerY == 202 &&
                   portrait.date.textSize == 1,
               "portrait date should remain centered around y 202 at text size 1");
   expect_true(portrait.meterY == 224 && portrait.meterFootprint == 16,
@@ -38,23 +44,48 @@ int main() {
   const SharedClockFaceLayout landscape = sharedClockFaceLayout(true);
   expect_true(landscape.screenWidth == 240 && landscape.screenHeight == 135,
               "landscape shared face should use the full 240x135 display");
-  expect_true(landscape.pet.x == 0 && landscape.pet.y == 0 &&
-                  landscape.pet.width == 115 && landscape.pet.height == 90,
-              "landscape shared face should reserve 115x90 at top left for the compact pet");
-  expect_true(landscape.time.primary.x == 129 && landscape.time.primary.y == 46 &&
-                  landscape.time.primary.width == 60 && landscape.time.primary.height == 16,
-              "landscape HH:MM should start at x 129 on the centered right-pane time line");
-  expect_true(landscape.time.seconds.x == 189 && landscape.time.seconds.y == 46 &&
-                  landscape.time.seconds.width == 36 && landscape.time.seconds.height == 16,
-              "landscape :SS should end at x 225 on the same line and at the same size");
-  expect_true(landscape.time.textSize == 2 && landscape.time.centerY == 54,
-              "landscape time should use text size 2 centered at y 54");
-  expect_true(landscape.time.primary.role == SHARED_CLOCK_TEXT_PRIMARY &&
-                  landscape.time.seconds.role == SHARED_CLOCK_TEXT_DIM,
-              "landscape seconds should use the dim role while staying the same size");
-  expect_true(landscape.date.centerX == 177 && landscape.date.centerY == 86 &&
-                  landscape.date.textSize == 1,
-              "landscape date should remain centered in the right pane around y 86");
+  expect_true(landscape.pet.x == 50 && landscape.pet.y == 0 &&
+                  landscape.pet.width == 140 && landscape.pet.height == 58,
+              "landscape shared face should center the compact pet in a 140x58 top region");
+  expect_true(landscape.pet.x + landscape.pet.width / 2 == 120 &&
+                  landscape.pet.y + landscape.pet.height / 2 == 29,
+              "landscape compact pet should remain centered at 120,29");
+  expect_true(landscape.pet.useLocalSurface && landscape.pet.asciiScale == 1 &&
+                  landscape.pet.asciiYOffset == -13,
+              "landscape pet rendering should clip through its local surface and lift 1x ASCII into it");
+  expect_true(landscape.pet.asciiYOffset + 30 + 1 + 4 * 8 + 8 <=
+                  landscape.pet.height,
+              "the lowest five-line ASCII frame should fit inside the 58-pixel local surface");
+  expect_true(!sharedClockPetLocalSurfaceNeedsClear(false, false),
+              "an unchanged compact frame should retain the local pet surface");
+  expect_true(sharedClockPetLocalSurfaceNeedsClear(true, false) &&
+                  sharedClockPetLocalSurfaceNeedsClear(false, true),
+              "ASCII frames and full repaints should clear the local pet surface");
+  expect_true(landscape.time.primary.x == 8 && landscape.time.primary.y == 73 &&
+                  landscape.time.primary.width == 120 && landscape.time.primary.height == 32,
+              "landscape HH:MM should use a 120x32 line starting at x 8 inside the clock row");
+  expect_true(landscape.time.textSize == 4 && landscape.time.centerY == 89,
+              "landscape HH:MM should use text size 4 centered at y 89");
+  expect_true(!landscape.time.showSeconds && landscape.time.seconds.width == 0 &&
+                  landscape.time.seconds.height == 0,
+              "landscape time should omit the seconds segment");
+  expect_true(landscape.time.primary.role == SHARED_CLOCK_TEXT_PRIMARY,
+              "landscape HH:MM should retain the primary text role");
+  expect_true(landscape.date.mode == SHARED_CLOCK_DATE_STACKED_NUMERIC &&
+                  landscape.date.textSize == 2,
+              "landscape date should use stacked numeric month and day at text size 2");
+  expect_true(landscape.date.month.x == 208 && landscape.date.month.y == 64 &&
+                  landscape.date.month.width == 24 && landscape.date.month.height == 16,
+              "landscape month should be a right-aligned two-digit line near the top of the clock row");
+  expect_true(landscape.date.day.x == 208 && landscape.date.day.y == 96 &&
+                  landscape.date.day.width == 24 && landscape.date.day.height == 16,
+              "landscape day should be a right-aligned two-digit line below the month");
+  expect_true(landscape.pet.y + landscape.pet.height <= 58 &&
+                  landscape.time.primary.y >= 60 &&
+                  landscape.time.primary.y + landscape.time.primary.height <= 119 &&
+                  landscape.date.month.y >= 60 &&
+                  landscape.date.day.y + landscape.date.day.height <= 119,
+              "landscape pet clears and clock/date text should stay in their non-overlapping regions");
   expect_true(landscape.meterY == 119 && landscape.meterFootprint == 16,
               "landscape meters should occupy the final 16 pixels from y 119");
 
