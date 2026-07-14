@@ -232,7 +232,7 @@ class BuddyAgent:
         self._ble_connected = False
         self._last_payload: Optional[dict[str, object]] = None
         self._launch_sequence = 0
-        self._completion_seq = 0
+        self._completion_seq = self.store.load().completion_seq
         self._completed_turn_order: Deque[tuple[str, str]] = deque()
         self._completed_turn_keys: set[tuple[str, str]] = set()
         self._ota_session_lock: Optional[asyncio.Lock] = None
@@ -694,6 +694,7 @@ class BuddyAgent:
                 tokens_today=snapshot.tokens_today,
                 tokens_date=current.tokens_date,
                 tokens_total=snapshot.tokens,
+                completion_seq=self._completion_seq,
                 active_thread_id=active_thread_id,
                 buddy_connected=self._ble_connected,
                 last_msg=snapshot.msg,

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from codex_buddy.agent import BuddyAgent, ManagedSessionRuntime
+from codex_buddy.bridge import BridgeController, RunConfig
 from codex_buddy.catalog import SessionPrompt
 from codex_buddy.events import AgentOutput, ApprovalRequest, TurnState
 from codex_buddy.proxy import ApprovalRequestResolved
@@ -73,6 +74,47 @@ def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(
     )
 
     assert agent._snapshot().as_ble_payload()["usage"] is None
+
+
+def test_agent_loads_persisted_completion_sequence_into_snapshot(tmp_path):
+    state_path = tmp_path / "state.json"
+    BridgeStateStore(state_path).save(PersistedState(completion_seq=41))
+
+    agent = BuddyAgent(state_path, watcher=None)
+
+    assert agent._snapshot().as_ble_payload()["completion_seq"] == 41
+
+
+def test_agent_persists_current_completion_sequence(tmp_path):
+    state_path = tmp_path / "state.json"
+    agent = BuddyAgent(state_path, watcher=None)
+    agent._completion_seq = 42
+
+    snapshot = agent._snapshot()
+    agent._persist(snapshot, agent_running=True)
+
+    persisted = BridgeStateStore(state_path).load()
+    assert persisted.completion_seq == 42
+    assert persisted.snapshot["completion_seq"] == 42
+
+
+def test_legacy_bridge_preserves_current_completion_sequence(tmp_path):
+    state_path = tmp_path / "state.json"
+    store = BridgeStateStore(state_path)
+    store.save(PersistedState(completion_seq=41))
+    controller = BridgeController(
+        RunConfig(
+            workdir=tmp_path,
+            prompt=None,
+            state_path=state_path,
+            paired_device_id="device-1",
+            paired_device_name="Codex-4DAD",
+        )
+    )
+
+    controller._persist_snapshot(controller.reducer.snapshot(), buddy_connected=False)
+
+    assert store.load().completion_seq == 41
 
 
 def test_agent_publishes_one_completion_sequence_per_successful_turn(tmp_path):

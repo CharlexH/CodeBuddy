@@ -14,6 +14,7 @@ class PersistedState:
     tokens_today: int = 0
     tokens_date: str = ""
     tokens_total: int = 0
+    completion_seq: int = 0
     active_thread_id: Optional[str] = None
     buddy_connected: bool = False
     last_msg: str = ""
@@ -45,6 +46,7 @@ class BridgeStateStore:
                 tokens_today=0,
                 tokens_date=today,
                 tokens_total=state.tokens_total,
+                completion_seq=state.completion_seq,
                 active_thread_id=state.active_thread_id,
                 buddy_connected=state.buddy_connected,
                 last_msg=state.last_msg,

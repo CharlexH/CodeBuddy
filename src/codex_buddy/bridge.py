@@ -230,6 +230,7 @@ class BridgeController:
                 tokens_today=snapshot.tokens_today,
                 tokens_date=self.store.load().tokens_date or "",
                 tokens_total=snapshot.tokens,
+                completion_seq=current.completion_seq,
                 active_thread_id=self._active_thread_id,
                 buddy_connected=buddy_connected,
                 last_msg=snapshot.msg,

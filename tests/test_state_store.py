@@ -13,6 +13,7 @@ def test_state_store_resets_tokens_today_after_local_midnight(tmp_path):
             tokens_today=77,
             tokens_date="2026-04-19",
             tokens_total=1200,
+            completion_seq=41,
             active_thread_id="thr_1",
         )
     )
@@ -23,6 +24,7 @@ def test_state_store_resets_tokens_today_after_local_midnight(tmp_path):
     assert loaded.tokens_total == 1200
     assert loaded.tokens_today == 0
     assert loaded.tokens_date == "2026-04-20"
+    assert loaded.completion_seq == 41
 
 
 def test_state_store_round_trips_when_day_has_not_changed(tmp_path):
@@ -34,6 +36,7 @@ def test_state_store_round_trips_when_day_has_not_changed(tmp_path):
         tokens_today=12,
         tokens_date="2026-04-20",
         tokens_total=34,
+        completion_seq=42,
         active_thread_id="thr_2",
     )
     store.save(original)
