@@ -66,20 +66,28 @@ int main() {
               "landscape HH:MM should use a 120x32 line starting at x 8 inside the clock row");
   expect_true(landscape.time.textSize == 4 && landscape.time.centerY == 89,
               "landscape HH:MM should use text size 4 centered at y 89");
-  expect_true(!landscape.time.showSeconds && landscape.time.seconds.width == 0 &&
-                  landscape.time.seconds.height == 0,
-              "landscape time should omit the seconds segment");
+  expect_true(landscape.time.showSeconds &&
+                  landscape.time.seconds.x == 128 &&
+                  landscape.time.seconds.y == 73 &&
+                  landscape.time.seconds.width == 72 &&
+                  landscape.time.seconds.height == 32,
+              "landscape :SS should continue beside HH:MM at text size 4");
+  expect_true(landscape.time.seconds.role == SHARED_CLOCK_TEXT_DIM,
+              "landscape seconds should stay visually secondary");
   expect_true(landscape.time.primary.role == SHARED_CLOCK_TEXT_PRIMARY,
               "landscape HH:MM should retain the primary text role");
   expect_true(landscape.date.mode == SHARED_CLOCK_DATE_STACKED_NUMERIC &&
                   landscape.date.textSize == 2,
               "landscape date should use stacked numeric month and day at text size 2");
-  expect_true(landscape.date.month.x == 208 && landscape.date.month.y == 64 &&
+  expect_true(landscape.date.month.x == 208 && landscape.date.month.y == 70 &&
                   landscape.date.month.width == 24 && landscape.date.month.height == 16,
               "landscape month should be a right-aligned two-digit line near the top of the clock row");
-  expect_true(landscape.date.day.x == 208 && landscape.date.day.y == 96 &&
+  expect_true(landscape.date.day.x == 208 && landscape.date.day.y == 90 &&
                   landscape.date.day.width == 24 && landscape.date.day.height == 16,
               "landscape day should be a right-aligned two-digit line below the month");
+  expect_true(landscape.date.day.y -
+                  (landscape.date.month.y + landscape.date.month.height) == 4,
+              "landscape month and day should use a compact four-pixel gap");
   expect_true(landscape.pet.y + landscape.pet.height <= 58 &&
                   landscape.time.primary.y >= 60 &&
                   landscape.time.primary.y + landscape.time.primary.height <= 119 &&
