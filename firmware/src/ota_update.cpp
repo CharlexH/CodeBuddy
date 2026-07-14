@@ -798,7 +798,9 @@ void otaUpdatePoll(OtaOfferState* offer, const OtaUpdateRuntimeInputs& inputs) {
 
   bool confirm = false;
   bool cancel = runtime.cancelRequested;
-  if (runtime.confirmRequested || runtime.automatic) {
+  if (runtime.confirmRequested || otaAutomaticOfferShouldConsume(
+        runtime.automatic, runtime.offerConsumed
+      )) {
     if (consumeOfferAfterAuthorization(runtime.automatic)) {
       runtime.offerConsumed = true;
       confirm = true;

@@ -93,6 +93,15 @@ static void testDirectOfferStartsAtomically() {
          "Direct still fails closed on approval conflicts");
 }
 
+static void testDirectOfferIsConsumedOnlyOnce() {
+  expect(otaAutomaticOfferShouldConsume(true, false),
+         "Direct must consume a newly armed offer");
+  expect(!otaAutomaticOfferShouldConsume(true, true),
+         "Direct must not consume its private offer again on the next poll");
+  expect(!otaAutomaticOfferShouldConsume(false, false),
+         "Ask must wait for physical confirmation");
+}
+
 static void testReadinessAndPowerGates() {
   OtaUpdateInputs in = ready();
   expect(otaUpdateGate(in, true) == OTA_GATE_READY,
@@ -956,6 +965,7 @@ static void testCancellationApplicabilityAndFailureMapping() {
 int main() {
   testSignedOfferPolicy();
   testDirectOfferStartsAtomically();
+  testDirectOfferIsConsumedOnlyOnce();
   testReadinessAndPowerGates();
   testCoordinationEndsOnlyAfterAuthentication();
   testBoundedReadinessWaitAndWrap();

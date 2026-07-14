@@ -15,6 +15,13 @@ inline constexpr bool otaAutomaticDefault() { return false; }
 
 inline constexpr const char* otaAutomaticNvsKey() { return "s_aota"; }
 
+inline constexpr bool otaAutomaticOfferShouldConsume(
+  bool automatic,
+  bool offerConsumed
+) {
+  return automatic && !offerConsumed;
+}
+
 inline constexpr OtaOfferPolicy otaOfferPolicy(
   bool pending,
   bool signedAuthorized,
