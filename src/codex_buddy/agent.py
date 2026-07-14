@@ -663,6 +663,7 @@ class BuddyAgent:
     async def _publish_state(self, *, force: bool = False) -> None:
         snapshot = self._snapshot()
         payload = snapshot.as_ble_payload()
+        self._persist(snapshot, agent_running=True)
         if force or payload != self._last_payload:
             if not self._ota_session_active:
                 self._last_payload = payload
@@ -673,7 +674,7 @@ class BuddyAgent:
                     self._ble_connected = False
                     with contextlib.suppress(Exception):
                         await self._ble.disconnect()
-        self._persist(snapshot, agent_running=True)
+                    self._persist(snapshot, agent_running=True)
 
     def _snapshot(self):
         return replace(

@@ -48,6 +48,19 @@ class _CapturingBle:
         self.disconnected = True
 
 
+class _BlockingBle:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def send_snapshot(self, snapshot) -> None:
+        self.started.set()
+        await self.release.wait()
+
+    async def disconnect(self) -> None:
+        pass
+
+
 class _FakeAccountUsageMonitor:
     def __init__(self, *, codex_path, codex_launch_path, on_usage) -> None:
         self.codex_path = codex_path
@@ -96,6 +109,43 @@ def test_agent_persists_current_completion_sequence(tmp_path):
     persisted = BridgeStateStore(state_path).load()
     assert persisted.completion_seq == 42
     assert persisted.snapshot["completion_seq"] == 42
+
+
+def test_agent_persists_completed_sequence_before_ble_publish_finishes(tmp_path):
+    async def exercise():
+        state_path = tmp_path / "state.json"
+        agent = BuddyAgent(state_path, watcher=None, clock=lambda: 100.0)
+        ble = _BlockingBle()
+        agent._ble = ble
+        agent._ble_connected = True
+        agent._managed_runtime["managed-1"] = ManagedSessionRuntime(
+            control_id="managed-1",
+            workdir=tmp_path,
+        )
+
+        publish = asyncio.create_task(
+            agent._handle_managed_event(
+                "managed-1",
+                TurnState(
+                    thread_id="thr-1",
+                    turn_id="turn-1",
+                    active=False,
+                    status="completed",
+                ),
+            )
+        )
+        await asyncio.wait_for(ble.started.wait(), timeout=1.0)
+        try:
+            persisted = BridgeStateStore(state_path).load()
+            restarted = BuddyAgent(state_path, watcher=None)
+            assert publish.done() is False
+            assert persisted.completion_seq == 1
+            assert restarted._snapshot().as_ble_payload()["completion_seq"] == 1
+        finally:
+            ble.release.set()
+            await publish
+
+    asyncio.run(exercise())
 
 
 def test_legacy_bridge_preserves_current_completion_sequence(tmp_path):
