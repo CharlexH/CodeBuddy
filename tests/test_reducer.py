@@ -164,6 +164,9 @@ def test_snapshot_usage_is_optional_and_keeps_the_compact_ble_shape():
         "tokens_today": 45,
     }
 
+    snapshot_with_completion = replace(legacy_snapshot, completion_seq=7)
+    assert snapshot_with_completion.as_ble_payload()["completion_seq"] == 7
+
     snapshot_with_usage = BuddySnapshot(
         total=1,
         running=1,

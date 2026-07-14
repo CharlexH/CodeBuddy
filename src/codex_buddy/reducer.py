@@ -35,6 +35,7 @@ class BuddySnapshot:
     prompt: Optional[dict[str, str]]
     usage: Optional[UsageDisplay] = None
     usage_is_known: bool = False
+    completion_seq: Optional[int] = None
 
     def as_ble_payload(self) -> dict:
         payload = {
@@ -57,6 +58,8 @@ class BuddySnapshot:
             payload["usage"] = usage
         elif self.usage_is_known:
             payload["usage"] = None
+        if self.completion_seq is not None:
+            payload["completion_seq"] = self.completion_seq
 
         if _ble_json_size(payload) <= _BLE_PAYLOAD_MAX_BYTES:
             return payload

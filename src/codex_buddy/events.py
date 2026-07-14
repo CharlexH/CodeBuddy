@@ -9,6 +9,7 @@ class TurnState:
     thread_id: str
     turn_id: str
     active: bool
+    status: str = ""
 
 
 @dataclass(frozen=True)

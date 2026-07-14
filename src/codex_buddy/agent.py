@@ -46,6 +46,7 @@ from .ota_trust import require_existing_ota_trust
 _SUMMARY_LIMIT = 44
 _ENTRY_LIMIT = 160
 _PROMPT_HINT_LIMIT = 160
+_COMPLETED_TURN_DEDUPE_LIMIT = 256
 
 try:
     from .session_log_watcher import SessionLogWatcher
@@ -231,6 +232,9 @@ class BuddyAgent:
         self._ble_connected = False
         self._last_payload: Optional[dict[str, object]] = None
         self._launch_sequence = 0
+        self._completion_seq = 0
+        self._completed_turn_order: Deque[tuple[str, str]] = deque()
+        self._completed_turn_keys: set[tuple[str, str]] = set()
         self._ota_session_lock: Optional[asyncio.Lock] = None
         self._ota_session_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._ota_claim_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -621,7 +625,21 @@ class BuddyAgent:
             self.catalog.resolve_prompt(event.request_id)
             if record is not None:
                 self.catalog.upsert(runtime.to_record())
+        self._record_completed_turn(event)
         await self._publish_state()
+
+    def _record_completed_turn(self, event: object) -> None:
+        if not isinstance(event, TurnState) or event.active or event.status != "completed":
+            return
+        key = (event.thread_id, event.turn_id)
+        if key in self._completed_turn_keys:
+            return
+        if len(self._completed_turn_order) >= _COMPLETED_TURN_DEDUPE_LIMIT:
+            expired = self._completed_turn_order.popleft()
+            self._completed_turn_keys.remove(expired)
+        self._completed_turn_order.append(key)
+        self._completed_turn_keys.add(key)
+        self._completion_seq = (self._completion_seq + 1) & 0xFFFFFFFF
 
     async def _handle_managed_close(self, control_id: str) -> None:
         runtime = self._managed_runtime.get(control_id)
@@ -662,6 +680,7 @@ class BuddyAgent:
             self.catalog.snapshot(now=self.clock()),
             usage=self._usage,
             usage_is_known=self._usage_is_known,
+            completion_seq=self._completion_seq,
         )
 
     def _persist(self, snapshot: Any, *, agent_running: bool) -> None:

@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from codex_buddy.events import ApprovalRequest
+from codex_buddy.events import ApprovalRequest, TurnState
 from codex_buddy.proxy import CodexEventSource, map_device_decision_to_codex_response
 
 
@@ -29,6 +29,45 @@ def test_device_decisions_map_to_codex_approval_payloads(device_decision, expect
 def test_unknown_device_decision_is_rejected():
     with pytest.raises(ValueError, match="Unsupported device decision"):
         map_device_decision_to_codex_response("session")
+
+
+@pytest.mark.parametrize(
+    ("turn", "expected_status"),
+    [
+        ({"id": "turn_1", "status": "failed"}, "failed"),
+        ({"id": "turn_1"}, "completed"),
+    ],
+)
+def test_turn_completed_preserves_terminal_status(turn, expected_status):
+    async def exercise() -> list[object]:
+        events: list[object] = []
+
+        async def on_event(event: object) -> None:
+            events.append(event)
+
+        source = CodexEventSource(
+            upstream_url="ws://example.test",
+            listen_host="127.0.0.1",
+            listen_port=0,
+            on_event=on_event,
+        )
+
+        await source._emit_events(
+            {
+                "method": "turn/completed",
+                "params": {"threadId": "thr_1", "turn": turn},
+            }
+        )
+        return events
+
+    assert asyncio.run(exercise()) == [
+        TurnState(
+            thread_id="thr_1",
+            turn_id="turn_1",
+            active=False,
+            status=expected_status,
+        )
+    ]
 
 
 def test_read_only_verification_after_approved_mutation_is_auto_accepted():

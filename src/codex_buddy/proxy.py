@@ -189,14 +189,16 @@ class CodexEventSource:
             )
             return
         if method == "turn/completed":
+            turn = params.get("turn", {})
             self._approved_mutating_turns.discard(
-                (str(params.get("threadId", "")), str(params.get("turn", {}).get("id", "")))
+                (str(params.get("threadId", "")), str(turn.get("id", "")))
             )
             await self.on_event(
                 TurnState(
                     thread_id=str(params.get("threadId", "")),
-                    turn_id=str(params.get("turn", {}).get("id", "")),
+                    turn_id=str(turn.get("id", "")),
                     active=False,
+                    status=str(turn.get("status", "completed")),
                 )
             )
             return

@@ -6,7 +6,7 @@ import pytest
 
 from codex_buddy.agent import BuddyAgent, ManagedSessionRuntime
 from codex_buddy.catalog import SessionPrompt
-from codex_buddy.events import ApprovalRequest, TurnState
+from codex_buddy.events import AgentOutput, ApprovalRequest, TurnState
 from codex_buddy.proxy import ApprovalRequestResolved
 from codex_buddy.state_store import BridgeStateStore, PersistedState
 from codex_buddy.usage_limits import UsageDisplay
@@ -73,6 +73,90 @@ def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(
     )
 
     assert agent._snapshot().as_ble_payload()["usage"] is None
+
+
+def test_agent_publishes_one_completion_sequence_per_successful_turn(tmp_path):
+    async def exercise():
+        agent = BuddyAgent(tmp_path / "state.json", watcher=None, clock=lambda: 100.0)
+        ble = _CapturingBle()
+        agent._ble = ble
+        agent._ble_connected = True
+        agent._managed_runtime["managed-1"] = ManagedSessionRuntime(
+            control_id="managed-1",
+            workdir=tmp_path,
+        )
+
+        await agent._handle_managed_event(
+            "managed-1",
+            TurnState(thread_id="thr-1", turn_id="turn-1", active=True),
+        )
+        await agent._handle_managed_event(
+            "managed-1",
+            AgentOutput(thread_id="thr-1", text="item completed"),
+        )
+        assert agent._snapshot().as_ble_payload()["completion_seq"] == 0
+
+        completed = TurnState(
+            thread_id="thr-1",
+            turn_id="turn-1",
+            active=False,
+            status="completed",
+        )
+        await agent._handle_managed_event("managed-1", completed)
+        await agent._handle_managed_event("managed-1", completed)
+
+        await agent._handle_managed_event(
+            "managed-1",
+            TurnState(
+                thread_id="thr-1",
+                turn_id="turn-failed",
+                active=False,
+                status="failed",
+            ),
+        )
+        await agent._handle_managed_event(
+            "managed-1",
+            TurnState(
+                thread_id="thr-1",
+                turn_id="turn-interrupted",
+                active=False,
+                status="interrupted",
+            ),
+        )
+        return agent, ble
+
+    agent, ble = asyncio.run(exercise())
+
+    assert agent._snapshot().as_ble_payload()["completion_seq"] == 1
+    assert [payload["completion_seq"] for payload in ble.sent_payloads].count(1) == 1
+
+
+def test_agent_completion_sequence_wraps_and_deduplication_is_bounded(tmp_path):
+    async def exercise():
+        agent = BuddyAgent(tmp_path / "state.json", watcher=None, clock=lambda: 100.0)
+        agent._managed_runtime["managed-1"] = ManagedSessionRuntime(
+            control_id="managed-1",
+            workdir=tmp_path,
+        )
+        agent._completion_seq = 0xFFFFFFFF
+
+        for index in range(300):
+            await agent._handle_managed_event(
+                "managed-1",
+                TurnState(
+                    thread_id="thr-1",
+                    turn_id=f"turn-{index}",
+                    active=False,
+                    status="completed",
+                ),
+            )
+        return agent
+
+    agent = asyncio.run(exercise())
+
+    assert agent._snapshot().as_ble_payload()["completion_seq"] == 299
+    assert len(agent._completed_turn_order) <= 256
+    assert len(agent._completed_turn_keys) <= 256
 
 
 def test_agent_constructs_after_closed_loop_and_runs_in_fresh_loop(tmp_path):
