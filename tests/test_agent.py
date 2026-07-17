@@ -792,3 +792,58 @@ def test_agent_publishes_account_usage_from_the_configured_monitor(tmp_path):
     assert ble.sent_payloads[-1]["usage"] is None
     assert status["snapshot"]["usage"] is None
     assert persisted.snapshot["usage"] is None
+
+
+def test_agent_retries_account_usage_monitor_after_startup_failure(tmp_path):
+    state_path = tmp_path / "state.json"
+    BridgeStateStore(state_path).save(
+        PersistedState(
+            real_codex_path="/usr/local/bin/codex",
+            codex_launch_path="/usr/local/bin:/usr/bin:/bin",
+        )
+    )
+    created = []
+
+    class _FailingAccountUsageMonitor(_FakeAccountUsageMonitor):
+        async def start(self) -> None:
+            self.started.set()
+            raise RuntimeError("app-server was not ready")
+
+    def monitor_factory(*, codex_path, codex_launch_path, on_usage):
+        monitor_type = _FailingAccountUsageMonitor if not created else _FakeAccountUsageMonitor
+        monitor = monitor_type(
+            codex_path=codex_path,
+            codex_launch_path=codex_launch_path,
+            on_usage=on_usage,
+        )
+        created.append(monitor)
+        return monitor
+
+    async def exercise():
+        agent = BuddyAgent(
+            state_path,
+            socket_path=Path(f"/tmp/code-buddy-retry-{id(state_path)}.sock"),
+            watcher=None,
+            keepalive_interval=60.0,
+            reconnect_interval=0.01,
+            account_usage_monitor_factory=monitor_factory,
+        )
+        task = asyncio.create_task(agent.run())
+        try:
+            for _ in range(100):
+                if len(created) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(created) >= 2
+            await asyncio.wait_for(created[1].started.wait(), timeout=1.0)
+            await created[1].publish(UsageDisplay(seven_day_remaining=89))
+            return agent._snapshot().as_ble_payload()
+        finally:
+            agent._stopped.set()
+            await task
+
+    payload = asyncio.run(exercise())
+
+    assert created[0].stopped is True
+    assert created[1].stopped is True
+    assert payload["usage"] == {"seven_day_remaining": 89}

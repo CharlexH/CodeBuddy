@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import secrets
 import subprocess
 import sys
@@ -47,6 +48,8 @@ _SUMMARY_LIMIT = 44
 _ENTRY_LIMIT = 160
 _PROMPT_HINT_LIMIT = 160
 _COMPLETED_TURN_DEDUPE_LIMIT = 256
+
+_LOG = logging.getLogger(__name__)
 
 try:
     from .session_log_watcher import SessionLogWatcher
@@ -335,8 +338,8 @@ class BuddyAgent:
                     path=str(self.socket_path),
                 )
                 restrict_unix_socket(self.socket_path)
-                await self._start_account_usage_monitor()
                 self._tasks = [
+                    asyncio.create_task(self._account_usage_loop()),
                     asyncio.create_task(self._readonly_loop()),
                     asyncio.create_task(self._ble_loop()),
                     asyncio.create_task(self._keepalive_loop()),
@@ -600,9 +603,25 @@ class BuddyAgent:
         try:
             await monitor.start()
         except Exception:
+            _LOG.warning("Account usage monitor startup failed; retrying", exc_info=True)
             self._account_usage_monitor = None
             with contextlib.suppress(Exception):
                 await monitor.stop()
+
+    async def _account_usage_loop(self) -> None:
+        while not self._stop_requested:
+            await self._start_account_usage_monitor()
+            monitor = self._account_usage_monitor
+            if monitor is None:
+                await asyncio.sleep(self.reconnect_interval)
+                continue
+            try:
+                await asyncio.Future()
+            finally:
+                if self._account_usage_monitor is monitor:
+                    self._account_usage_monitor = None
+                with contextlib.suppress(Exception):
+                    await monitor.stop()
 
     async def _handle_account_usage(self, usage: Optional[UsageDisplay]) -> None:
         self._usage = usage
