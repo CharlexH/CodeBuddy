@@ -138,6 +138,7 @@ def test_parse_session_log_transitions_from_completed_to_recent_then_drops(tmp_p
     )
     assert completed is not None
     assert completed.state == "completed"
+    assert getattr(completed, "completed_turn_id", None) == "turn-2"
     assert completed.latest_message == "Done."
     assert completed.entries == ["Do the thing", "Done."]
 

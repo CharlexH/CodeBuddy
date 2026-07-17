@@ -34,6 +34,7 @@ def parse_session_log(
     last_activity_at: Optional[float] = None
     last_started_at: Optional[float] = None
     last_completed_at: Optional[float] = None
+    last_completed_turn_id: Optional[str] = None
     latest_message = ""
     entries: list[str] = []
     last_entry_value: Optional[str] = None
@@ -83,6 +84,9 @@ def parse_session_log(
                     if completed_at is None:
                         completed_at = record_ts
                     last_completed_at = _max_timestamp(last_completed_at, completed_at, record_ts)
+                    turn_id = payload.get("turn_id")
+                    if isinstance(turn_id, str) and turn_id:
+                        last_completed_turn_id = turn_id
                     last_activity_at = _max_timestamp(last_activity_at, completed_at)
                     last_agent_message = _clean_message(payload.get("last_agent_message"))
                     if last_agent_message:
@@ -161,6 +165,7 @@ def parse_session_log(
         tokens_session=tokens_session,
         control_capability="readonly",
         pending_prompt=None,
+        completed_turn_id=last_completed_turn_id,
     )
 
 

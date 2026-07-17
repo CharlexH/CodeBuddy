@@ -245,6 +245,7 @@ class BuddyAgent:
         self._completion_seq = self.store.load().completion_seq
         self._completed_turn_order: Deque[tuple[str, str]] = deque()
         self._completed_turn_keys: set[tuple[str, str]] = set()
+        self._readonly_completion_initialized = False
         self._ota_session_lock: Optional[asyncio.Lock] = None
         self._ota_session_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._ota_claim_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -560,6 +561,7 @@ class BuddyAgent:
     def _refresh_readonly_state(self) -> None:
         if self._watcher is not None:
             readonly = self._watcher.poll(now=self.clock())
+            self._record_readonly_completions(readonly)
             self.catalog.replace_readonly(readonly)
         if self._client_state_watcher is not None:
             self._unread = self._client_state_watcher.poll(self._visible_thread_ids)
@@ -670,7 +672,31 @@ class BuddyAgent:
     def _record_completed_turn(self, event: object) -> None:
         if not isinstance(event, TurnState) or event.active or event.status != "completed":
             return
-        key = (event.thread_id, event.turn_id)
+        self._record_completion_key((event.thread_id, event.turn_id), notify=True)
+
+    def _record_readonly_completions(self, sessions: list[SessionRecord]) -> None:
+        if not self._readonly_completion_initialized:
+            for session in sessions:
+                if session.source != "subagent" and session.completed_turn_id:
+                    self._record_completion_key(
+                        (session.session_id, session.completed_turn_id),
+                        notify=False,
+                    )
+            self._readonly_completion_initialized = True
+            return
+
+        for session in sessions:
+            if (
+                session.source != "subagent"
+                and session.state == "completed"
+                and session.completed_turn_id
+            ):
+                self._record_completion_key(
+                    (session.session_id, session.completed_turn_id),
+                    notify=True,
+                )
+
+    def _record_completion_key(self, key: tuple[str, str], *, notify: bool) -> None:
         if key in self._completed_turn_keys:
             return
         if len(self._completed_turn_order) >= _COMPLETED_TURN_DEDUPE_LIMIT:
@@ -678,7 +704,8 @@ class BuddyAgent:
             self._completed_turn_keys.remove(expired)
         self._completed_turn_order.append(key)
         self._completed_turn_keys.add(key)
-        self._completion_seq = (self._completion_seq + 1) & 0xFFFFFFFF
+        if notify:
+            self._completion_seq = (self._completion_seq + 1) & 0xFFFFFFFF
 
     async def _handle_managed_close(self, control_id: str) -> None:
         runtime = self._managed_runtime.get(control_id)

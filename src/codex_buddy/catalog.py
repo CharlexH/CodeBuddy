@@ -34,6 +34,7 @@ class SessionRecord:
     tokens_session: int
     control_capability: str
     pending_prompt: Optional[SessionPrompt] = None
+    completed_turn_id: Optional[str] = None
 
     def as_dict(self) -> dict[str, object]:
         data = asdict(self)

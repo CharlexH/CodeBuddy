@@ -6,7 +6,7 @@ import pytest
 
 from codex_buddy.agent import BuddyAgent, ManagedSessionRuntime
 from codex_buddy.bridge import BridgeController, RunConfig
-from codex_buddy.catalog import SessionPrompt
+from codex_buddy.catalog import SessionPrompt, SessionRecord
 from codex_buddy.events import AgentOutput, ApprovalRequest, TurnState
 from codex_buddy.proxy import ApprovalRequestResolved
 from codex_buddy.state_store import BridgeStateStore, PersistedState
@@ -270,6 +270,99 @@ def test_agent_publishes_one_completion_sequence_per_successful_turn(tmp_path):
 
     assert agent._snapshot().as_ble_payload()["completion_seq"] == 1
     assert [payload["completion_seq"] for payload in ble.sent_payloads].count(1) == 1
+
+
+def test_agent_publishes_one_completion_sequence_for_a_desktop_turn(tmp_path):
+    def readonly(state, completed_turn_id):
+        return SessionRecord(
+            session_id="desktop-1",
+            source="vscode",
+            originator="Codex Desktop",
+            cwd=str(tmp_path),
+            state=state,
+            last_activity_at=100.0,
+            latest_message="Done",
+            entries=["Done"],
+            tokens_total=0,
+            tokens_session=0,
+            control_capability="readonly",
+            completed_turn_id=completed_turn_id,
+        )
+
+    class _ReadonlyWatcher:
+        def __init__(self):
+            self.values = iter(
+                [
+                    [readonly("completed", "turn-old")],
+                    [readonly("running", "turn-old")],
+                    [readonly("completed", "turn-new")],
+                    [readonly("completed", "turn-new")],
+                ]
+            )
+
+        def poll(self, now):
+            return next(self.values)
+
+    agent = BuddyAgent(
+        tmp_path / "state.json",
+        watcher=_ReadonlyWatcher(),
+        client_state_watcher=_FakeClientStateWatcher([None, None, None, None]),
+        clock=lambda: 100.0,
+    )
+
+    agent._refresh_readonly_state()
+    assert agent._snapshot().as_ble_payload()["completion_seq"] == 0
+    agent._refresh_readonly_state()
+    assert agent._snapshot().as_ble_payload()["completion_seq"] == 0
+    agent._refresh_readonly_state()
+    assert agent._snapshot().as_ble_payload()["completion_seq"] == 1
+    agent._refresh_readonly_state()
+    assert agent._snapshot().as_ble_payload()["completion_seq"] == 1
+
+
+def test_agent_chimes_for_a_new_desktop_session_but_not_its_subagents(tmp_path):
+    def readonly(session_id, source, turn_id):
+        return SessionRecord(
+            session_id=session_id,
+            source=source,
+            originator="Codex Desktop",
+            cwd=str(tmp_path),
+            state="completed",
+            last_activity_at=100.0,
+            latest_message="Done",
+            entries=["Done"],
+            tokens_total=0,
+            tokens_session=0,
+            control_capability="readonly",
+            completed_turn_id=turn_id,
+        )
+
+    class _ReadonlyWatcher:
+        def __init__(self):
+            self.values = iter(
+                [
+                    [],
+                    [
+                        readonly("desktop-1", "vscode", "turn-main"),
+                        readonly("desktop-child", "subagent", "turn-child"),
+                    ],
+                ]
+            )
+
+        def poll(self, now):
+            return next(self.values)
+
+    agent = BuddyAgent(
+        tmp_path / "state.json",
+        watcher=_ReadonlyWatcher(),
+        client_state_watcher=_FakeClientStateWatcher([None, None]),
+        clock=lambda: 100.0,
+    )
+
+    agent._refresh_readonly_state()
+    agent._refresh_readonly_state()
+
+    assert agent._snapshot().as_ble_payload()["completion_seq"] == 1
 
 
 def test_agent_completion_sequence_wraps_and_deduplication_is_bounded(tmp_path):
