@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "code-buddy"
-version = "0.1.8"
+version = "0.1.9"
 description = "Code Buddy bridge for M5Stack StickS3 approvals"
 readme = "README.md"
 requires-python = ">=3.9"
