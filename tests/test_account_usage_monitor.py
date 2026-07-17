@@ -453,6 +453,7 @@ def test_monitor_reads_rate_limits_merges_sparse_updates_and_exposes_only_displa
             "initialize",
             "initialized",
             "account/rateLimits/read",
+            "thread/list",
         ]
         assert seen == [UsageDisplay(five_hour_remaining=72, seven_day_remaining=91)]
         assert all(isinstance(value, UsageDisplay) or value is None for value in seen)
@@ -473,6 +474,36 @@ def test_monitor_reads_rate_limits_merges_sparse_updates_and_exposes_only_displa
 
     assert terminated == [process]
     assert socket_closed is True
+
+
+def test_monitor_publishes_current_non_archived_thread_ids() -> None:
+    seen: list[frozenset[str]] = []
+
+    async def exercise() -> None:
+        monitor = AccountUsageMonitor(
+            codex_path="/usr/local/bin/codex-real",
+            on_usage=lambda _: None,
+            on_thread_ids=seen.append,
+        )
+        monitor._thread_list_request_ids.add(7)
+        await monitor._handle_message(
+            json.dumps(
+                {
+                    "id": 7,
+                    "result": {
+                        "data": [
+                            {"id": "thread-visible-a"},
+                            {"id": "thread-visible-b"},
+                        ],
+                        "nextCursor": None,
+                    },
+                }
+            )
+        )
+
+    asyncio.run(exercise())
+
+    assert seen == [frozenset({"thread-visible-a", "thread-visible-b"})]
 
 
 def test_monitor_publishes_the_current_week_only_codex_bucket_shape():

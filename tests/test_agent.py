@@ -62,10 +62,11 @@ class _BlockingBle:
 
 
 class _FakeAccountUsageMonitor:
-    def __init__(self, *, codex_path, codex_launch_path, on_usage) -> None:
+    def __init__(self, *, codex_path, codex_launch_path, on_usage, on_thread_ids=None) -> None:
         self.codex_path = codex_path
         self.codex_launch_path = codex_launch_path
         self.on_usage = on_usage
+        self.on_thread_ids = on_thread_ids
         self.started = asyncio.Event()
         self.stopped = False
 
@@ -78,12 +79,18 @@ class _FakeAccountUsageMonitor:
     async def publish(self, usage) -> None:
         await self.on_usage(usage)
 
+    async def publish_thread_ids(self, thread_ids) -> None:
+        if self.on_thread_ids is not None:
+            await self.on_thread_ids(frozenset(thread_ids))
+
 
 class _FakeClientStateWatcher:
     def __init__(self, values) -> None:
         self.values = iter(values)
+        self.visible_thread_ids = []
 
-    def poll(self):
+    def poll(self, visible_thread_ids=None):
+        self.visible_thread_ids.append(visible_thread_ids)
         return next(self.values)
 
 
@@ -105,6 +112,20 @@ def test_agent_refreshes_optional_unread_count_from_client_state(tmp_path):
 
     agent._refresh_readonly_state()
     assert agent._snapshot().unread == 2
+
+
+def test_agent_recomputes_unread_when_visible_thread_ids_arrive(tmp_path):
+    client_state_watcher = _FakeClientStateWatcher([0])
+    agent = BuddyAgent(
+        tmp_path / "state.json",
+        watcher=None,
+        client_state_watcher=client_state_watcher,
+    )
+
+    asyncio.run(agent._handle_visible_thread_ids(frozenset({"thread-visible"})))
+
+    assert client_state_watcher.visible_thread_ids == [frozenset({"thread-visible"})]
+    assert agent._snapshot().unread == 0
 
 
 def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(tmp_path):
@@ -768,11 +789,12 @@ def test_agent_publishes_account_usage_from_the_configured_monitor(tmp_path):
     )
     created = []
 
-    def monitor_factory(*, codex_path, codex_launch_path, on_usage):
+    def monitor_factory(*, codex_path, codex_launch_path, on_usage, on_thread_ids):
         monitor = _FakeAccountUsageMonitor(
             codex_path=codex_path,
             codex_launch_path=codex_launch_path,
             on_usage=on_usage,
+            on_thread_ids=on_thread_ids,
         )
         created.append(monitor)
         return monitor
@@ -837,12 +859,13 @@ def test_agent_retries_account_usage_monitor_after_startup_failure(tmp_path):
             self.started.set()
             raise RuntimeError("app-server was not ready")
 
-    def monitor_factory(*, codex_path, codex_launch_path, on_usage):
+    def monitor_factory(*, codex_path, codex_launch_path, on_usage, on_thread_ids):
         monitor_type = _FailingAccountUsageMonitor if not created else _FakeAccountUsageMonitor
         monitor = monitor_type(
             codex_path=codex_path,
             codex_launch_path=codex_launch_path,
             on_usage=on_usage,
+            on_thread_ids=on_thread_ids,
         )
         created.append(monitor)
         return monitor

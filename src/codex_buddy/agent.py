@@ -222,6 +222,7 @@ class BuddyAgent:
             Path.home() / ".codex" / ".codex-global-state.json"
         )
         self._unread: Optional[int] = None
+        self._visible_thread_ids: Optional[frozenset[str]] = None
         self._ble_factory = ble_factory or BleBuddyTransport
         self._managed_session_factory = managed_session_factory or ManagedSessionBridge
         self._account_usage_monitor_factory = account_usage_monitor_factory or AccountUsageMonitor
@@ -561,7 +562,7 @@ class BuddyAgent:
             readonly = self._watcher.poll(now=self.clock())
             self.catalog.replace_readonly(readonly)
         if self._client_state_watcher is not None:
-            self._unread = self._client_state_watcher.poll()
+            self._unread = self._client_state_watcher.poll(self._visible_thread_ids)
 
     async def _ble_loop(self) -> None:
         while not self._stop_requested:
@@ -610,6 +611,7 @@ class BuddyAgent:
             codex_path=current.real_codex_path,
             codex_launch_path=current.codex_launch_path,
             on_usage=self._handle_account_usage,
+            on_thread_ids=self._handle_visible_thread_ids,
         )
         self._account_usage_monitor = monitor
         try:
@@ -638,6 +640,12 @@ class BuddyAgent:
     async def _handle_account_usage(self, usage: Optional[UsageDisplay]) -> None:
         self._usage = usage
         self._usage_is_known = True
+        await self._publish_state()
+
+    async def _handle_visible_thread_ids(self, thread_ids: frozenset[str]) -> None:
+        self._visible_thread_ids = frozenset(thread_ids)
+        if self._client_state_watcher is not None:
+            self._unread = self._client_state_watcher.poll(self._visible_thread_ids)
         await self._publish_state()
 
     async def _handle_managed_event(self, control_id: str, event: object) -> None:

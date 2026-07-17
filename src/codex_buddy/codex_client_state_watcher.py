@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from pathlib import Path
 from typing import Optional
 
@@ -12,7 +13,10 @@ class CodexClientStateWatcher:
         self.state_path = state_path
         self._last_trusted: Optional[int] = None
 
-    def poll(self) -> Optional[int]:
+    def poll(self, visible_thread_ids: Optional[Collection[str]]) -> Optional[int]:
+        if visible_thread_ids is None:
+            return self._last_trusted
+
         try:
             root = json.loads(self.state_path.read_text(encoding="utf-8"))
             persisted = root["electron-persisted-atom-state"]
@@ -27,5 +31,5 @@ class CodexClientStateWatcher:
         except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return self._last_trusted
 
-        self._last_trusted = len(local)
+        self._last_trusted = len(set(local).intersection(visible_thread_ids))
         return self._last_trusted

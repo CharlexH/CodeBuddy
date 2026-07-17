@@ -22,6 +22,7 @@ RECONNECT_BACKOFF_MAX_SECONDS = 30.0
 _EXPIRY_GRACE_SECONDS = 0.001
 
 UsageCallback = Callable[[Optional[UsageDisplay]], Optional[Awaitable[None]]]
+ThreadIdsCallback = Callable[[frozenset[str]], Optional[Awaitable[None]]]
 AppServerStart = Callable[[str, str, int], object]
 ReadyWaiter = Callable[[int], Awaitable[None]]
 WebSocketConnect = Callable[[str], Any]
@@ -37,6 +38,7 @@ class AccountUsageMonitor:
         *,
         codex_path: str,
         on_usage: UsageCallback,
+        on_thread_ids: Optional[ThreadIdsCallback] = None,
         codex_launch_path: str = "",
         refresh_interval_seconds: float = RATE_LIMIT_REFRESH_SECONDS,
         app_server_start: Optional[AppServerStart] = None,
@@ -53,6 +55,7 @@ class AccountUsageMonitor:
         self.codex_path = codex_path
         self.codex_launch_path = codex_launch_path
         self.on_usage = on_usage
+        self.on_thread_ids = on_thread_ids
         self.refresh_interval_seconds = refresh_interval_seconds
         self._app_server_start = app_server_start or self._start_app_server
         self._wait_until_ready = wait_until_ready or self._wait_for_ready
@@ -72,6 +75,7 @@ class AccountUsageMonitor:
         self._limits = UsageLimits(primary=None, secondary=None, observed_at=None)
         self._request_id = 0
         self._read_request_ids: set[int] = set()
+        self._thread_list_request_ids: set[int] = set()
 
     def start(self) -> Awaitable[None]:
         lifecycle_generation = self._lifecycle_generation
@@ -182,6 +186,7 @@ class AccountUsageMonitor:
         await self._wait_for_response(websocket, initialize_id)
         await self._send_notification(websocket, "initialized")
         await self._request_rate_limits(websocket)
+        await self._request_thread_list(websocket)
 
     async def _receive_updates(self, websocket: Any) -> None:
         while not self._stopping:
@@ -189,6 +194,7 @@ class AccountUsageMonitor:
                 raw = await asyncio.wait_for(websocket.recv(), timeout=self.refresh_interval_seconds)
             except asyncio.TimeoutError:
                 await self._request_rate_limits(websocket)
+                await self._request_thread_list(websocket)
                 continue
             await self._handle_message(raw)
 
@@ -206,6 +212,14 @@ class AccountUsageMonitor:
     async def _request_rate_limits(self, websocket: Any) -> None:
         request_id = await self._send_request(websocket, "account/rateLimits/read")
         self._read_request_ids.add(request_id)
+
+    async def _request_thread_list(self, websocket: Any) -> None:
+        request_id = await self._send_request(
+            websocket,
+            "thread/list",
+            {"archived": False, "limit": 1000, "useStateDbOnly": True},
+        )
+        self._thread_list_request_ids.add(request_id)
 
     async def _send_request(self, websocket: Any, method: str, params: Optional[dict[str, object]] = None) -> int:
         self._request_id += 1
@@ -229,6 +243,24 @@ class AccountUsageMonitor:
                 self._limits = UsageLimits.from_read_result(message["result"], observed_at=self._now())
                 await self._publish_display()
             return
+        if isinstance(request_id, int) and request_id in self._thread_list_request_ids:
+            self._thread_list_request_ids.remove(request_id)
+            result = message.get("result")
+            if not isinstance(result, Mapping):
+                return
+            data = result.get("data")
+            if not isinstance(data, list):
+                return
+            thread_ids: set[str] = set()
+            for item in data:
+                if not isinstance(item, Mapping):
+                    return
+                thread_id = item.get("id")
+                if not isinstance(thread_id, str):
+                    return
+                thread_ids.add(thread_id)
+            await self._notify_thread_ids(frozenset(thread_ids))
+            return
         await self._handle_notification(message)
 
     async def _handle_notification(self, message: Mapping[str, object]) -> None:
@@ -245,6 +277,13 @@ class AccountUsageMonitor:
 
     async def _notify_usage(self, display: Optional[UsageDisplay]) -> None:
         result = self.on_usage(display)
+        if inspect.isawaitable(result):
+            await result
+
+    async def _notify_thread_ids(self, thread_ids: frozenset[str]) -> None:
+        if self.on_thread_ids is None:
+            return
+        result = self.on_thread_ids(thread_ids)
         if inspect.isawaitable(result):
             await result
 
