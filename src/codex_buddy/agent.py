@@ -23,6 +23,7 @@ from .agent_runtime import (
 from .ble_transport import BleBuddyTransport
 from .bridge import ManagedSessionBridge
 from .catalog import SessionCatalog, SessionPrompt, SessionRecord
+from .codex_client_state_watcher import CodexClientStateWatcher
 from .account_usage_monitor import AccountUsageMonitor
 from .events import ApprovalRequest, AgentOutput, TokenUsage, TurnState
 from .proxy import ApprovalRequestResolved
@@ -192,6 +193,7 @@ class BuddyAgent:
         keepalive_interval: float = 10.0,
         reconnect_interval: float = 5.0,
         watcher: Optional[Any] = None,
+        client_state_watcher: Optional[Any] = None,
         ble_factory: Optional[Callable[..., BleBuddyTransport]] = None,
         managed_session_factory: Optional[Callable[..., ManagedSessionBridge]] = None,
         account_usage_monitor_factory: Optional[Callable[..., AccountUsageMonitor]] = None,
@@ -216,6 +218,10 @@ class BuddyAgent:
         self._watcher = watcher or (
             SessionLogWatcher(Path.home() / ".codex" / "sessions") if SessionLogWatcher is not None else None
         )
+        self._client_state_watcher = client_state_watcher or CodexClientStateWatcher(
+            Path.home() / ".codex" / ".codex-global-state.json"
+        )
+        self._unread: Optional[int] = None
         self._ble_factory = ble_factory or BleBuddyTransport
         self._managed_session_factory = managed_session_factory or ManagedSessionBridge
         self._account_usage_monitor_factory = account_usage_monitor_factory or AccountUsageMonitor
@@ -545,11 +551,17 @@ class BuddyAgent:
 
     async def _readonly_loop(self) -> None:
         while not self._stop_requested:
-            if self._watcher is not None:
-                readonly = self._watcher.poll(now=self.clock())
-                self.catalog.replace_readonly(readonly)
+            if self._watcher is not None or self._client_state_watcher is not None:
+                self._refresh_readonly_state()
                 await self._publish_state()
             await asyncio.sleep(self.readonly_poll_interval)
+
+    def _refresh_readonly_state(self) -> None:
+        if self._watcher is not None:
+            readonly = self._watcher.poll(now=self.clock())
+            self.catalog.replace_readonly(readonly)
+        if self._client_state_watcher is not None:
+            self._unread = self._client_state_watcher.poll()
 
     async def _ble_loop(self) -> None:
         while not self._stop_requested:
@@ -701,6 +713,7 @@ class BuddyAgent:
             usage=self._usage,
             usage_is_known=self._usage_is_known,
             completion_seq=self._completion_seq,
+            unread=self._unread,
         )
 
     def _persist(self, snapshot: Any, *, agent_running: bool) -> None:

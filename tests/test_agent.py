@@ -79,6 +79,34 @@ class _FakeAccountUsageMonitor:
         await self.on_usage(usage)
 
 
+class _FakeClientStateWatcher:
+    def __init__(self, values) -> None:
+        self.values = iter(values)
+
+    def poll(self):
+        return next(self.values)
+
+
+def test_agent_refreshes_optional_unread_count_from_client_state(tmp_path):
+    client_state_watcher = _FakeClientStateWatcher([None, 4, 2])
+    agent = BuddyAgent(
+        tmp_path / "state.json",
+        watcher=None,
+        client_state_watcher=client_state_watcher,
+    )
+
+    agent._refresh_readonly_state()
+    assert agent._snapshot().unread is None
+    assert "unread" not in agent._snapshot().as_ble_payload()
+
+    agent._refresh_readonly_state()
+    assert agent._snapshot().unread == 4
+    assert agent._snapshot().as_ble_payload()["unread"] == 4
+
+    agent._refresh_readonly_state()
+    assert agent._snapshot().unread == 2
+
+
 def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(tmp_path):
     agent = BuddyAgent(
         tmp_path / "state.json",

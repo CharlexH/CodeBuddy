@@ -164,6 +164,10 @@ def test_snapshot_usage_is_optional_and_keeps_the_compact_ble_shape():
         "tokens_today": 45,
     }
 
+    snapshot_with_unread = replace(legacy_snapshot, unread=3)
+    assert snapshot_with_unread.as_ble_payload()["unread"] == 3
+    assert "unread" not in legacy_snapshot.as_ble_payload()
+
     snapshot_with_completion = replace(legacy_snapshot, completion_seq=7)
     assert snapshot_with_completion.as_ble_payload()["completion_seq"] == 7
 
