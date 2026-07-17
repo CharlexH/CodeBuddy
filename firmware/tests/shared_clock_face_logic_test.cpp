@@ -154,14 +154,31 @@ int main() {
   renderInput.firstEntry = true;
   SharedClockFaceRenderDecision decision = sharedClockFaceRenderDecision(renderInput);
   expect_true(decision.fullRepaint && decision.clearSurface && decision.drawTime &&
-                  decision.drawDate && decision.drawPet && decision.drawMeters,
+                  decision.drawDate && decision.drawPet && !decision.drawStatus &&
+                  decision.drawMeters,
               "first shared-face entry should fully repaint every layer");
 
   renderInput = {};
+  renderInput.statusVisible = true;
+  renderInput.statusChanged = true;
+  decision = sharedClockFaceRenderDecision(renderInput);
+  expect_true(!decision.fullRepaint && decision.drawStatus && !decision.clearSurface &&
+                  !decision.drawTime && !decision.drawDate && !decision.drawPet &&
+                  !decision.drawMeters,
+              "a landscape count change should redraw only the status dashboard");
+
+  renderInput = {};
+  renderInput.statusChanged = true;
+  decision = sharedClockFaceRenderDecision(renderInput);
+  expect_true(!decision.drawStatus,
+              "portrait should ignore task-status count changes");
+
+  renderInput = {};
   renderInput.orientationChanged = true;
+  renderInput.statusVisible = true;
   decision = sharedClockFaceRenderDecision(renderInput);
   expect_true(decision.fullRepaint && decision.drawTime && decision.drawDate &&
-                  decision.drawPet && decision.drawMeters,
+                  decision.drawPet && decision.drawStatus && decision.drawMeters,
               "orientation changes should fully repaint every layer");
 
   renderInput = {};

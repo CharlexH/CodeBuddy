@@ -68,7 +68,8 @@ int main() {
   SharedClockFaceCache standby = {};
   SharedClockFaceCache runtime = {};
   SharedClockFaceRenderDecision sharedDecision = clockSharedFaceSchedule(
-    &standby, 1000, 0, 10, 6, 4, 20, 0, false, false, false, false
+    &standby, 1000, 0, false, {0, 0, 0}, 10, 6, 4, 20, 0,
+    false, false, false, false
   );
   expect_true(sharedDecision.fullRepaint && sharedDecision.drawTime &&
                   sharedDecision.drawDate && sharedDecision.drawPet && sharedDecision.drawMeters,
@@ -77,48 +78,65 @@ int main() {
               "updating the standby cache must not initialize or mutate the runtime cache");
 
   sharedDecision = clockSharedFaceSchedule(
-    &runtime, 1000, 0, 10, 6, 4, 20, 2, false, false, false, false
+    &runtime, 1000, 0, true, {1, 2, 3}, 10, 6, 4, 20, 2,
+    false, false, false, false
   );
-  expect_true(sharedDecision.fullRepaint,
+  expect_true(sharedDecision.fullRepaint && sharedDecision.drawStatus,
               "the runtime cache should independently request its own first-entry repaint");
   expect_true(standby.initialized && runtime.initialized,
               "standby and runtime should own explicit independent render caches");
 
   sharedDecision = clockSharedFaceSchedule(
-    &runtime, 1100, 0, 10, 6, 4, 20, 2, false, false, false, false
+    &runtime, 1100, 0, true, {1, 2, 3}, 10, 6, 4, 20, 2,
+    false, false, false, false
   );
   expect_true(!sharedDecision.fullRepaint && !sharedDecision.drawTime &&
-                  !sharedDecision.drawDate && !sharedDecision.drawPet,
+                  !sharedDecision.drawDate && !sharedDecision.drawPet &&
+                  !sharedDecision.drawStatus,
               "an unchanged frame before 200ms should not redraw shared-face layers");
 
   sharedDecision = clockSharedFaceSchedule(
-    &runtime, 1200, 0, 10, 6, 4, 20, 2, false, false, false, false
+    &runtime, 1101, 0, true, {1, 2, 4}, 10, 6, 4, 20, 2,
+    false, false, false, false
+  );
+  expect_true(!sharedDecision.fullRepaint && sharedDecision.drawStatus &&
+                  !sharedDecision.drawTime && !sharedDecision.drawDate &&
+                  !sharedDecision.drawPet,
+              "a changed unread count should redraw only the landscape status region");
+
+  sharedDecision = clockSharedFaceSchedule(
+    &runtime, 1200, 0, true, {1, 2, 4}, 10, 6, 4, 20, 2,
+    false, false, false, false
   );
   expect_true(!sharedDecision.fullRepaint && sharedDecision.drawPet &&
                   !sharedDecision.drawTime && !sharedDecision.drawDate,
               "the compact pet should update at 5fps without touching clock text");
 
   sharedDecision = clockSharedFaceSchedule(
-    &runtime, 2000, 0, 11, 6, 4, 20, 2, false, false, false, false
+    &runtime, 2000, 0, true, {1, 2, 4}, 11, 6, 4, 20, 2,
+    false, false, false, false
   );
   expect_true(!sharedDecision.fullRepaint && sharedDecision.drawTime,
               "a one-second change should update the one-line clock without a full clear");
 
   sharedDecision = clockSharedFaceSchedule(
-    &runtime, 2005, 0, 11, 0, 4, 21, 2, false, false, false, false
+    &runtime, 2005, 0, true, {1, 2, 4}, 11, 0, 4, 21, 2,
+    false, false, false, false
   );
   expect_true(!sharedDecision.fullRepaint && sharedDecision.drawDate &&
                   !sharedDecision.drawTime && !sharedDecision.drawPet,
               "a date rollover should update the retained date without disturbing other layers");
 
   sharedDecision = clockSharedFaceSchedule(
-    &runtime, 2010, 1, 11, 0, 4, 21, 2, false, false, false, false
+    &runtime, 2010, 1, true, {1, 2, 4}, 11, 0, 4, 21, 2,
+    false, false, false, false
   );
   expect_true(sharedDecision.fullRepaint && sharedDecision.clearSurface,
               "an orientation switch should cleanly repaint the complete shared face");
 
   sharedDecision = clockSharedFaceSchedule(
-    &runtime, 2020, 1, 11, 0, 4, 21, 2, false, true, false, false
+    &runtime, 2020, 1, true, {1, 2, 4}, 11, 0, 4, 21, 2,
+    false, true, false, false
   );
   expect_true(sharedDecision.fullRepaint && sharedDecision.clearSurface,
               "returning from approval should cleanly repaint the complete shared face");

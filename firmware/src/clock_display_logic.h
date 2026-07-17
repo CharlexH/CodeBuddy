@@ -116,6 +116,7 @@ struct SharedClockFaceCache {
   int16_t lastSecond;
   uint16_t lastDateKey;
   uint8_t lastPersona;
+  SharedClockStatusCounts lastStatus;
   uint32_t nextPetFrameAt;
 };
 
@@ -132,6 +133,8 @@ inline SharedClockFaceRenderDecision clockSharedFaceSchedule(
   SharedClockFaceCache* cache,
   uint32_t now,
   uint8_t orientation,
+  bool statusVisible,
+  SharedClockStatusCounts status,
   int second,
   int weekday,
   int month,
@@ -150,6 +153,10 @@ inline SharedClockFaceRenderDecision clockSharedFaceSchedule(
   const bool secondChanged = cache->initialized && cache->lastSecond != second;
   const bool dateChanged = cache->initialized && cache->lastDateKey != dateKey;
   const bool personaChanged = cache->initialized && cache->lastPersona != persona;
+  const bool statusChanged = cache->initialized &&
+    (cache->lastStatus.running != status.running ||
+      cache->lastStatus.waiting != status.waiting ||
+      cache->lastStatus.unread != status.unread);
   const bool petFrameDue = firstEntry || personaChanged ||
     sharedClockPetFrameDue(now, cache->nextPetFrameAt);
 
@@ -162,6 +169,8 @@ inline SharedClockFaceRenderDecision clockSharedFaceSchedule(
   input.secondChanged = secondChanged;
   input.dateChanged = dateChanged;
   input.petFrameDue = petFrameDue;
+  input.statusVisible = statusVisible;
+  input.statusChanged = statusChanged;
   input.metersChanged = metersChanged;
   input.forceMeters = forceMeters;
   input.promptExited = promptExited;
@@ -172,6 +181,7 @@ inline SharedClockFaceRenderDecision clockSharedFaceSchedule(
   cache->lastSecond = second;
   cache->lastDateKey = dateKey;
   cache->lastPersona = persona;
+  cache->lastStatus = status;
   if (decision.drawPet) cache->nextPetFrameAt = now + SHARED_CLOCK_PET_FRAME_INTERVAL_MS;
   return decision;
 }

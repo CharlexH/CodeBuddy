@@ -212,6 +212,20 @@ int main() {
               "a hidden portrait meter should not repeatedly clear the sprite");
 
   UsageMeterRenderState landscapeState = {};
+  UsageMeterRenderState dashboardState = {};
+  UsageMeterRenderFrame dashboardVisible = usageMeterPrepareLandscapeSingleFrame(
+    &dashboardState, true, meterUsage, 240, 135
+  );
+  expect_true(dashboardVisible.decision.draw && !dashboardVisible.decision.clear &&
+                  dashboardVisible.plan.count == 2,
+              "landscape dashboard frame should paint its selected single meter");
+  UsageMeterState fiveHourChangedOnly = {true, true, 50, 91};
+  UsageMeterRenderFrame dashboardUnchanged = usageMeterPrepareLandscapeSingleFrame(
+    &dashboardState, true, fiveHourChangedOnly, 240, 135
+  );
+  expect_true(!dashboardUnchanged.decision.draw && !dashboardUnchanged.decision.clear,
+              "an unselected five-hour change should not redraw the weekly dashboard bar");
+
   UsageMeterRenderDecision firstVisible = usageMeterRenderTransition(
     &landscapeState, true, true, true, 72, 91
   );

@@ -91,6 +91,8 @@ struct SharedClockFaceRenderInput {
   bool secondChanged;
   bool dateChanged;
   bool petFrameDue;
+  bool statusVisible;
+  bool statusChanged;
   bool metersChanged;
   bool forceMeters;
   bool activitySurfaceChanged;
@@ -103,7 +105,14 @@ struct SharedClockFaceRenderDecision {
   bool drawTime;
   bool drawDate;
   bool drawPet;
+  bool drawStatus;
   bool drawMeters;
+};
+
+struct SharedClockStatusCounts {
+  uint8_t running;
+  uint8_t waiting;
+  uint8_t unread;
 };
 
 struct SharedClockTimePolicy {
@@ -208,6 +217,8 @@ inline constexpr SharedClockFaceRenderDecision sharedClockFaceRenderDecision(
     sharedClockFaceFullRepaint(input) || input.secondChanged,
     sharedClockFaceFullRepaint(input) || input.dateChanged,
     sharedClockFaceFullRepaint(input) || input.petFrameDue,
+    input.statusVisible &&
+      (sharedClockFaceFullRepaint(input) || input.statusChanged),
     sharedClockFaceFullRepaint(input) || input.metersChanged || input.forceMeters,
   };
 }

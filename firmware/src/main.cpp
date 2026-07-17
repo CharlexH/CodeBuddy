@@ -192,6 +192,41 @@ static UsageMeterRenderFrame usageMeterFrameForDisplay(
   return usageMeterPrepareFrame(renderState, tama.connected, usage, width, height, forceDraw);
 }
 
+static UsageMeterRenderFrame usageMeterLandscapeFrameForDisplay(
+  UsageMeterRenderState* renderState,
+  uint16_t width,
+  uint16_t height,
+  bool forceDraw = false
+) {
+  UsageMeterState usage = {
+    tama.hasFiveHourUsage,
+    tama.hasSevenDayUsage,
+    tama.fiveHourRemaining,
+    tama.sevenDayRemaining,
+  };
+  return usageMeterPrepareLandscapeSingleFrame(
+    renderState,
+    tama.connected,
+    usage,
+    width,
+    height,
+    forceDraw
+  );
+}
+
+static uint16_t statusDashboardColor(
+  StatusDashboardColorRole role,
+  const Palette& palette
+) {
+  switch (role) {
+    case STATUS_COLOR_GREEN: return 0x07E0;
+    case STATUS_COLOR_AMBER: return 0xFD20;
+    case STATUS_COLOR_CYAN: return 0x07FF;
+    case STATUS_COLOR_DIM:
+    default: return palette.textDim;
+  }
+}
+
 template <typename Canvas>
 static void paintUsageMeter(Canvas& canvas, const UsageMeterRenderPlan& plan) {
   for (uint8_t i = 0; i < plan.count; ++i) {
@@ -827,13 +862,24 @@ static void drawSharedClockFaceTo(
     characterSetState(activeState);
   }
 
-  UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
-    meterState, layout.screenWidth, layout.screenHeight, false
-  );
+  UsageMeterRenderFrame meterFrame = landscape
+    ? usageMeterLandscapeFrameForDisplay(
+        meterState, layout.screenWidth, layout.screenHeight, false
+      )
+    : usageMeterFrameForDisplay(
+        meterState, layout.screenWidth, layout.screenHeight, false
+      );
+  SharedClockStatusCounts statusCounts = {
+    tama.sessionsRunning,
+    tama.sessionsWaiting,
+    static_cast<uint8_t>(tama.hasUnreadCount ? tama.unreadCount : 0),
+  };
   SharedClockFaceRenderDecision decision = clockSharedFaceSchedule(
     cache,
     millis(),
     orientation,
+    layout.status.visible,
+    statusCounts,
     fieldsValid ? _clkTm.Seconds : -1,
     fieldsValid ? _clkDt.WeekDay : -1,
     fieldsValid ? _clkDt.Month : -1,
@@ -848,11 +894,21 @@ static void drawSharedClockFaceTo(
   if (decision.clearSurface) {
     canvas.fillScreen(p.bg);
     usageMeterRenderReset(meterState);
-    meterFrame = usageMeterFrameForDisplay(
-      meterState, layout.screenWidth, layout.screenHeight, true
-    );
+    meterFrame = landscape
+      ? usageMeterLandscapeFrameForDisplay(
+          meterState, layout.screenWidth, layout.screenHeight, true
+        )
+      : usageMeterFrameForDisplay(
+          meterState, layout.screenWidth, layout.screenHeight, true
+        );
   } else if (meterFrame.decision.clear) {
-    clearUsageMeter(canvas, layout.screenWidth, layout.screenHeight, p.bg);
+    canvas.fillRect(
+      0,
+      layout.meterY,
+      layout.screenWidth,
+      layout.meterFootprint,
+      p.bg
+    );
   }
 
   // A functional screen may have selected a proportional/UTF-8 font before
@@ -912,6 +968,39 @@ static void drawSharedClockFaceTo(
       canvas.setTextSize(layout.date.textSize);
       canvas.setTextColor(p.textDim, p.bg);
       canvas.drawString(dateLine, layout.date.centerX, layout.date.centerY);
+    }
+  }
+
+  if (decision.drawStatus && layout.status.visible) {
+    canvas.fillRect(
+      layout.status.x,
+      layout.status.y,
+      layout.status.width,
+      layout.status.height,
+      p.bg
+    );
+    static const char* labels[] = {"RUN", "ASK", "NEW"};
+    const uint8_t counts[] = {
+      statusCounts.running,
+      statusCounts.waiting,
+      statusCounts.unread,
+    };
+    const StatusDashboardKind kinds[] = {STATUS_RUN, STATUS_ASK, STATUS_NEW};
+    canvas.setTextDatum(MC_DATUM);
+    for (uint8_t i = 0; i < 3; ++i) {
+      const int16_t centerX = layout.status.x +
+        (i * layout.status.columnWidth) + (layout.status.columnWidth / 2);
+      canvas.setTextSize(1);
+      canvas.setTextColor(p.textDim, p.bg);
+      canvas.drawString(labels[i], centerX, 13);
+      char countText[4] = {};
+      statusDashboardFormatCount(countText, sizeof(countText), counts[i]);
+      canvas.setTextSize(2);
+      canvas.setTextColor(
+        statusDashboardColor(statusDashboardColorRole(kinds[i], counts[i]), p),
+        p.bg
+      );
+      canvas.drawString(countText, centerX, 38);
     }
   }
 

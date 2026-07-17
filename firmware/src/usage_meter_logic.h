@@ -264,3 +264,30 @@ inline UsageMeterRenderFrame usageMeterPrepareFrame(
     ),
   };
 }
+
+inline UsageMeterRenderFrame usageMeterPrepareLandscapeSingleFrame(
+  UsageMeterRenderState* renderState,
+  bool connected,
+  const UsageMeterState& usage,
+  uint16_t fullWidth,
+  uint16_t fullHeight,
+  bool forceDraw = false
+) {
+  UsageMeterRenderPlan plan = connected
+    ? usageMeterLandscapeSinglePlan(usage, fullWidth, fullHeight)
+    : UsageMeterRenderPlan{};
+  const bool hasSevenDay = plan.count > 0 && usage.hasSevenDay;
+  const bool hasFiveHour = plan.count > 0 && !hasSevenDay && usage.hasFiveHour;
+  return {
+    plan,
+    usageMeterRenderTransition(
+      renderState,
+      plan.count > 0,
+      hasFiveHour,
+      hasSevenDay,
+      hasFiveHour ? usage.fiveHourRemaining : 0,
+      hasSevenDay ? usage.sevenDayRemaining : 0,
+      forceDraw
+    ),
+  };
+}
