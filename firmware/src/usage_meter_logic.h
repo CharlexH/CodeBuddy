@@ -21,6 +21,9 @@ static constexpr uint8_t USAGE_METER_MIN_WIDTH = (USAGE_METER_SIDE_INSET * 2) + 
 static constexpr uint16_t USAGE_METER_CONSUMED = 0x10A2;
 static constexpr uint16_t USAGE_METER_FIVE_HOUR = 0x07E0;
 static constexpr uint16_t USAGE_METER_SEVEN_DAY = 0x03A0;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_HEIGHT = 20;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_FOOTPRINT = 24;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_TOP_INSET = 2;
 
 struct UsageMeterRect {
   uint16_t x;
@@ -194,6 +197,46 @@ inline UsageMeterRenderPlan usageMeterRenderPlan(
   plan.rects[1] = {USAGE_METER_SIDE_INSET, firstY,
                    usageMeterFillWidth(usableWidth, remaining),
                    USAGE_METER_BAR_HEIGHT, color};
+  return plan;
+}
+
+inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
+  const UsageMeterState& state,
+  uint16_t fullWidth,
+  uint16_t fullHeight
+) {
+  UsageMeterRenderPlan plan = {};
+  if (!usageMeterStateValid(state) || fullWidth < USAGE_METER_MIN_WIDTH ||
+      fullHeight < LANDSCAPE_USAGE_METER_FOOTPRINT) {
+    return plan;
+  }
+
+  const uint16_t usableWidth = fullWidth - (USAGE_METER_SIDE_INSET * 2);
+  const uint16_t y = fullHeight - LANDSCAPE_USAGE_METER_FOOTPRINT +
+    LANDSCAPE_USAGE_METER_TOP_INSET;
+  const bool useSevenDay = state.hasSevenDay;
+  const uint8_t remaining = useSevenDay
+    ? state.sevenDayRemaining
+    : state.fiveHourRemaining;
+  const uint16_t color = useSevenDay
+    ? USAGE_METER_SEVEN_DAY
+    : USAGE_METER_FIVE_HOUR;
+
+  plan.count = 2;
+  plan.rects[0] = {
+    USAGE_METER_SIDE_INSET,
+    y,
+    usableWidth,
+    LANDSCAPE_USAGE_METER_HEIGHT,
+    USAGE_METER_CONSUMED,
+  };
+  plan.rects[1] = {
+    USAGE_METER_SIDE_INSET,
+    y,
+    usageMeterFillWidth(usableWidth, remaining),
+    LANDSCAPE_USAGE_METER_HEIGHT,
+    color,
+  };
   return plan;
 }
 

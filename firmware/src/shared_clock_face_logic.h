@@ -53,12 +53,22 @@ struct SharedClockDateLayout {
   uint8_t textSize;
 };
 
+struct SharedClockStatusLayout {
+  bool visible;
+  int16_t x;
+  int16_t y;
+  uint16_t width;
+  uint16_t height;
+  uint8_t columnWidth;
+};
+
 struct SharedClockFaceLayout {
   uint16_t screenWidth;
   uint16_t screenHeight;
   SharedClockPetLayout pet;
   SharedClockTimeLayout time;
   SharedClockDateLayout date;
+  SharedClockStatusLayout status;
   uint16_t meterY;
   uint8_t meterFootprint;
 };
@@ -114,11 +124,11 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
     ? SharedClockFaceLayout{
         240,
         135,
-        {50, 0, 140, 58, 1, -13, true},
+        {0, 0, 120, 58, 1, -13, true},
         {
-          {8, 73, 120, 32, SHARED_CLOCK_TEXT_PRIMARY},
-          {128, 73, 72, 32, SHARED_CLOCK_TEXT_DIM},
-          89,
+          {8, 77, 120, 32, SHARED_CLOCK_TEXT_PRIMARY},
+          {128, 77, 72, 32, SHARED_CLOCK_TEXT_DIM},
+          93,
           4,
           true,
         },
@@ -126,12 +136,13 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           SHARED_CLOCK_DATE_STACKED_NUMERIC,
           0,
           0,
-          {208, 70, 24, 16, SHARED_CLOCK_TEXT_DIM},
-          {208, 90, 24, 16, SHARED_CLOCK_TEXT_DIM},
+          {208, 74, 24, 16, SHARED_CLOCK_TEXT_DIM},
+          {208, 94, 24, 16, SHARED_CLOCK_TEXT_DIM},
           2,
         },
-        119,
-        16,
+        {true, 120, 0, 120, 58, 40},
+        111,
+        24,
       }
     : SharedClockFaceLayout{
         135,
@@ -152,6 +163,7 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           {0, 0, 0, 0, SHARED_CLOCK_TEXT_DIM},
           1,
         },
+        {false, 0, 0, 0, 0, 0},
         224,
         16,
       };

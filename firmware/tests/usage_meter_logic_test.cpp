@@ -108,6 +108,18 @@ int main() {
     "landscape seven-day fill should use the inset width"
   );
 
+  UsageMeterRenderPlan dashboardPlan = usageMeterLandscapeSinglePlan(meterUsage, 240, 135);
+  expect_true(dashboardPlan.count == 2,
+              "landscape dashboard should render one base and one fill");
+  expectMeterRect(
+    dashboardPlan.rects[0], 2, 113, 236, 20, USAGE_METER_CONSUMED,
+    "landscape dashboard base should use a 20-pixel bar in a 24-pixel footprint"
+  );
+  expectMeterRect(
+    dashboardPlan.rects[1], 2, 113, 214, 20, USAGE_METER_SEVEN_DAY,
+    "landscape dashboard should prefer the seven-day quota"
+  );
+
   expect_true(
     usageMeterRenderPlan(meterUsage, 4, 240).count == 0,
     "surfaces narrower than five pixels should not render a usage meter"
@@ -165,6 +177,15 @@ int main() {
   expectMeterRect(
     fiveOnlyPlan.rects[1], 2, 232, 129, 6, USAGE_METER_FIVE_HOUR,
     "five-hour-only usage should use the bright-green single bar"
+  );
+  UsageMeterRenderPlan fiveOnlyDashboard = usageMeterLandscapeSinglePlan(fiveOnlyUsage, 240, 135);
+  expectMeterRect(
+    fiveOnlyDashboard.rects[1], 2, 113, 233, 20, USAGE_METER_FIVE_HOUR,
+    "landscape dashboard should fall back to five-hour usage when weekly is absent"
+  );
+  expect_true(
+    usageMeterLandscapeSinglePlan(noMeterUsage, 240, 135).count == 0,
+    "landscape dashboard should omit an unavailable meter"
   );
 
   UsageMeterRenderState portraitState = {};

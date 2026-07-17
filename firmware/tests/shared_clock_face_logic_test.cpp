@@ -40,16 +40,22 @@ int main() {
               "portrait date should remain centered around y 202 at text size 1");
   expect_true(portrait.meterY == 224 && portrait.meterFootprint == 16,
               "portrait meters should occupy the final 16 pixels from y 224");
+  expect_true(!portrait.status.visible,
+              "portrait should not reserve a task-status dashboard");
 
   const SharedClockFaceLayout landscape = sharedClockFaceLayout(true);
   expect_true(landscape.screenWidth == 240 && landscape.screenHeight == 135,
               "landscape shared face should use the full 240x135 display");
-  expect_true(landscape.pet.x == 50 && landscape.pet.y == 0 &&
-                  landscape.pet.width == 140 && landscape.pet.height == 58,
-              "landscape shared face should center the compact pet in a 140x58 top region");
-  expect_true(landscape.pet.x + landscape.pet.width / 2 == 120 &&
+  expect_true(landscape.pet.x == 0 && landscape.pet.y == 0 &&
+                  landscape.pet.width == 120 && landscape.pet.height == 58,
+              "landscape shared face should reserve the left 120x58 region for the pet");
+  expect_true(landscape.pet.x + landscape.pet.width / 2 == 60 &&
                   landscape.pet.y + landscape.pet.height / 2 == 29,
-              "landscape compact pet should remain centered at 120,29");
+              "landscape compact pet should be centered at 60,29");
+  expect_true(landscape.status.visible && landscape.status.x == 120 &&
+                  landscape.status.y == 0 && landscape.status.width == 120 &&
+                  landscape.status.height == 58 && landscape.status.columnWidth == 40,
+              "landscape status dashboard should occupy the right 120x58 region");
   expect_true(landscape.pet.useLocalSurface && landscape.pet.asciiScale == 1 &&
                   landscape.pet.asciiYOffset == -13,
               "landscape pet rendering should clip through its local surface and lift 1x ASCII into it");
@@ -61,14 +67,14 @@ int main() {
   expect_true(sharedClockPetLocalSurfaceNeedsClear(true, false) &&
                   sharedClockPetLocalSurfaceNeedsClear(false, true),
               "ASCII frames and full repaints should clear the local pet surface");
-  expect_true(landscape.time.primary.x == 8 && landscape.time.primary.y == 73 &&
+  expect_true(landscape.time.primary.x == 8 && landscape.time.primary.y == 77 &&
                   landscape.time.primary.width == 120 && landscape.time.primary.height == 32,
               "landscape HH:MM should use a 120x32 line starting at x 8 inside the clock row");
-  expect_true(landscape.time.textSize == 4 && landscape.time.centerY == 89,
-              "landscape HH:MM should use text size 4 centered at y 89");
+  expect_true(landscape.time.textSize == 4 && landscape.time.centerY == 93,
+              "landscape HH:MM should use text size 4 centered at y 93");
   expect_true(landscape.time.showSeconds &&
                   landscape.time.seconds.x == 128 &&
-                  landscape.time.seconds.y == 73 &&
+                  landscape.time.seconds.y == 77 &&
                   landscape.time.seconds.width == 72 &&
                   landscape.time.seconds.height == 32,
               "landscape :SS should continue beside HH:MM at text size 4");
@@ -79,10 +85,10 @@ int main() {
   expect_true(landscape.date.mode == SHARED_CLOCK_DATE_STACKED_NUMERIC &&
                   landscape.date.textSize == 2,
               "landscape date should use stacked numeric month and day at text size 2");
-  expect_true(landscape.date.month.x == 208 && landscape.date.month.y == 70 &&
+  expect_true(landscape.date.month.x == 208 && landscape.date.month.y == 74 &&
                   landscape.date.month.width == 24 && landscape.date.month.height == 16,
               "landscape month should be a right-aligned two-digit line near the top of the clock row");
-  expect_true(landscape.date.day.x == 208 && landscape.date.day.y == 90 &&
+  expect_true(landscape.date.day.x == 208 && landscape.date.day.y == 94 &&
                   landscape.date.day.width == 24 && landscape.date.day.height == 16,
               "landscape day should be a right-aligned two-digit line below the month");
   expect_true(landscape.date.day.y -
@@ -90,12 +96,12 @@ int main() {
               "landscape month and day should use a compact four-pixel gap");
   expect_true(landscape.pet.y + landscape.pet.height <= 58 &&
                   landscape.time.primary.y >= 60 &&
-                  landscape.time.primary.y + landscape.time.primary.height <= 119 &&
+                  landscape.time.primary.y + landscape.time.primary.height <= 111 &&
                   landscape.date.month.y >= 60 &&
-                  landscape.date.day.y + landscape.date.day.height <= 119,
+                  landscape.date.day.y + landscape.date.day.height <= 111,
               "landscape pet clears and clock/date text should stay in their non-overlapping regions");
-  expect_true(landscape.meterY == 119 && landscape.meterFootprint == 16,
-              "landscape meters should occupy the final 16 pixels from y 119");
+  expect_true(landscape.meterY == 111 && landscape.meterFootprint == 24,
+              "landscape meter footprint should occupy the final 24 pixels from y 111");
 
   SharedClockFaceContext context = {};
   context.normalDisplay = true;
