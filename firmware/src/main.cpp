@@ -1004,7 +1004,7 @@ static void drawSharedClockFaceTo(
       canvas.drawString(labels[i], centerX, STATUS_DASHBOARD_LABEL_CENTER_Y);
       char countText[4] = {};
       statusDashboardFormatCount(countText, sizeof(countText), counts[i]);
-      canvas.setTextSize(statusDashboardCountTextSize(counts[i]));
+      canvas.setTextSize(STATUS_DASHBOARD_COUNT_TEXT_SIZE);
       canvas.setTextColor(
         statusDashboardColor(statusDashboardColorRole(kinds[i], counts[i]), p),
         p.bg

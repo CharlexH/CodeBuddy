@@ -21,13 +21,10 @@ struct StatusDashboardCounts {
   uint8_t unread;
 };
 
-static constexpr uint8_t STATUS_DASHBOARD_LABEL_TEXT_SIZE = 2;
+static constexpr float STATUS_DASHBOARD_LABEL_TEXT_SIZE = 1.5f;
+static constexpr uint8_t STATUS_DASHBOARD_COUNT_TEXT_SIZE = 2;
 static constexpr int16_t STATUS_DASHBOARD_LABEL_CENTER_Y = 11;
 static constexpr int16_t STATUS_DASHBOARD_COUNT_CENTER_Y = 40;
-
-inline uint8_t statusDashboardCountTextSize(uint8_t count) {
-  return count > 99 ? 2 : 3;
-}
 
 inline void statusDashboardApplyUnread(
   StatusDashboardCounts* counts,

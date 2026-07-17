@@ -25,12 +25,10 @@ int main() {
   statusDashboardFormatCount(text, sizeof(text), 255);
   assert(strcmp(text, "99+") == 0);
 
-  assert(STATUS_DASHBOARD_LABEL_TEXT_SIZE == 2);
+  assert(STATUS_DASHBOARD_LABEL_TEXT_SIZE == 1.5f);
   assert(STATUS_DASHBOARD_LABEL_CENTER_Y == 11);
   assert(STATUS_DASHBOARD_COUNT_CENTER_Y == 40);
-  assert(statusDashboardCountTextSize(0) == 3);
-  assert(statusDashboardCountTextSize(99) == 3);
-  assert(statusDashboardCountTextSize(100) == 2);
+  assert(STATUS_DASHBOARD_COUNT_TEXT_SIZE == 2);
 
   assert(statusDashboardColorRole(STATUS_RUN, 0) == STATUS_COLOR_DIM);
   assert(statusDashboardColorRole(STATUS_ASK, 0) == STATUS_COLOR_DIM);
