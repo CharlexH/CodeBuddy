@@ -8,6 +8,7 @@
 #include "ota_authorization_logic.h"
 #include "ota_manifest.h"
 #include "ota_manifest_logic.h"
+#include "status_dashboard_json.h"
 #include "utf8_text_logic.h"
 #include "usage_meter_json.h"
 #include "wifi_manager.h"
@@ -18,6 +19,8 @@ struct TamaState {
   uint8_t  sessionsTotal;
   uint8_t  sessionsRunning;
   uint8_t  sessionsWaiting;
+  bool     hasUnreadCount;
+  uint8_t  unreadCount;
   bool     recentlyCompleted;
   bool     hasCompletionSeq;
   uint32_t completionSeq;
@@ -267,6 +270,13 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
   out->sessionsRunning   = doc["running"]   | out->sessionsRunning;
   out->sessionsWaiting   = doc["waiting"]   | out->sessionsWaiting;
   out->recentlyCompleted = doc["completed"] | false;
+  StatusDashboardCounts dashboardCounts = {
+    out->hasUnreadCount,
+    out->unreadCount,
+  };
+  statusDashboardApplyUnreadJson(doc["unread"], &dashboardCounts);
+  out->hasUnreadCount = dashboardCounts.hasUnread;
+  out->unreadCount = dashboardCounts.unread;
   JsonVariantConst completionSeq = doc["completion_seq"];
   if (completionSeq.is<uint32_t>() && !completionSeq.is<bool>()) {
     out->hasCompletionSeq = true;
