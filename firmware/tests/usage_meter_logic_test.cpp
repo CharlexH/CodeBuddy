@@ -111,13 +111,33 @@ int main() {
   UsageMeterRenderPlan dashboardPlan = usageMeterLandscapeSinglePlan(meterUsage, 240, 135);
   expect_true(dashboardPlan.count == 2,
               "landscape dashboard should render one base and one fill");
+  expect_true(dashboardPlan.dotted && dashboardPlan.dotSize == 2 &&
+                  dashboardPlan.dotGap == 1,
+              "landscape dashboard should use two-pixel dots with one-pixel gaps");
+  expect_true(dashboardPlan.dotColumns == 79 && dashboardPlan.dotRows == 6,
+              "landscape dashboard should fit a 79 by 6 dot matrix");
+  expect_true(dashboardPlan.dotFilledColumns == 71,
+              "91 percent weekly remaining should fill 71 of 79 columns");
   expectMeterRect(
-    dashboardPlan.rects[0], 2, 113, 236, 20, USAGE_METER_CONSUMED,
-    "landscape dashboard base should use a 20-pixel bar in a 24-pixel footprint"
+    dashboardPlan.rects[0], 2, 116, 236, 17, USAGE_METER_CONSUMED,
+    "landscape dashboard bounds should center the dot matrix in the 20-pixel footer"
+  );
+  expect_true(dashboardPlan.rects[1].color == USAGE_METER_SEVEN_DAY,
+              "landscape dashboard should prefer the seven-day quota color");
+  expectMeterRect(
+    usageMeterDotRect(dashboardPlan, 0, 0), 2, 116, 2, 2,
+    USAGE_METER_SEVEN_DAY,
+    "the first filled dot should start at the left and top grid inset"
   );
   expectMeterRect(
-    dashboardPlan.rects[1], 2, 113, 214, 20, USAGE_METER_SEVEN_DAY,
-    "landscape dashboard should prefer the seven-day quota"
+    usageMeterDotRect(dashboardPlan, 71, 0), 215, 116, 2, 2,
+    USAGE_METER_CONSUMED,
+    "the first unfilled dot should use the consumed color after the weekly fill"
+  );
+  expectMeterRect(
+    usageMeterDotRect(dashboardPlan, 78, 5), 236, 131, 2, 2,
+    USAGE_METER_CONSUMED,
+    "the final dot should preserve two-pixel right and bottom margins"
   );
 
   expect_true(
@@ -179,10 +199,9 @@ int main() {
     "five-hour-only usage should use the bright-green single bar"
   );
   UsageMeterRenderPlan fiveOnlyDashboard = usageMeterLandscapeSinglePlan(fiveOnlyUsage, 240, 135);
-  expectMeterRect(
-    fiveOnlyDashboard.rects[1], 2, 113, 233, 20, USAGE_METER_FIVE_HOUR,
-    "landscape dashboard should fall back to five-hour usage when weekly is absent"
-  );
+  expect_true(fiveOnlyDashboard.dotFilledColumns == 78 &&
+                  fiveOnlyDashboard.rects[1].color == USAGE_METER_FIVE_HOUR,
+              "landscape dashboard should fall back to five-hour dots when weekly is absent");
   expect_true(
     usageMeterLandscapeSinglePlan(noMeterUsage, 240, 135).count == 0,
     "landscape dashboard should omit an unavailable meter"

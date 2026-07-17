@@ -229,6 +229,15 @@ static uint16_t statusDashboardColor(
 
 template <typename Canvas>
 static void paintUsageMeter(Canvas& canvas, const UsageMeterRenderPlan& plan) {
+  if (plan.dotted) {
+    for (uint8_t row = 0; row < plan.dotRows; ++row) {
+      for (uint16_t column = 0; column < plan.dotColumns; ++column) {
+        const UsageMeterRect dot = usageMeterDotRect(plan, column, row);
+        canvas.fillRect(dot.x, dot.y, dot.width, dot.height, dot.color);
+      }
+    }
+    return;
+  }
   for (uint8_t i = 0; i < plan.count; ++i) {
     const UsageMeterRect& rect = plan.rects[i];
     if (rect.width > 0) canvas.fillRect(rect.x, rect.y, rect.width, rect.height, rect.color);

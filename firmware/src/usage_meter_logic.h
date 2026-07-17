@@ -21,9 +21,14 @@ static constexpr uint8_t USAGE_METER_MIN_WIDTH = (USAGE_METER_SIDE_INSET * 2) + 
 static constexpr uint16_t USAGE_METER_CONSUMED = 0x10A2;
 static constexpr uint16_t USAGE_METER_FIVE_HOUR = 0x07E0;
 static constexpr uint16_t USAGE_METER_SEVEN_DAY = 0x03A0;
-static constexpr uint8_t LANDSCAPE_USAGE_METER_HEIGHT = 20;
-static constexpr uint8_t LANDSCAPE_USAGE_METER_FOOTPRINT = 24;
-static constexpr uint8_t LANDSCAPE_USAGE_METER_TOP_INSET = 2;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_FOOTPRINT = 20;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_TOP_INSET = 1;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_SIZE = 2;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_GAP = 1;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_ROWS = 6;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_GRID_HEIGHT =
+  (LANDSCAPE_USAGE_METER_DOT_ROWS * LANDSCAPE_USAGE_METER_DOT_SIZE) +
+  ((LANDSCAPE_USAGE_METER_DOT_ROWS - 1) * LANDSCAPE_USAGE_METER_DOT_GAP);
 
 struct UsageMeterRect {
   uint16_t x;
@@ -36,6 +41,12 @@ struct UsageMeterRect {
 struct UsageMeterRenderPlan {
   uint8_t count;
   UsageMeterRect rects[4];
+  bool dotted;
+  uint8_t dotSize;
+  uint8_t dotGap;
+  uint8_t dotRows;
+  uint16_t dotColumns;
+  uint16_t dotFilledColumns;
 };
 
 struct UsageMeterRenderState {
@@ -214,6 +225,10 @@ inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
   const uint16_t usableWidth = fullWidth - (USAGE_METER_SIDE_INSET * 2);
   const uint16_t y = fullHeight - LANDSCAPE_USAGE_METER_FOOTPRINT +
     LANDSCAPE_USAGE_METER_TOP_INSET;
+  const uint16_t dotPitch = LANDSCAPE_USAGE_METER_DOT_SIZE +
+    LANDSCAPE_USAGE_METER_DOT_GAP;
+  const uint16_t dotColumns = (usableWidth + LANDSCAPE_USAGE_METER_DOT_GAP) /
+    dotPitch;
   const bool useSevenDay = state.hasSevenDay;
   const uint8_t remaining = useSevenDay
     ? state.sevenDayRemaining
@@ -221,23 +236,52 @@ inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
   const uint16_t color = useSevenDay
     ? USAGE_METER_SEVEN_DAY
     : USAGE_METER_FIVE_HOUR;
+  const uint16_t filledColumns = usageMeterFillWidth(dotColumns, remaining);
+  const uint16_t filledWidth = filledColumns == 0
+    ? 0
+    : (filledColumns * LANDSCAPE_USAGE_METER_DOT_SIZE) +
+      ((filledColumns - 1) * LANDSCAPE_USAGE_METER_DOT_GAP);
 
   plan.count = 2;
   plan.rects[0] = {
     USAGE_METER_SIDE_INSET,
     y,
     usableWidth,
-    LANDSCAPE_USAGE_METER_HEIGHT,
+    LANDSCAPE_USAGE_METER_GRID_HEIGHT,
     USAGE_METER_CONSUMED,
   };
   plan.rects[1] = {
     USAGE_METER_SIDE_INSET,
     y,
-    usageMeterFillWidth(usableWidth, remaining),
-    LANDSCAPE_USAGE_METER_HEIGHT,
+    filledWidth,
+    LANDSCAPE_USAGE_METER_GRID_HEIGHT,
     color,
   };
+  plan.dotted = true;
+  plan.dotSize = LANDSCAPE_USAGE_METER_DOT_SIZE;
+  plan.dotGap = LANDSCAPE_USAGE_METER_DOT_GAP;
+  plan.dotRows = LANDSCAPE_USAGE_METER_DOT_ROWS;
+  plan.dotColumns = dotColumns;
+  plan.dotFilledColumns = filledColumns;
   return plan;
+}
+
+inline UsageMeterRect usageMeterDotRect(
+  const UsageMeterRenderPlan& plan,
+  uint16_t column,
+  uint8_t row
+) {
+  if (!plan.dotted || column >= plan.dotColumns || row >= plan.dotRows) {
+    return {};
+  }
+  const uint16_t pitch = plan.dotSize + plan.dotGap;
+  return {
+    static_cast<uint16_t>(plan.rects[0].x + (column * pitch)),
+    static_cast<uint16_t>(plan.rects[0].y + (row * pitch)),
+    plan.dotSize,
+    plan.dotSize,
+    column < plan.dotFilledColumns ? plan.rects[1].color : plan.rects[0].color,
+  };
 }
 
 inline UsageMeterRenderFrame usageMeterPrepareFrame(

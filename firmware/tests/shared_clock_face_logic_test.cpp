@@ -100,8 +100,8 @@ int main() {
                   landscape.date.month.y >= 60 &&
                   landscape.date.day.y + landscape.date.day.height <= 111,
               "landscape pet clears and clock/date text should stay in their non-overlapping regions");
-  expect_true(landscape.meterY == 111 && landscape.meterFootprint == 24,
-              "landscape meter footprint should occupy the final 24 pixels from y 111");
+  expect_true(landscape.meterY == 115 && landscape.meterFootprint == 20,
+              "landscape meter footprint should occupy the final 20 pixels from y 115");
 
   SharedClockFaceContext context = {};
   context.normalDisplay = true;
