@@ -119,24 +119,24 @@ int main() {
   expect_true(dashboardPlan.dotFilledColumns == 53,
               "91 percent weekly remaining should fill 53 of 59 columns");
   expectMeterRect(
-    dashboardPlan.rects[0], 2, 116, 236, 18, USAGE_METER_CONSUMED,
+    dashboardPlan.rects[0], 2, 116, 236, 18, LANDSCAPE_USAGE_METER_CONSUMED,
     "landscape dashboard bounds should center the dot matrix in the 20-pixel footer"
   );
-  expect_true(dashboardPlan.rects[1].color == USAGE_METER_SEVEN_DAY,
-              "landscape dashboard should prefer the seven-day quota color");
+  expect_true(dashboardPlan.rects[1].color == LANDSCAPE_USAGE_METER_ACTIVE,
+              "landscape dashboard should use the same bright green as RUN");
   expectMeterRect(
     usageMeterDotRect(dashboardPlan, 0, 0), 2, 116, 2, 2,
-    USAGE_METER_SEVEN_DAY,
+    LANDSCAPE_USAGE_METER_ACTIVE,
     "the first filled dot should start at the left and top grid inset"
   );
   expectMeterRect(
     usageMeterDotRect(dashboardPlan, 53, 0), 214, 116, 2, 2,
-    USAGE_METER_CONSUMED,
+    LANDSCAPE_USAGE_METER_CONSUMED,
     "the first unfilled dot should use the consumed color after the weekly fill"
   );
   expectMeterRect(
     usageMeterDotRect(dashboardPlan, 58, 4), 234, 132, 2, 2,
-    USAGE_METER_CONSUMED,
+    LANDSCAPE_USAGE_METER_CONSUMED,
     "the final dot should preserve the centered footer margins"
   );
 
@@ -200,8 +200,8 @@ int main() {
   );
   UsageMeterRenderPlan fiveOnlyDashboard = usageMeterLandscapeSinglePlan(fiveOnlyUsage, 240, 135);
   expect_true(fiveOnlyDashboard.dotFilledColumns == 58 &&
-                  fiveOnlyDashboard.rects[1].color == USAGE_METER_FIVE_HOUR,
-              "landscape dashboard should fall back to five-hour dots when weekly is absent");
+                  fiveOnlyDashboard.rects[1].color == LANDSCAPE_USAGE_METER_ACTIVE,
+              "landscape dashboard should keep the same bright-green dots for five-hour usage");
   expect_true(
     usageMeterLandscapeSinglePlan(noMeterUsage, 240, 135).count == 0,
     "landscape dashboard should omit an unavailable meter"

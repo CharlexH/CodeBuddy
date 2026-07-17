@@ -21,6 +21,8 @@ static constexpr uint8_t USAGE_METER_MIN_WIDTH = (USAGE_METER_SIDE_INSET * 2) + 
 static constexpr uint16_t USAGE_METER_CONSUMED = 0x10A2;
 static constexpr uint16_t USAGE_METER_FIVE_HOUR = 0x07E0;
 static constexpr uint16_t USAGE_METER_SEVEN_DAY = 0x03A0;
+static constexpr uint16_t LANDSCAPE_USAGE_METER_ACTIVE = 0x07E0;
+static constexpr uint16_t LANDSCAPE_USAGE_METER_CONSUMED = 0x19C5;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_FOOTPRINT = 20;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_TOP_INSET = 1;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_SIZE = 2;
@@ -233,9 +235,7 @@ inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
   const uint8_t remaining = useSevenDay
     ? state.sevenDayRemaining
     : state.fiveHourRemaining;
-  const uint16_t color = useSevenDay
-    ? USAGE_METER_SEVEN_DAY
-    : USAGE_METER_FIVE_HOUR;
+  const uint16_t color = LANDSCAPE_USAGE_METER_ACTIVE;
   const uint16_t filledColumns = usageMeterFillWidth(dotColumns, remaining);
   const uint16_t filledWidth = filledColumns == 0
     ? 0
@@ -248,7 +248,7 @@ inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
     y,
     usableWidth,
     LANDSCAPE_USAGE_METER_GRID_HEIGHT,
-    USAGE_METER_CONSUMED,
+    LANDSCAPE_USAGE_METER_CONSUMED,
   };
   plan.rects[1] = {
     USAGE_METER_SIDE_INSET,

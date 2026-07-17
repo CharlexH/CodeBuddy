@@ -999,17 +999,17 @@ static void drawSharedClockFaceTo(
     for (uint8_t i = 0; i < 3; ++i) {
       const int16_t centerX = layout.status.x +
         (i * layout.status.columnWidth) + (layout.status.columnWidth / 2);
-      canvas.setTextSize(1);
+      canvas.setTextSize(STATUS_DASHBOARD_LABEL_TEXT_SIZE);
       canvas.setTextColor(p.textDim, p.bg);
-      canvas.drawString(labels[i], centerX, 13);
+      canvas.drawString(labels[i], centerX, STATUS_DASHBOARD_LABEL_CENTER_Y);
       char countText[4] = {};
       statusDashboardFormatCount(countText, sizeof(countText), counts[i]);
-      canvas.setTextSize(2);
+      canvas.setTextSize(statusDashboardCountTextSize(counts[i]));
       canvas.setTextColor(
         statusDashboardColor(statusDashboardColorRole(kinds[i], counts[i]), p),
         p.bg
       );
-      canvas.drawString(countText, centerX, 38);
+      canvas.drawString(countText, centerX, STATUS_DASHBOARD_COUNT_CENTER_Y);
     }
   }
 
