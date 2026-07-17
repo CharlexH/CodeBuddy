@@ -101,7 +101,12 @@ class CodexEventSource:
         self._upstream: Optional[websockets.WebSocketClientProtocol] = None
         self._pending: Dict[str, PendingApproval] = {}
         self._approved_mutating_turns: set[tuple[str, str]] = set()
-        self._forward_lock = asyncio.Lock()
+        self._forward_lock: Optional[asyncio.Lock] = None
+
+    def _get_forward_lock(self) -> asyncio.Lock:
+        if self._forward_lock is None:
+            self._forward_lock = asyncio.Lock()
+        return self._forward_lock
 
     async def start(self) -> None:
         self._server = await websockets.serve(self._handle_client, self.listen_host, self.listen_port)
@@ -123,7 +128,7 @@ class CodexEventSource:
         if decision == "once":
             self._record_approved_turn(pending)
         payload = {"id": self._coerce_id(request_id), "result": map_device_decision_to_codex_response(decision)}
-        async with self._forward_lock:
+        async with self._get_forward_lock():
             await self._upstream.send(json.dumps(payload))
 
     async def _handle_client(self, downstream: WebSocketServerProtocol) -> None:
@@ -148,7 +153,7 @@ class CodexEventSource:
             message = json.loads(raw)
             if self._is_late_approval_response(message):
                 continue
-            async with self._forward_lock:
+            async with self._get_forward_lock():
                 await upstream.send(raw)
 
     async def _forward_upstream(
@@ -223,7 +228,7 @@ class CodexEventSource:
             self._pending[request_id] = approval
             if self._should_auto_accept(approval):
                 approval.resolved = True
-                async with self._forward_lock:
+                async with self._get_forward_lock():
                     await self._upstream.send(
                         json.dumps(
                             {

@@ -1,6 +1,8 @@
 # Code Buddy Firmware
 
-This firmware targets the M5Stack StickS3 and turns it into a Code Buddy approval device for Codex CLI.
+This firmware targets the M5Stack StickS3 and turns it into a Code Buddy display
+and approval device. Managed Codex CLI sessions support approvals, while Codex
+Desktop contributes read-only task status and completion cues through the host.
 
 > Building your own hardware client instead? See [REFERENCE.md](REFERENCE.md) for the BLE protocol and JSON payloads.
 
@@ -16,7 +18,7 @@ Primary path:
 Fallback path:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.2-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.13-full.bin
 ```
 
 After flashing, go back to the Mac and run:
@@ -26,6 +28,17 @@ code-buddy
 ```
 
 That will request Bluetooth permission, pair the StickS3, sync time, and finish the Mac-side setup.
+
+## Runtime display
+
+When the device is landscape, the shared face keeps the pet on the left and
+shows `RUN`, `ASK`, and `NEW` task counts on the right. The bottom 2x2-dot meter
+shows the remaining Codex allowance. A short chime plays once per completed
+turn when **Settings > sound** is enabled.
+
+The OTA-capable firmware can receive signed app-only updates from
+`code-buddy firmware update`. **Settings > auto ota** enables automatic trusted
+updates. Full recovery images remain USB-only and must be written at `0x0`.
 
 ## Developer Build Path
 
@@ -46,6 +59,9 @@ Build the merged GitHub Release artifact:
 ```bash
 ../scripts/build-firmware-release.sh
 ```
+
+The script writes both `dist/firmware/code-buddy-sticks3-v{version}-full.bin`
+for USB flashing at `0x0` and `*-app.bin` for OTA.
 
 ## Controls
 

@@ -30,6 +30,14 @@
 - A StickS3 firmware build with status, approval, settings, and offline screens.
 - A daily workflow designed to stay out of the way: run `code-buddy` once, then just use `codex`.
 
+## Highlights in v0.1.13
+
+- A landscape dashboard keeps the pet on the left and shows `RUN`, `ASK`, and `NEW` task counts on the right.
+- The bottom dot-matrix meter shows the remaining Codex allowance, preferring the seven-day window when available and falling back to the five-hour window.
+- One short chime plays after a complete Codex turn. This includes managed CLI sessions and main Codex Desktop tasks discovered from local session logs; repeated snapshots and subagent turns are de-duplicated.
+- Secure Wi-Fi OTA supports manual Mac-push updates and an optional automatic update mode, with signed manifests, physical confirmation, rollback checks, and compact on-device progress.
+- The charging clock and active runtime share the landscape layout while keeping approval and settings interactions readable.
+
 ## Quick start
 
 ### 1. Flash the StickS3
@@ -43,7 +51,7 @@ Preferred path:
 Fallback:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.2-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.13-full.bin
 ```
 
 Developer release build:
@@ -72,7 +80,9 @@ On first run, Code Buddy will:
 - install the local `codex` shim
 - add `~/.code-buddy/bin` to `~/.zprofile`
 
-If you are already on the current StickS3 firmware, host-side fixes like BLE helper reconnect cleanup and oversized multilingual snapshot handling do not require reflashing the device.
+Host-only updates do not require reflashing when the installed firmware remains
+protocol-compatible. Features that change the display, sound, or OTA runtime do
+require the matching firmware release.
 
 ### Wireless firmware updates
 
@@ -98,6 +108,10 @@ missing, repeat the explicit USB trust bootstrap. B or Ctrl-C cancels before
 the boot slot is committed; the Mac reports success only after reconnection
 proves the embedded target version is running and first-boot health is valid.
 
+Turn on **Settings > auto ota** to let the device accept a newer trusted release
+without opening the manual confirmation screen. Automatic updates still use the
+same signed manifest, version policy, boot-health validation, and rollback path.
+
 The native BLE helper runs as a background macOS agent during normal use, so reconnect attempts should not open a helper window or steal focus. macOS may still show the first Bluetooth permission prompt; that system prompt cannot be skipped. For helper debugging, start it with `CODE_BUDDY_BLE_HELPER_DEBUG_WINDOW=1` to show the event log window.
 
 ### 3. Use it normally
@@ -107,6 +121,10 @@ codex
 ```
 
 Open a new shell after setup. From there, Code Buddy keeps the bridge alive and shows approval prompts on the StickS3 while you keep your normal CLI flow.
+
+Codex Desktop tasks are discovered read-only from local Codex session logs. They
+can update the dashboard, unread count, and completion chime, but Desktop
+approval requests are not proxied through the device.
 
 ## Controls
 

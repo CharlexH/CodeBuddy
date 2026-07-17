@@ -30,6 +30,14 @@
 - 一套 StickS3 固件，包含状态页、审批页、设置页和离线页。
 - 一套尽量不打扰日常工作的流程：先跑一次 `code-buddy`，之后直接用 `codex`。
 
+## v0.1.13 亮点
+
+- 横屏状态页左侧显示宠物，右侧用 `RUN`、`ASK`、`NEW` 显示运行中、待确认和未查看任务数量。
+- 底部点阵额度条显示 Codex 剩余额度：有七天窗口时优先显示七天额度，否则显示五小时额度。
+- 每个完整 Codex turn 结束后只响一次；既支持受管的 CLI 会话，也支持从本地日志发现的 Codex Desktop 主任务，并会自动排除重复快照和 subagent 完成事件。
+- 安全 Wi-Fi OTA 支持 Mac 手动推送和可选的自动更新，包含签名清单、物理确认、回滚检查和设备端紧凑进度提示。
+- 充电时钟和任务运行界面共用横屏布局，同时保证审批与设置界面可读。
+
 ## 快速开始
 
 ### 1. 给 StickS3 刷机
@@ -43,7 +51,7 @@
 兜底方式：
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.2-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.13-full.bin
 ```
 
 开发者本地生成 release 镜像：
@@ -51,6 +59,8 @@ esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 
 ```bash
 ./scripts/build-firmware-release.sh
 ```
+
+脚本会生成两种不同的文件：`*-full.bin` 是 USB 恢复/首次刷写镜像，`*-app.bin` 是 OTA 使用的应用镜像。不要把合并后的 `full.bin` 传给 OTA 命令。
 
 ### 2. 在 macOS 上安装
 
@@ -68,7 +78,25 @@ code-buddy
 - 安装本地 `codex` shim
 - 把 `~/.code-buddy/bin` 加进 `~/.zprofile`
 
-如果你的 StickS3 已经刷着当前固件，那么像 BLE helper 重连清理、以及多语言 snapshot 过长这类主机侧修复，都不需要重新刷机。
+仅主机侧的更新在协议仍兼容时不需要重新刷机；涉及屏幕、声音或 OTA 运行时的功能，需要配套版本的设备固件。
+
+### 无线固件更新
+
+首次通过 USB 刷入支持 OTA 的完整固件，并在设备设置中配置 Wi-Fi 后，打开 **Settings > OTA update**，然后运行：
+
+```bash
+code-buddy firmware update
+```
+
+开发固件可以显式指定 app-only 镜像：
+
+```bash
+code-buddy firmware update --firmware firmware/.pio/build/m5stack-sticks3/firmware.bin
+```
+
+主机代理会作为唯一的蓝牙所有者，为一次性不可变清单签名，通过短时本地 HTTPS 提供 app-only 镜像，并等待设备 A 键确认。Mac 只有在设备重连并证明目标版本已运行、首次启动健康状态有效后才会报告成功。不要把 `*-full.bin` 用于 OTA。
+
+打开 **Settings > auto ota** 后，设备可以自动接受更新的可信版本。自动更新仍遵循相同的签名、版本、启动健康检查和回滚策略。
 
 正常使用时，原生 BLE helper 会作为 macOS 后台 agent 运行，所以重连过程不应该再打开 helper 窗口或抢走焦点。macOS 首次蓝牙权限确认仍可能出现，这是系统权限弹窗，不能跳过。如果需要调试 helper 事件，可以用 `CODE_BUDDY_BLE_HELPER_DEBUG_WINDOW=1` 打开事件日志窗口。
 
@@ -79,6 +107,8 @@ codex
 ```
 
 初始化完成后请开一个新 shell。此后你可以保持原来的 CLI 使用方式，Code Buddy 会在后台维持桥接，并把审批提示显示到 StickS3 上。
+
+Codex Desktop 任务通过本地 Codex 会话日志以只读方式发现，可以更新状态数字、未查看数量和完成提示音；Desktop 的审批请求不会转发到设备。
 
 ## 按键说明
 

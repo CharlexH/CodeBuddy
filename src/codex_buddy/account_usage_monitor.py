@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 import websockets
 
+from . import __version__
 from .bridge import _free_port, _terminate_process_group, start_loopback_app_server, wait_for_loopback_app_server_ready
 from .usage_limits import USAGE_LIMITS_FRESHNESS_SECONDS, UsageDisplay, UsageLimits
 
@@ -204,7 +205,7 @@ class AccountUsageMonitor:
                 "clientInfo": {
                     "name": "code_buddy",
                     "title": "Code Buddy",
-                    "version": "0.1.4",
+                    "version": __version__,
                 }
             },
         )

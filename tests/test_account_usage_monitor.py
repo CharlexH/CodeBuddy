@@ -10,6 +10,7 @@ from typing import Optional
 
 import pytest
 
+from codex_buddy import __version__
 from codex_buddy import account_usage_monitor
 from codex_buddy.account_usage_monitor import AccountUsageMonitor
 from codex_buddy.usage_limits import USAGE_LIMITS_FRESHNESS_SECONDS, UsageDisplay
@@ -506,6 +507,7 @@ def test_monitor_reads_rate_limits_merges_sparse_updates_and_exposes_only_displa
             "account/rateLimits/read",
             "thread/list",
         ]
+        assert socket.sent[0]["params"]["clientInfo"]["version"] == __version__
         assert seen == [UsageDisplay(five_hour_remaining=72, seven_day_remaining=91)]
         assert all(isinstance(value, UsageDisplay) or value is None for value in seen)
 
