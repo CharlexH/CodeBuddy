@@ -36,6 +36,12 @@ struct SharedClockTextRect {
   SharedClockTextRole role;
 };
 
+inline constexpr int16_t sharedClockTextRectCenterX(
+  const SharedClockTextRect& rect
+) {
+  return rect.x + static_cast<int16_t>(rect.width / 2);
+}
+
 struct SharedClockTimeLayout {
   SharedClockTextRect primary;
   SharedClockTextRect seconds;
@@ -138,7 +144,7 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
         {0, 53, 120, 58, 1, -13, true},
         {
           {8, 4, 120, 32, SHARED_CLOCK_TEXT_PRIMARY},
-          {128, 4, 72, 32, SHARED_CLOCK_TEXT_DIM},
+          {120, 4, 72, 32, SHARED_CLOCK_TEXT_DIM},
           20,
           3.75f,
           4.0f,
@@ -149,7 +155,7 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           0,
           0,
           {204, 3, 28, 12, SHARED_CLOCK_TEXT_DIM},
-          {208, 21, 24, 16, SHARED_CLOCK_TEXT_DIM},
+          {204, 21, 28, 16, SHARED_CLOCK_TEXT_DIM},
           1.5f,
           2.0f,
         },

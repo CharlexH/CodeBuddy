@@ -958,12 +958,20 @@ static void drawSharedClockFaceTo(
         snprintf(month, sizeof(month), "---");
         snprintf(day, sizeof(day), "--");
       }
-      canvas.setTextDatum(TL_DATUM);
+      canvas.setTextDatum(TC_DATUM);
       canvas.setTextColor(p.textDim, p.bg);
       canvas.setTextSize(layout.date.monthTextSize);
-      canvas.drawString(month, layout.date.month.x, layout.date.month.y);
+      canvas.drawString(
+        month,
+        sharedClockTextRectCenterX(layout.date.month),
+        layout.date.month.y
+      );
       canvas.setTextSize(layout.date.dayTextSize);
-      canvas.drawString(day, layout.date.day.x, layout.date.day.y);
+      canvas.drawString(
+        day,
+        sharedClockTextRectCenterX(layout.date.day),
+        layout.date.day.y
+      );
     } else {
       char dateLine[16];
       clockFormatSharedDateLine(

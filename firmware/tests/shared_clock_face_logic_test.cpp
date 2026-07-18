@@ -78,11 +78,11 @@ int main() {
                   landscape.time.centerY == 20,
               "landscape HH:MM should be two pixels shorter while seconds retain text size 4");
   expect_true(landscape.time.showSeconds &&
-                  landscape.time.seconds.x == 128 &&
+                  landscape.time.seconds.x == 120 &&
                   landscape.time.seconds.y == 4 &&
                   landscape.time.seconds.width == 72 &&
                   landscape.time.seconds.height == 32,
-              "landscape :SS should continue beside HH:MM at text size 4");
+              "landscape :SS should close the extra gap after HH:MM");
   expect_true(landscape.time.seconds.role == SHARED_CLOCK_TEXT_DIM,
               "landscape seconds should stay visually secondary");
   expect_true(landscape.time.primary.role == SHARED_CLOCK_TEXT_PRIMARY,
@@ -94,14 +94,16 @@ int main() {
   expect_true(landscape.date.month.x == 204 && landscape.date.month.y == 3 &&
                   landscape.date.month.width == 28 && landscape.date.month.height == 12,
               "landscape month should fit a right-aligned three-letter abbreviation");
-  expect_true(landscape.date.day.x == 208 && landscape.date.day.y == 21 &&
-                  landscape.date.day.width == 24 && landscape.date.day.height == 16,
-              "landscape day should be a right-aligned two-digit line below the month");
-  expect_true(landscape.date.month.x + landscape.date.month.width ==
-                  landscape.date.day.x + landscape.date.day.width &&
+  expect_true(landscape.date.day.x == 204 && landscape.date.day.y == 21 &&
+                  landscape.date.day.width == 28 && landscape.date.day.height == 16,
+              "landscape day should share the month block width below it");
+  expect_true(sharedClockTextRectCenterX(landscape.date.month) == 218 &&
+                  sharedClockTextRectCenterX(landscape.date.day) == 218 &&
+                  landscape.date.month.x + landscape.date.month.width == 232 &&
+                  landscape.date.day.x + landscape.date.day.width == 232 &&
                   landscape.date.day.y -
                     (landscape.date.month.y + landscape.date.month.height) == 6,
-              "landscape month and day should share a right edge with a compact gap");
+              "landscape month and day should be centered together in a right-aligned block");
   expect_true(landscape.time.primary.y + landscape.time.primary.height < landscape.pet.y &&
                   landscape.date.day.y + landscape.date.day.height < landscape.status.y &&
                   landscape.pet.y + landscape.pet.height <= 111 &&
