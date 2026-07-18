@@ -52,6 +52,41 @@ struct CompactTextPlacement {
   uint8_t visibleCharacters;
 };
 
+struct CompactGifPlacement {
+  int16_t x;
+  int16_t y;
+  uint16_t width;
+  uint16_t height;
+  uint8_t scaleNumerator;
+  uint8_t scaleDenominator;
+};
+
+inline CompactGifPlacement compactGifPlacement(
+  uint16_t gifWidth,
+  uint16_t gifHeight,
+  int16_t petX,
+  int16_t petY,
+  uint16_t petWidth,
+  uint16_t petHeight,
+  uint8_t scaleNumerator,
+  uint8_t scaleDenominator
+) {
+  const uint16_t width = static_cast<uint16_t>(
+    static_cast<uint32_t>(gifWidth) * scaleNumerator / scaleDenominator
+  );
+  const uint16_t height = static_cast<uint16_t>(
+    static_cast<uint32_t>(gifHeight) * scaleNumerator / scaleDenominator
+  );
+  return {
+    static_cast<int16_t>(petX + (petWidth - width) / 2),
+    static_cast<int16_t>(petY + (petHeight - height) / 2),
+    width,
+    height,
+    scaleNumerator,
+    scaleDenominator,
+  };
+}
+
 inline constexpr RuntimePetLayout runtimePetLayout(bool landscape) {
   return landscape ? RuntimePetLayout{240, 119, 120, 59, 1, 18}
                    : RuntimePetLayout{135, 224, 67, 112, 2, 30};

@@ -91,6 +91,13 @@ int main() {
   compact = compactCharacterRenderDecision(true, false, 0, 100, 100, true);
   expect_true(compact.kind == COMPACT_CHARACTER_NONE && !compact.render,
               "text mode without frames should remain unavailable even when forced dirty");
+  const CompactGifPlacement compactGif = compactGifPlacement(
+    96, 100, 0, 0, 120, 64, 3, 5
+  );
+  expect_true(compactGif.x == 31 && compactGif.y == 2 &&
+                  compactGif.width == 57 && compactGif.height == 60 &&
+                  compactGif.scaleNumerator == 3 && compactGif.scaleDenominator == 5,
+              "compact GIFs should render at three-fifths scale and center in the pet region");
   const CompactTextPlacement compactText = compactTextPlacement(19, 0, 0, 115, 90);
   expect_true(compactText.visibleCharacters == 9 && compactText.x == 3 && compactText.y == 37,
               "long compact text frames should be clipped and centered inside the pet rectangle");

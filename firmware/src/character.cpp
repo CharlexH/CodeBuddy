@@ -49,7 +49,8 @@ static int         runtimeViewportHeight = 224;
 // Draw target — defaults to the sprite; characterRenderTo() retargets to
 // M5.Lcd for the landscape clock (both inherit TFT_eSPI).
 static lgfx::LovyanGFX*   _tgt = &spr;
-static uint8_t     directScaleDivisor = 0;
+static uint8_t     directScaleNumerator = 0;
+static uint8_t     directScaleDenominator = 1;
 static int         directClipWidth = 0;
 static int         directClipHeight = 0;
 static bool        directRuntimeDirty = true;
@@ -146,28 +147,38 @@ static void gifDrawCb(GIFDRAW* d) {
     _tgt->drawPixel(x, y, (hasT && idx == t) ? pal.bg : pal16[idx]);
   };
 
-  bool halfScale = directScaleDivisor == 2
-      || (directScaleDivisor == 0 && peekMode);
-  if (halfScale) {
-    if (srcY & 1) return;
-    int y = gifY + (srcY >> 1);
-    int clipHeight = directScaleDivisor ? directClipHeight : PEEK_TOP;
-    int clipWidth = directScaleDivisor ? directClipWidth : spr.width();
+  bool directScale = directScaleNumerator > 0;
+  bool scaled = directScale || peekMode;
+  if (scaled) {
+    const uint8_t numerator = directScale ? directScaleNumerator : 1;
+    const uint8_t denominator = directScale ? directScaleDenominator : 2;
+    const int outputY = srcY * numerator / denominator;
+    if ((srcY + 1) * numerator / denominator == outputY) return;
+    int y = gifY + outputY;
+    int clipHeight = directScale ? directClipHeight : PEEK_TOP;
+    int clipWidth = directScale ? directClipWidth : spr.width();
     if (y < 0 || y >= clipHeight) return;
-    int x0 = gifX + (d->iX >> 1);
-    int w  = d->iWidth >> 1;
-    if (x0 < 0) { src += (-x0) << 1; w += x0; x0 = 0; }
+    int x0 = gifX + d->iX * numerator / denominator;
+    int w  = d->iWidth * numerator / denominator;
+    if (x0 < 0) {
+      int skipped = -x0;
+      src += skipped * denominator / numerator;
+      w -= skipped;
+      x0 = 0;
+    }
     if (x0 + w > clipWidth) w = clipWidth - x0;
     if (w <= 0) return;
-    for (int i = 0; i < w; i++) put(x0 + i, y, src[i << 1]);
+    for (int i = 0; i < w; i++) {
+      put(x0 + i, y, src[i * denominator / numerator]);
+    }
     return;
   }
 
   int y = gifY + srcY;
-  int clipHeight = directScaleDivisor
+  int clipHeight = directScaleNumerator
       ? directClipHeight
       : (runtimeViewport ? runtimeViewportHeight : spr.height());
-  int clipWidth = directScaleDivisor
+  int clipWidth = directScaleNumerator
       ? directClipWidth
       : (runtimeViewport ? runtimeViewportWidth : spr.width());
   if (y < 0 || y >= clipHeight) return;
@@ -312,6 +323,8 @@ void characterRenderCompactTo(
   int petY,
   int petWidth,
   int petHeight,
+  uint8_t gifScaleNumerator,
+  uint8_t gifScaleDenominator,
   bool forceDirty
 ) {
   uint8_t textFrameCount = 0;
@@ -330,7 +343,49 @@ void characterRenderCompactTo(
   if (decision.kind == COMPACT_CHARACTER_GIF) {
     // Full GIF frames self-erase transparent pixels. Do not clear the compact
     // box first or the display flashes between the clear and decoded scanlines.
-    characterRenderTo(tgt, centerX, centerY, forceDirty || directRuntimeDirty);
+    CompactGifPlacement placement = compactGifPlacement(
+      gifW,
+      gifH,
+      petX,
+      petY,
+      petWidth,
+      petHeight,
+      gifScaleNumerator,
+      gifScaleDenominator
+    );
+    lgfx::LovyanGFX* previousTarget = _tgt;
+    bool previousPeek = peekMode;
+    int previousX = gifX;
+    int previousY = gifY;
+    uint8_t previousNumerator = directScaleNumerator;
+    uint8_t previousDenominator = directScaleDenominator;
+    int previousClipWidth = directClipWidth;
+    int previousClipHeight = directClipHeight;
+
+    _tgt = tgt;
+    peekMode = false;
+    gifX = placement.x;
+    gifY = placement.y;
+    directScaleNumerator = placement.scaleNumerator;
+    directScaleDenominator = placement.scaleDenominator;
+    directClipWidth = petX + petWidth;
+    directClipHeight = petY + petHeight;
+
+    int delayMs = 0;
+    if (!gif.playFrame(false, &delayMs)) {
+      gif.reset();
+      gif.playFrame(false, &delayMs);
+    }
+    nextFrameAt = now + (delayMs > 0 ? delayMs : 100);
+
+    _tgt = previousTarget;
+    peekMode = previousPeek;
+    gifX = previousX;
+    gifY = previousY;
+    directScaleNumerator = previousNumerator;
+    directScaleDenominator = previousDenominator;
+    directClipWidth = previousClipWidth;
+    directClipHeight = previousClipHeight;
     directRuntimeDirty = false;
     return;
   }
@@ -415,11 +470,13 @@ void characterRenderRuntimeTo(
   bool previousPeek = peekMode;
   int previousX = gifX;
   int previousY = gifY;
-  uint8_t previousDivisor = directScaleDivisor;
+  uint8_t previousNumerator = directScaleNumerator;
+  uint8_t previousDenominator = directScaleDenominator;
   int previousClipWidth = directClipWidth;
   int previousClipHeight = directClipHeight;
 
-  directScaleDivisor = placement.scaleDivisor;
+  directScaleNumerator = 1;
+  directScaleDenominator = placement.scaleDivisor;
   directClipWidth = viewportWidth;
   directClipHeight = viewportHeight;
   _tgt = tgt;
@@ -438,7 +495,8 @@ void characterRenderRuntimeTo(
   peekMode = previousPeek;
   gifX = previousX;
   gifY = previousY;
-  directScaleDivisor = previousDivisor;
+  directScaleNumerator = previousNumerator;
+  directScaleDenominator = previousDenominator;
   directClipWidth = previousClipWidth;
   directClipHeight = previousClipHeight;
   directRuntimeDirty = false;

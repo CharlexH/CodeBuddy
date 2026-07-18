@@ -1081,6 +1081,8 @@ static void drawSharedClockFaceTo(
         petY,
         layout.pet.width,
         layout.pet.height,
+        landscape ? 3 : 1,
+        landscape ? 5 : 2,
         decision.fullRepaint
       );
     }

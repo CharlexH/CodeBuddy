@@ -141,7 +141,7 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
     ? SharedClockFaceLayout{
         240,
         135,
-        {0, 53, 120, 58, 1, -13, true},
+        {0, 44, 120, 64, 1, -13, true},
         {
           {8, 4, 120, 32, SHARED_CLOCK_TEXT_PRIMARY},
           {120, 4, 72, 32, SHARED_CLOCK_TEXT_DIM},
@@ -159,7 +159,7 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           1.5f,
           2.0f,
         },
-        {true, 120, 57, 120, 54, 40},
+        {true, 120, 49, 120, 54, 40},
         115,
         20,
       }

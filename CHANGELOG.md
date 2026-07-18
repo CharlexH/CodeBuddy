@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.17 - 2026-07-19
+
+- Lifted and vertically centered the landscape pet and task-status regions, enlarged the pet viewport, and increased GIF pet rendering from 50% to 60% scale.
+
 ## 0.1.16 - 2026-07-19
 
 - Centered the stacked landscape month and day within their right-aligned block and tightened the minute-to-second spacing.

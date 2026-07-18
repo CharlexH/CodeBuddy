@@ -34,6 +34,8 @@ void characterRenderCompactTo(
   int petY,
   int petWidth,
   int petHeight,
+  uint8_t gifScaleNumerator,
+  uint8_t gifScaleDenominator,
   bool forceDirty = false
 );
 void characterSetRuntimeViewport(bool enabled, int width = 135, int height = 224);

@@ -49,22 +49,25 @@ int main() {
   const SharedClockFaceLayout landscape = sharedClockFaceLayout(true);
   expect_true(landscape.screenWidth == 240 && landscape.screenHeight == 135,
               "landscape shared face should use the full 240x135 display");
-  expect_true(landscape.pet.x == 0 && landscape.pet.y == 53 &&
-                  landscape.pet.width == 120 && landscape.pet.height == 58,
-              "landscape shared face should move the pet into the middle-left region");
+  expect_true(landscape.pet.x == 0 && landscape.pet.y == 44 &&
+                  landscape.pet.width == 120 && landscape.pet.height == 64,
+              "landscape shared face should enlarge and lift the pet region");
   expect_true(landscape.pet.x + landscape.pet.width / 2 == 60 &&
-                  landscape.pet.y + landscape.pet.height / 2 == 82,
-              "landscape compact pet should be centered at 60,82");
+                  landscape.pet.y + landscape.pet.height / 2 == 76,
+              "landscape compact pet should be centered at 60,76");
   expect_true(landscape.status.visible && landscape.status.x == 120 &&
-                  landscape.status.y == 57 && landscape.status.width == 120 &&
+                  landscape.status.y == 49 && landscape.status.width == 120 &&
                   landscape.status.height == 54 && landscape.status.columnWidth == 40,
-              "landscape status dashboard should move into the middle-right region");
+              "landscape status dashboard should share the enlarged pet's center line");
+  expect_true(landscape.status.y + landscape.status.height / 2 ==
+                  landscape.pet.y + landscape.pet.height / 2,
+              "landscape pet and status regions should be vertically centered together");
   expect_true(landscape.pet.useLocalSurface && landscape.pet.asciiScale == 1 &&
                   landscape.pet.asciiYOffset == -13,
               "landscape pet rendering should clip through its local surface and lift 1x ASCII into it");
   expect_true(landscape.pet.asciiYOffset + 30 + 1 + 4 * 8 + 8 <=
                   landscape.pet.height,
-              "the lowest five-line ASCII frame should fit inside the 58-pixel local surface");
+              "the lowest five-line ASCII frame should fit inside the enlarged local surface");
   expect_true(!sharedClockPetLocalSurfaceNeedsClear(false, false),
               "an unchanged compact frame should retain the local pet surface");
   expect_true(sharedClockPetLocalSurfaceNeedsClear(true, false) &&
@@ -109,6 +112,11 @@ int main() {
                   landscape.pet.y + landscape.pet.height <= 111 &&
                   landscape.status.y + landscape.status.height <= 111,
               "landscape top time and date should stay clear of the middle pet and status regions");
+  expect_true(landscape.pet.y -
+                    (landscape.time.primary.y + landscape.time.primary.height) == 8 &&
+                  landscape.meterY -
+                    (landscape.pet.y + landscape.pet.height) == 7,
+              "landscape pet should have balanced clearance above and below");
   expect_true(landscape.meterY == 115 && landscape.meterFootprint == 20,
               "landscape meter footprint should occupy the final 20 pixels from y 115");
 
