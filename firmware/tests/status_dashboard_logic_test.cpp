@@ -28,6 +28,8 @@ int main() {
   assert(STATUS_DASHBOARD_LABEL_TEXT_SIZE == 1.5f);
   assert(STATUS_DASHBOARD_LABEL_CENTER_Y == 11);
   assert(STATUS_DASHBOARD_COUNT_CENTER_Y == 40);
+  assert(statusDashboardLabelCenterY(4) == 15);
+  assert(statusDashboardCountCenterY(4) == 44);
   assert(STATUS_DASHBOARD_COUNT_TEXT_SIZE == 2);
 
   assert(statusDashboardColorRole(STATUS_RUN, 0) == STATUS_COLOR_DIM);

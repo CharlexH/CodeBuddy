@@ -36,7 +36,7 @@ int main() {
   expect_str_eq(buf, ":--", "invalid seconds should render as placeholder");
 
   clockFormatDateLine(buf, sizeof(buf), 4, 20);
-  expect_str_eq(buf, "Apr 20", "valid month and date should render normally");
+  expect_str_eq(buf, "APR 20", "valid month and date should use an uppercase abbreviation");
 
   clockFormatDateLine(buf, sizeof(buf), -1, 20);
   expect_str_eq(buf, "--- --", "invalid month should render as placeholder");
@@ -50,9 +50,9 @@ int main() {
   expect_str_eq(seconds, ":--", "an invalid shared-face clock should replace the seconds segment too");
 
   clockFormatSharedDateLine(buf, sizeof(buf), false, true, 6, 4, 20);
-  expect_str_eq(buf, "Apr 20", "the portrait shared face should retain its guarded date line");
+  expect_str_eq(buf, "APR 20", "the portrait shared face should use the uppercase month label");
   clockFormatSharedDateLine(buf, sizeof(buf), true, true, 6, 4, 20);
-  expect_str_eq(buf, "Sat Apr 20", "the landscape shared face should retain its weekday and date");
+  expect_str_eq(buf, "Sat APR 20", "the shared date formatter should uppercase only the month");
   clockFormatSharedDateLine(buf, sizeof(buf), true, false, 6, 4, 20);
   expect_str_eq(buf, "--- --- --", "an invalid shared-face date should use a fixed-width placeholder");
 

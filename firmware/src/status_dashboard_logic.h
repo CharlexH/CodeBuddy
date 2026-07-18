@@ -26,6 +26,14 @@ static constexpr uint8_t STATUS_DASHBOARD_COUNT_TEXT_SIZE = 2;
 static constexpr int16_t STATUS_DASHBOARD_LABEL_CENTER_Y = 11;
 static constexpr int16_t STATUS_DASHBOARD_COUNT_CENTER_Y = 40;
 
+inline constexpr int16_t statusDashboardLabelCenterY(int16_t originY) {
+  return originY + STATUS_DASHBOARD_LABEL_CENTER_Y;
+}
+
+inline constexpr int16_t statusDashboardCountCenterY(int16_t originY) {
+  return originY + STATUS_DASHBOARD_COUNT_CENTER_Y;
+}
+
 inline void statusDashboardApplyUnread(
   StatusDashboardCounts* counts,
   bool fieldPresent,

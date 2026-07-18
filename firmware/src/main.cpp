@@ -937,30 +937,32 @@ static void drawSharedClockFaceTo(
       _clkTm.Seconds
     );
     canvas.setTextDatum(TL_DATUM);
-    canvas.setTextSize(layout.time.textSize);
+    canvas.setTextSize(layout.time.primaryTextSize);
     canvas.setTextColor(p.text, p.bg);
     canvas.drawString(hm, layout.time.primary.x, layout.time.primary.y);
     if (layout.time.showSeconds) {
+      canvas.setTextSize(layout.time.secondsTextSize);
       canvas.setTextColor(p.textDim, p.bg);
       canvas.drawString(seconds, layout.time.seconds.x, layout.time.seconds.y);
     }
   }
 
   if (decision.drawDate) {
-    if (layout.date.mode == SHARED_CLOCK_DATE_STACKED_NUMERIC) {
-      char month[3];
+    if (layout.date.mode == SHARED_CLOCK_DATE_STACKED_MONTH_DAY) {
+      char month[4];
       char day[3];
       if (fieldsValid) {
-        snprintf(month, sizeof(month), "%02d", _clkDt.Month);
+        snprintf(month, sizeof(month), "%s", clockMonthLabel(_clkDt.Month));
         snprintf(day, sizeof(day), "%02d", _clkDt.Date);
       } else {
-        snprintf(month, sizeof(month), "--");
+        snprintf(month, sizeof(month), "---");
         snprintf(day, sizeof(day), "--");
       }
       canvas.setTextDatum(TL_DATUM);
-      canvas.setTextSize(layout.date.textSize);
       canvas.setTextColor(p.textDim, p.bg);
+      canvas.setTextSize(layout.date.monthTextSize);
       canvas.drawString(month, layout.date.month.x, layout.date.month.y);
+      canvas.setTextSize(layout.date.dayTextSize);
       canvas.drawString(day, layout.date.day.x, layout.date.day.y);
     } else {
       char dateLine[16];
@@ -974,7 +976,7 @@ static void drawSharedClockFaceTo(
         _clkDt.Date
       );
       canvas.setTextDatum(MC_DATUM);
-      canvas.setTextSize(layout.date.textSize);
+      canvas.setTextSize(layout.date.monthTextSize);
       canvas.setTextColor(p.textDim, p.bg);
       canvas.drawString(dateLine, layout.date.centerX, layout.date.centerY);
     }
@@ -1001,7 +1003,11 @@ static void drawSharedClockFaceTo(
         (i * layout.status.columnWidth) + (layout.status.columnWidth / 2);
       canvas.setTextSize(STATUS_DASHBOARD_LABEL_TEXT_SIZE);
       canvas.setTextColor(p.textDim, p.bg);
-      canvas.drawString(labels[i], centerX, STATUS_DASHBOARD_LABEL_CENTER_Y);
+      canvas.drawString(
+        labels[i],
+        centerX,
+        statusDashboardLabelCenterY(layout.status.y)
+      );
       char countText[4] = {};
       statusDashboardFormatCount(countText, sizeof(countText), counts[i]);
       canvas.setTextSize(STATUS_DASHBOARD_COUNT_TEXT_SIZE);
@@ -1009,7 +1015,11 @@ static void drawSharedClockFaceTo(
         statusDashboardColor(statusDashboardColorRole(kinds[i], counts[i]), p),
         p.bg
       );
-      canvas.drawString(countText, centerX, STATUS_DASHBOARD_COUNT_CENTER_Y);
+      canvas.drawString(
+        countText,
+        centerX,
+        statusDashboardCountCenterY(layout.status.y)
+      );
     }
   }
 

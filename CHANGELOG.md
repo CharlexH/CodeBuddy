@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.14 - 2026-07-19
+
+- Moved the landscape `RUN` / `ASK` / `NEW` dashboard down four pixels.
+- Reduced the landscape `HH:MM` height by about two pixels while retaining the larger seconds.
+- Replaced the stacked numeric month with a three-letter uppercase abbreviation.
+
 ## 0.1.13 - 2026-07-17
 
 ### Device experience

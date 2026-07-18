@@ -15,7 +15,7 @@ enum SharedClockActivity : uint8_t {
 
 enum SharedClockDateMode : uint8_t {
   SHARED_CLOCK_DATE_SINGLE_LINE,
-  SHARED_CLOCK_DATE_STACKED_NUMERIC,
+  SHARED_CLOCK_DATE_STACKED_MONTH_DAY,
 };
 
 struct SharedClockPetLayout {
@@ -40,7 +40,8 @@ struct SharedClockTimeLayout {
   SharedClockTextRect primary;
   SharedClockTextRect seconds;
   int16_t centerY;
-  uint8_t textSize;
+  float primaryTextSize;
+  float secondsTextSize;
   bool showSeconds;
 };
 
@@ -50,7 +51,8 @@ struct SharedClockDateLayout {
   int16_t centerY;
   SharedClockTextRect month;
   SharedClockTextRect day;
-  uint8_t textSize;
+  float monthTextSize;
+  float dayTextSize;
 };
 
 struct SharedClockStatusLayout {
@@ -138,18 +140,20 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           {8, 77, 120, 32, SHARED_CLOCK_TEXT_PRIMARY},
           {128, 77, 72, 32, SHARED_CLOCK_TEXT_DIM},
           93,
-          4,
+          3.75f,
+          4.0f,
           true,
         },
         {
-          SHARED_CLOCK_DATE_STACKED_NUMERIC,
+          SHARED_CLOCK_DATE_STACKED_MONTH_DAY,
           0,
           0,
-          {208, 74, 24, 16, SHARED_CLOCK_TEXT_DIM},
+          {204, 76, 28, 12, SHARED_CLOCK_TEXT_DIM},
           {208, 94, 24, 16, SHARED_CLOCK_TEXT_DIM},
-          2,
+          1.5f,
+          2.0f,
         },
-        {true, 120, 0, 120, 58, 40},
+        {true, 120, 4, 120, 54, 40},
         115,
         20,
       }
@@ -161,7 +165,8 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           {19, 166, 60, 16, SHARED_CLOCK_TEXT_PRIMARY},
           {79, 166, 36, 16, SHARED_CLOCK_TEXT_DIM},
           174,
-          2,
+          2.0f,
+          2.0f,
           true,
         },
         {
@@ -170,7 +175,8 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           202,
           {0, 0, 0, 0, SHARED_CLOCK_TEXT_DIM},
           {0, 0, 0, 0, SHARED_CLOCK_TEXT_DIM},
-          1,
+          1.0f,
+          1.0f,
         },
         {false, 0, 0, 0, 0, 0},
         224,

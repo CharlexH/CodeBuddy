@@ -7,7 +7,7 @@
 #include "shared_clock_face_logic.h"
 
 static const char CLOCK_MON[][4] = {
-  "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
+  "JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"
 };
 
 static const char CLOCK_DOW[][4] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
