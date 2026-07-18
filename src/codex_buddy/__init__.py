@@ -2,7 +2,7 @@ import importlib
 
 __all__ = ["__version__", "runtime", "shell_integration", "shim", "setup_flow"]
 
-__version__ = "0.1.14"
+__version__ = "0.1.15"
 
 
 def __getattr__(name):

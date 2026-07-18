@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.15 - 2026-07-19
+
+- Reordered the landscape dashboard so the clock and date sit at the top, with the pet and task-status columns centered beneath them.
+
 ## 0.1.14 - 2026-07-19
 
 - Moved the landscape `RUN` / `ASK` / `NEW` dashboard down four pixels.
