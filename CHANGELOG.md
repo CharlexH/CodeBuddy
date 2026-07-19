@@ -3,6 +3,7 @@
 ## 0.1.18 - 2026-07-19
 
 - Added a left-to-right green-to-blue-green shimmer across remaining landscape allowance dots while tasks are running; consumed dots remain static and idle dots return to RUN green.
+- Pinned the validated direct display and firmware library versions used by the release build.
 
 ## 0.1.17 - 2026-07-19
 
