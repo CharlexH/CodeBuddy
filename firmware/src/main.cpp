@@ -247,7 +247,7 @@ static void paintUsageMeter(
           dot.y,
           dot.width,
           dot.height,
-          usageMeterDotColor(plan, column, animationActive, animationFrame)
+          usageMeterDotColor(plan, column, row, animationActive, animationFrame)
         );
       }
     }

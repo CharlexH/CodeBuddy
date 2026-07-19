@@ -141,33 +141,45 @@ int main() {
   );
   expect_true(
     usageMeterLandscapeAnimationFrame(0) == 0 &&
-      usageMeterLandscapeAnimationFrame(79) == 0 &&
-      usageMeterLandscapeAnimationFrame(80) == 1 &&
-      usageMeterLandscapeAnimationFrame(1280) == 0,
-    "the landscape shimmer should advance every 80ms and loop in 1.28 seconds"
+      usageMeterLandscapeAnimationFrame(49) == 0 &&
+      usageMeterLandscapeAnimationFrame(50) == 1 &&
+      usageMeterLandscapeAnimationFrame(800) == 0,
+    "the landscape shimmer should advance every 50ms and loop in 800ms"
   );
   expect_true(
     !usageMeterLandscapeAnimationEnabled(dashboardPlan, 0) &&
       usageMeterLandscapeAnimationEnabled(dashboardPlan, 1),
     "only a running task with remaining quota should animate the landscape dots"
   );
-  const uint16_t idleRemainingColor = usageMeterDotColor(dashboardPlan, 0, false, 0);
+  const uint16_t idleRemainingColor = usageMeterDotColor(
+    dashboardPlan, 0, 0, false, 0
+  );
   expect_true(
     idleRemainingColor == LANDSCAPE_USAGE_METER_ACTIVE,
     "idle remaining dots should retain the RUN bright green"
   );
-  const uint16_t firstWaveColor = usageMeterDotColor(dashboardPlan, 0, true, 0);
-  const uint16_t laterWaveColor = usageMeterDotColor(dashboardPlan, 20, true, 0);
   expect_true(
-    firstWaveColor != laterWaveColor,
-    "a running meter should combine a horizontal green-to-blue-green gradient with the wave phase"
+    usageMeterDiagonalBrightness(0, 0, 0) == 100 &&
+      usageMeterDiagonalBrightness(1, 3, 0) == 100 &&
+      usageMeterDiagonalBrightness(0, 4, 0) == 100,
+    "the bright front should repeat as a complete diagonal block instead of one vertical stripe"
   );
   expect_true(
-    usageMeterDotColor(dashboardPlan, 0, true, 1) != firstWaveColor,
-    "advancing the animation should change the brightness of a remaining dot"
+    usageMeterDiagonalBrightness(0, 1, 0) < 100 &&
+      usageMeterDiagonalBrightness(0, 1, 4) == 100 &&
+      usageMeterDiagonalBrightness(1, 0, 4) == 100,
+    "advancing one quarter-period should move the diagonal block to the right"
   );
   expect_true(
-    usageMeterDotColor(dashboardPlan, 53, true, 0) == LANDSCAPE_USAGE_METER_CONSUMED,
+    usageMeterDotColor(dashboardPlan, 0, 0, true, 0) ==
+      LANDSCAPE_USAGE_METER_ACTIVE &&
+      usageMeterDotColor(dashboardPlan, 0, 4, true, 0) ==
+        LANDSCAPE_USAGE_METER_BLUE_GREEN,
+    "animated colors should run from RUN green on the top row to blue-green on the bottom row"
+  );
+  expect_true(
+    usageMeterDotColor(dashboardPlan, 53, 0, true, 0) ==
+      LANDSCAPE_USAGE_METER_CONSUMED,
     "consumed dots should remain static while remaining quota animates"
   );
 

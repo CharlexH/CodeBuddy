@@ -29,8 +29,9 @@ static constexpr uint8_t LANDSCAPE_USAGE_METER_TOP_INSET = 1;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_SIZE = 2;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_GAP = 2;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_ROWS = 5;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_SCROLL_BAND = 4;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_ANIMATION_STEPS = 16;
-static constexpr uint8_t LANDSCAPE_USAGE_METER_ANIMATION_FRAME_MS = 80;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_ANIMATION_FRAME_MS = 50;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_GRID_HEIGHT =
   (LANDSCAPE_USAGE_METER_DOT_ROWS * LANDSCAPE_USAGE_METER_DOT_SIZE) +
   ((LANDSCAPE_USAGE_METER_DOT_ROWS - 1) * LANDSCAPE_USAGE_METER_DOT_GAP);
@@ -222,38 +223,52 @@ inline uint16_t usageMeterRgb565Scale(uint16_t color, uint8_t percent) {
   return static_cast<uint16_t>((r << 11) | (g << 5) | b);
 }
 
+inline uint8_t usageMeterDiagonalBrightness(
+  uint8_t row,
+  uint16_t column,
+  uint8_t animationFrame
+) {
+  // Tile the diagonal front every four cells so one complete wave block exits
+  // as the next enters, matching gradient-spin without a wraparound jump.
+  const uint8_t phaseStep = static_cast<uint8_t>(
+    ((row + column) % LANDSCAPE_USAGE_METER_SCROLL_BAND) *
+    (LANDSCAPE_USAGE_METER_ANIMATION_STEPS /
+      LANDSCAPE_USAGE_METER_SCROLL_BAND)
+  );
+  const uint8_t progress = static_cast<uint8_t>(
+    (animationFrame + LANDSCAPE_USAGE_METER_ANIMATION_STEPS - phaseStep) %
+    LANDSCAPE_USAGE_METER_ANIMATION_STEPS
+  );
+  if (progress == 0) return 100;
+  if (progress <= 7) {
+    return static_cast<uint8_t>(100 - ((72 * progress) / 7));
+  }
+  return progress == 15 ? 44 : 28;
+}
+
 inline uint16_t usageMeterDotColor(
   const UsageMeterRenderPlan& plan,
   uint16_t column,
+  uint8_t row,
   bool animationActive,
   uint8_t animationFrame
 ) {
   if (column >= plan.dotFilledColumns) return plan.rects[0].color;
   if (!animationActive || plan.dotFilledColumns == 0) return plan.rects[1].color;
 
-  const uint16_t gradientMaximum = plan.dotFilledColumns > 1
-    ? plan.dotFilledColumns - 1
+  const uint16_t gradientMaximum = plan.dotRows > 1
+    ? plan.dotRows - 1
     : 0;
   const uint16_t gradientColor = usageMeterRgb565Interpolate(
     LANDSCAPE_USAGE_METER_ACTIVE,
     LANDSCAPE_USAGE_METER_BLUE_GREEN,
-    column,
+    row,
     gradientMaximum
   );
-  const uint8_t columnPhase = static_cast<uint8_t>(
-    (static_cast<uint32_t>(column) * LANDSCAPE_USAGE_METER_ANIMATION_STEPS) /
-    plan.dotFilledColumns
+  return usageMeterRgb565Scale(
+    gradientColor,
+    usageMeterDiagonalBrightness(row, column, animationFrame)
   );
-  const uint8_t distanceBehind = static_cast<uint8_t>(
-    (animationFrame + LANDSCAPE_USAGE_METER_ANIMATION_STEPS - columnPhase) %
-    LANDSCAPE_USAGE_METER_ANIMATION_STEPS
-  );
-  const uint8_t brightness = distanceBehind == 0 ? 100
-    : distanceBehind == 1 ? 78
-    : distanceBehind == 2 ? 56
-    : distanceBehind == 3 ? 42
-    : 28;
-  return usageMeterRgb565Scale(gradientColor, brightness);
 }
 
 inline UsageMeterRenderPlan usageMeterRenderPlan(

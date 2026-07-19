@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.19 - 2026-07-19
+
+- Replaced the single vertical quota shimmer with tiled diagonal wave blocks that move right across the full remaining-dot matrix.
+- Changed the running gradient to progress by row from RUN green to blue-green and matched the reference animation's roughly 800 ms period.
+
 ## 0.1.18 - 2026-07-19
 
 - Added a left-to-right green-to-blue-green shimmer across remaining landscape allowance dots while tasks are running; consumed dots remain static and idle dots return to RUN green.
