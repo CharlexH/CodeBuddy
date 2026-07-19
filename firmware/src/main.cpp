@@ -196,7 +196,9 @@ static UsageMeterRenderFrame usageMeterLandscapeFrameForDisplay(
   UsageMeterRenderState* renderState,
   uint16_t width,
   uint16_t height,
-  bool forceDraw = false
+  bool forceDraw,
+  bool animationActive,
+  uint8_t animationFrame
 ) {
   UsageMeterState usage = {
     tama.hasFiveHourUsage,
@@ -210,7 +212,9 @@ static UsageMeterRenderFrame usageMeterLandscapeFrameForDisplay(
     usage,
     width,
     height,
-    forceDraw
+    forceDraw,
+    animationActive,
+    animationFrame
   );
 }
 
@@ -228,12 +232,23 @@ static uint16_t statusDashboardColor(
 }
 
 template <typename Canvas>
-static void paintUsageMeter(Canvas& canvas, const UsageMeterRenderPlan& plan) {
+static void paintUsageMeter(
+  Canvas& canvas,
+  const UsageMeterRenderPlan& plan,
+  bool animationActive = false,
+  uint8_t animationFrame = 0
+) {
   if (plan.dotted) {
     for (uint8_t row = 0; row < plan.dotRows; ++row) {
       for (uint16_t column = 0; column < plan.dotColumns; ++column) {
         const UsageMeterRect dot = usageMeterDotRect(plan, column, row);
-        canvas.fillRect(dot.x, dot.y, dot.width, dot.height, dot.color);
+        canvas.fillRect(
+          dot.x,
+          dot.y,
+          dot.width,
+          dot.height,
+          usageMeterDotColor(plan, column, animationActive, animationFrame)
+        );
       }
     }
     return;
@@ -871,21 +886,29 @@ static void drawSharedClockFaceTo(
     characterSetState(activeState);
   }
 
-  UsageMeterRenderFrame meterFrame = landscape
-    ? usageMeterLandscapeFrameForDisplay(
-        meterState, layout.screenWidth, layout.screenHeight, false
-      )
-    : usageMeterFrameForDisplay(
-        meterState, layout.screenWidth, layout.screenHeight, false
-      );
+  const uint32_t now = millis();
+  const uint8_t meterAnimationFrame = usageMeterLandscapeAnimationFrame(now);
   SharedClockStatusCounts statusCounts = {
     tama.sessionsRunning,
     tama.sessionsWaiting,
     static_cast<uint8_t>(tama.hasUnreadCount ? tama.unreadCount : 0),
   };
+
+  UsageMeterRenderFrame meterFrame = landscape
+    ? usageMeterLandscapeFrameForDisplay(
+        meterState,
+        layout.screenWidth,
+        layout.screenHeight,
+        false,
+        statusCounts.running > 0,
+        meterAnimationFrame
+      )
+    : usageMeterFrameForDisplay(
+        meterState, layout.screenWidth, layout.screenHeight, false
+      );
   SharedClockFaceRenderDecision decision = clockSharedFaceSchedule(
     cache,
-    millis(),
+    now,
     orientation,
     layout.status.visible,
     statusCounts,
@@ -905,7 +928,12 @@ static void drawSharedClockFaceTo(
     usageMeterRenderReset(meterState);
     meterFrame = landscape
       ? usageMeterLandscapeFrameForDisplay(
-          meterState, layout.screenWidth, layout.screenHeight, true
+          meterState,
+          layout.screenWidth,
+          layout.screenHeight,
+          true,
+          statusCounts.running > 0,
+          meterAnimationFrame
         )
       : usageMeterFrameForDisplay(
           meterState, layout.screenWidth, layout.screenHeight, true
@@ -1092,7 +1120,17 @@ static void drawSharedClockFaceTo(
   }
 
   // Usage is always the final layer, so no pet/text refresh can cover it.
-  if (meterFrame.decision.draw) paintUsageMeter(canvas, meterFrame.plan);
+  if (meterFrame.decision.draw) {
+    paintUsageMeter(
+      canvas,
+      meterFrame.plan,
+      landscape && usageMeterLandscapeAnimationEnabled(
+        meterFrame.plan,
+        statusCounts.running
+      ),
+      meterAnimationFrame
+    );
+  }
   canvas.setTextDatum(TL_DATUM);
   useDefaultTextFont(canvas);
 }

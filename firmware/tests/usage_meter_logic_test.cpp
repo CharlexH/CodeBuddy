@@ -139,6 +139,37 @@ int main() {
     LANDSCAPE_USAGE_METER_CONSUMED,
     "the final dot should preserve the centered footer margins"
   );
+  expect_true(
+    usageMeterLandscapeAnimationFrame(0) == 0 &&
+      usageMeterLandscapeAnimationFrame(79) == 0 &&
+      usageMeterLandscapeAnimationFrame(80) == 1 &&
+      usageMeterLandscapeAnimationFrame(1280) == 0,
+    "the landscape shimmer should advance every 80ms and loop in 1.28 seconds"
+  );
+  expect_true(
+    !usageMeterLandscapeAnimationEnabled(dashboardPlan, 0) &&
+      usageMeterLandscapeAnimationEnabled(dashboardPlan, 1),
+    "only a running task with remaining quota should animate the landscape dots"
+  );
+  const uint16_t idleRemainingColor = usageMeterDotColor(dashboardPlan, 0, false, 0);
+  expect_true(
+    idleRemainingColor == LANDSCAPE_USAGE_METER_ACTIVE,
+    "idle remaining dots should retain the RUN bright green"
+  );
+  const uint16_t firstWaveColor = usageMeterDotColor(dashboardPlan, 0, true, 0);
+  const uint16_t laterWaveColor = usageMeterDotColor(dashboardPlan, 20, true, 0);
+  expect_true(
+    firstWaveColor != laterWaveColor,
+    "a running meter should combine a horizontal green-to-blue-green gradient with the wave phase"
+  );
+  expect_true(
+    usageMeterDotColor(dashboardPlan, 0, true, 1) != firstWaveColor,
+    "advancing the animation should change the brightness of a remaining dot"
+  );
+  expect_true(
+    usageMeterDotColor(dashboardPlan, 53, true, 0) == LANDSCAPE_USAGE_METER_CONSUMED,
+    "consumed dots should remain static while remaining quota animates"
+  );
 
   expect_true(
     usageMeterRenderPlan(meterUsage, 4, 240).count == 0,
@@ -233,17 +264,33 @@ int main() {
   UsageMeterRenderState landscapeState = {};
   UsageMeterRenderState dashboardState = {};
   UsageMeterRenderFrame dashboardVisible = usageMeterPrepareLandscapeSingleFrame(
-    &dashboardState, true, meterUsage, 240, 135
+    &dashboardState, true, meterUsage, 240, 135, false, true, 0
   );
   expect_true(dashboardVisible.decision.draw && !dashboardVisible.decision.clear &&
                   dashboardVisible.plan.count == 2,
               "landscape dashboard frame should paint its selected single meter");
   UsageMeterState fiveHourChangedOnly = {true, true, 50, 91};
   UsageMeterRenderFrame dashboardUnchanged = usageMeterPrepareLandscapeSingleFrame(
-    &dashboardState, true, fiveHourChangedOnly, 240, 135
+    &dashboardState, true, fiveHourChangedOnly, 240, 135, false, true, 0
   );
   expect_true(!dashboardUnchanged.decision.draw && !dashboardUnchanged.decision.clear,
               "an unselected five-hour change should not redraw the weekly dashboard bar");
+  UsageMeterRenderFrame dashboardAnimated = usageMeterPrepareLandscapeSingleFrame(
+    &dashboardState, true, fiveHourChangedOnly, 240, 135, false, true, 1
+  );
+  expect_true(dashboardAnimated.decision.draw && !dashboardAnimated.decision.clear,
+              "a new running-animation frame should redraw only the meter layer");
+  UsageMeterRenderFrame dashboardAnimationStable = usageMeterPrepareLandscapeSingleFrame(
+    &dashboardState, true, fiveHourChangedOnly, 240, 135, false, true, 1
+  );
+  expect_true(!dashboardAnimationStable.decision.draw &&
+                  !dashboardAnimationStable.decision.clear,
+              "the same animation frame should not redraw repeatedly");
+  UsageMeterRenderFrame dashboardStopped = usageMeterPrepareLandscapeSingleFrame(
+    &dashboardState, true, fiveHourChangedOnly, 240, 135, false, false, 0
+  );
+  expect_true(dashboardStopped.decision.draw && !dashboardStopped.decision.clear,
+              "stopping the task should redraw the remaining dots back to static green");
 
   UsageMeterRenderDecision firstVisible = usageMeterRenderTransition(
     &landscapeState, true, true, true, 72, 91

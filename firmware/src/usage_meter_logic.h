@@ -23,11 +23,14 @@ static constexpr uint16_t USAGE_METER_FIVE_HOUR = 0x07E0;
 static constexpr uint16_t USAGE_METER_SEVEN_DAY = 0x03A0;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_ACTIVE = 0x07E0;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_CONSUMED = 0x19C5;
+static constexpr uint16_t LANDSCAPE_USAGE_METER_BLUE_GREEN = 0x05F5;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_FOOTPRINT = 20;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_TOP_INSET = 1;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_SIZE = 2;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_GAP = 2;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_ROWS = 5;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_ANIMATION_STEPS = 16;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_ANIMATION_FRAME_MS = 80;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_GRID_HEIGHT =
   (LANDSCAPE_USAGE_METER_DOT_ROWS * LANDSCAPE_USAGE_METER_DOT_SIZE) +
   ((LANDSCAPE_USAGE_METER_DOT_ROWS - 1) * LANDSCAPE_USAGE_METER_DOT_GAP);
@@ -57,6 +60,8 @@ struct UsageMeterRenderState {
   bool hasSevenDay;
   uint8_t fiveHourRemaining;
   uint8_t sevenDayRemaining;
+  bool animationActive;
+  uint8_t animationFrame;
 };
 
 struct UsageMeterRenderDecision {
@@ -131,7 +136,9 @@ inline UsageMeterRenderDecision usageMeterRenderTransition(
   bool hasSevenDay = false,
   uint8_t fiveHourRemaining = 0,
   uint8_t sevenDayRemaining = 0,
-  bool forceDraw = false
+  bool forceDraw = false,
+  bool animationActive = false,
+  uint8_t animationFrame = 0
 ) {
   if (state == nullptr) return {visible, false};
   const bool wasVisible = state->visible;
@@ -141,6 +148,8 @@ inline UsageMeterRenderDecision usageMeterRenderTransition(
     state->hasSevenDay = false;
     state->fiveHourRemaining = 0;
     state->sevenDayRemaining = 0;
+    state->animationActive = false;
+    state->animationFrame = 0;
     return {false, wasVisible};
   }
 
@@ -148,12 +157,16 @@ inline UsageMeterRenderDecision usageMeterRenderTransition(
     (state->hasFiveHour != hasFiveHour || state->hasSevenDay != hasSevenDay);
   const bool valuesChanged = !wasVisible || layoutChanged ||
     state->fiveHourRemaining != fiveHourRemaining ||
-    state->sevenDayRemaining != sevenDayRemaining;
+    state->sevenDayRemaining != sevenDayRemaining ||
+    state->animationActive != animationActive ||
+    (animationActive && state->animationFrame != animationFrame);
   state->visible = true;
   state->hasFiveHour = hasFiveHour;
   state->hasSevenDay = hasSevenDay;
   state->fiveHourRemaining = fiveHourRemaining;
   state->sevenDayRemaining = sevenDayRemaining;
+  state->animationActive = animationActive;
+  state->animationFrame = animationActive ? animationFrame : 0;
   return {forceDraw || valuesChanged, layoutChanged};
 }
 
@@ -164,6 +177,83 @@ inline void usageMeterRenderReset(UsageMeterRenderState* state) {
   state->hasSevenDay = false;
   state->fiveHourRemaining = 0;
   state->sevenDayRemaining = 0;
+  state->animationActive = false;
+  state->animationFrame = 0;
+}
+
+inline uint8_t usageMeterLandscapeAnimationFrame(uint32_t nowMs) {
+  return static_cast<uint8_t>(
+    (nowMs / LANDSCAPE_USAGE_METER_ANIMATION_FRAME_MS) %
+    LANDSCAPE_USAGE_METER_ANIMATION_STEPS
+  );
+}
+
+inline bool usageMeterLandscapeAnimationEnabled(
+  const UsageMeterRenderPlan& plan,
+  uint8_t runningTasks
+) {
+  return plan.dotted && plan.dotFilledColumns > 0 && runningTasks > 0;
+}
+
+inline uint16_t usageMeterRgb565Interpolate(
+  uint16_t from,
+  uint16_t to,
+  uint16_t position,
+  uint16_t maximum
+) {
+  if (maximum == 0 || position == 0) return from;
+  if (position >= maximum) return to;
+  const uint16_t fromR = (from >> 11) & 0x1F;
+  const uint16_t fromG = (from >> 5) & 0x3F;
+  const uint16_t fromB = from & 0x1F;
+  const uint16_t toR = (to >> 11) & 0x1F;
+  const uint16_t toG = (to >> 5) & 0x3F;
+  const uint16_t toB = to & 0x1F;
+  const uint16_t r = (fromR * (maximum - position) + toR * position) / maximum;
+  const uint16_t g = (fromG * (maximum - position) + toG * position) / maximum;
+  const uint16_t b = (fromB * (maximum - position) + toB * position) / maximum;
+  return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+}
+
+inline uint16_t usageMeterRgb565Scale(uint16_t color, uint8_t percent) {
+  const uint16_t r = (((color >> 11) & 0x1F) * percent) / 100;
+  const uint16_t g = (((color >> 5) & 0x3F) * percent) / 100;
+  const uint16_t b = ((color & 0x1F) * percent) / 100;
+  return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+}
+
+inline uint16_t usageMeterDotColor(
+  const UsageMeterRenderPlan& plan,
+  uint16_t column,
+  bool animationActive,
+  uint8_t animationFrame
+) {
+  if (column >= plan.dotFilledColumns) return plan.rects[0].color;
+  if (!animationActive || plan.dotFilledColumns == 0) return plan.rects[1].color;
+
+  const uint16_t gradientMaximum = plan.dotFilledColumns > 1
+    ? plan.dotFilledColumns - 1
+    : 0;
+  const uint16_t gradientColor = usageMeterRgb565Interpolate(
+    LANDSCAPE_USAGE_METER_ACTIVE,
+    LANDSCAPE_USAGE_METER_BLUE_GREEN,
+    column,
+    gradientMaximum
+  );
+  const uint8_t columnPhase = static_cast<uint8_t>(
+    (static_cast<uint32_t>(column) * LANDSCAPE_USAGE_METER_ANIMATION_STEPS) /
+    plan.dotFilledColumns
+  );
+  const uint8_t distanceBehind = static_cast<uint8_t>(
+    (animationFrame + LANDSCAPE_USAGE_METER_ANIMATION_STEPS - columnPhase) %
+    LANDSCAPE_USAGE_METER_ANIMATION_STEPS
+  );
+  const uint8_t brightness = distanceBehind == 0 ? 100
+    : distanceBehind == 1 ? 78
+    : distanceBehind == 2 ? 56
+    : distanceBehind == 3 ? 42
+    : 28;
+  return usageMeterRgb565Scale(gradientColor, brightness);
 }
 
 inline UsageMeterRenderPlan usageMeterRenderPlan(
@@ -315,7 +405,9 @@ inline UsageMeterRenderFrame usageMeterPrepareLandscapeSingleFrame(
   const UsageMeterState& usage,
   uint16_t fullWidth,
   uint16_t fullHeight,
-  bool forceDraw = false
+  bool forceDraw = false,
+  bool animationActive = false,
+  uint8_t animationFrame = 0
 ) {
   UsageMeterRenderPlan plan = connected
     ? usageMeterLandscapeSinglePlan(usage, fullWidth, fullHeight)
@@ -331,7 +423,9 @@ inline UsageMeterRenderFrame usageMeterPrepareLandscapeSingleFrame(
       hasSevenDay,
       hasFiveHour ? usage.fiveHourRemaining : 0,
       hasSevenDay ? usage.sevenDayRemaining : 0,
-      forceDraw
+      forceDraw,
+      animationActive && plan.dotFilledColumns > 0,
+      animationFrame
     ),
   };
 }
