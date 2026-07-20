@@ -21,16 +21,16 @@ int main() {
   expect_true(!portrait.pet.useLocalSurface && portrait.pet.asciiScale == 1 &&
                   portrait.pet.asciiYOffset == 0,
               "portrait pet rendering should retain its existing direct 1x placement");
-  expect_true(portrait.time.primary.x == 19 && portrait.time.primary.y == 166 &&
-                  portrait.time.primary.width == 60 && portrait.time.primary.height == 16,
-              "portrait HH:MM should start the centered 96-pixel time line at y 174");
-  expect_true(portrait.time.seconds.x == 79 && portrait.time.seconds.y == 166 &&
-                  portrait.time.seconds.width == 36 && portrait.time.seconds.height == 16,
+  expect_true(portrait.time.primary.x == 36 && portrait.time.primary.y == 166 &&
+                  portrait.time.primary.width == 38 && portrait.time.primary.height == 16,
+              "portrait HH:MM should start the centered custom-font time line at y 174");
+  expect_true(portrait.time.seconds.x == 75 && portrait.time.seconds.y == 166 &&
+                  portrait.time.seconds.width == 23 && portrait.time.seconds.height == 16,
               "portrait :SS should continue on the same line at the same size");
-  expect_true(portrait.time.primaryTextSize == 2.0f &&
-                  portrait.time.secondsTextSize == 2.0f &&
+  expect_true(portrait.time.primaryTextSize == 0.75f &&
+                  portrait.time.secondsTextSize == 0.75f &&
                   portrait.time.centerY == 174,
-              "portrait time should use text size 2 centered at y 174");
+              "portrait time should retain its natural aspect ratio and stay centered");
   expect_true(portrait.time.showSeconds,
               "portrait time should retain its existing seconds segment");
   expect_true(portrait.time.primary.role == SHARED_CLOCK_TEXT_PRIMARY &&
@@ -38,9 +38,9 @@ int main() {
               "portrait seconds should use the dim role while staying the same size");
   expect_true(portrait.date.mode == SHARED_CLOCK_DATE_SINGLE_LINE &&
                   portrait.date.centerX == 67 && portrait.date.centerY == 202 &&
-                  portrait.date.monthTextSize == 1.0f &&
-                  portrait.date.dayTextSize == 1.0f,
-              "portrait date should remain centered around y 202 at text size 1");
+                  portrait.date.monthTextSize == 0.38f &&
+                  portrait.date.dayTextSize == 0.38f,
+              "portrait date should fit the custom font's line height");
   expect_true(portrait.meterY == 224 && portrait.meterFootprint == 16,
               "portrait meters should occupy the final 16 pixels from y 224");
   expect_true(!portrait.status.visible,
@@ -73,27 +73,44 @@ int main() {
   expect_true(sharedClockPetLocalSurfaceNeedsClear(true, false) &&
                   sharedClockPetLocalSurfaceNeedsClear(false, true),
               "ASCII frames and full repaints should clear the local pet surface");
-  expect_true(landscape.time.primary.x == 8 && landscape.time.primary.y == 4 &&
-                  landscape.time.primary.width == 120 && landscape.time.primary.height == 32,
-              "landscape HH:MM should use a 120x32 line at the top of the display");
-  expect_true(landscape.time.primaryTextSize == 3.75f &&
-                  landscape.time.secondsTextSize == 4.0f &&
+  expect_true(landscape.time.primary.x == 8 && landscape.time.primary.y == 0 &&
+                  landscape.time.primary.width == 83 && landscape.time.primary.height == 36,
+              "landscape HH:MM should offset the custom font's top bearing at the display edge");
+  expect_true(landscape.time.primaryTextSize == 1.65f &&
+                  landscape.time.secondsTextSize == 1.65f &&
                   landscape.time.centerY == 20,
-              "landscape HH:MM should be two pixels shorter while seconds retain text size 4");
+              "landscape time should retain JetBrains Mono's natural aspect ratio");
   expect_true(landscape.time.showSeconds &&
-                  landscape.time.seconds.x == 120 &&
-                  landscape.time.seconds.y == 4 &&
-                  landscape.time.seconds.width == 72 &&
-                  landscape.time.seconds.height == 32,
+                  landscape.time.seconds.x == 93 &&
+                  landscape.time.seconds.y == 0 &&
+                  landscape.time.seconds.width == 50 &&
+                  landscape.time.seconds.height == 36,
               "landscape :SS should close the extra gap after HH:MM");
   expect_true(landscape.time.seconds.role == SHARED_CLOCK_TEXT_DIM,
               "landscape seconds should stay visually secondary");
   expect_true(landscape.time.primary.role == SHARED_CLOCK_TEXT_PRIMARY,
               "landscape HH:MM should retain the primary text role");
   expect_true(landscape.date.mode == SHARED_CLOCK_DATE_STACKED_MONTH_DAY &&
-                  landscape.date.monthTextSize == 1.5f &&
-                  landscape.date.dayTextSize == 2.0f,
+                  landscape.date.monthTextSize == 0.57f &&
+                  landscape.date.dayTextSize == 0.76f,
               "landscape date should use a compact three-letter month above the numeric day");
+  expect_true(
+    sharedClockAsciiTextWidth(5, landscape.time.primaryTextSize) <=
+        landscape.time.primary.width &&
+      sharedClockAsciiTextWidth(3, landscape.time.secondsTextSize) <=
+        landscape.time.seconds.width &&
+      sharedClockAsciiTextWidth(3, landscape.date.monthTextSize) <=
+        landscape.date.month.width &&
+      sharedClockAsciiTextWidth(2, landscape.date.dayTextSize) <=
+        landscape.date.day.width &&
+      sharedClockAsciiTextHeight(landscape.time.primaryTextSize) <=
+        landscape.time.primary.height &&
+      sharedClockAsciiTextHeight(landscape.date.monthTextSize) <=
+        landscape.date.month.height &&
+      sharedClockAsciiTextHeight(landscape.date.dayTextSize) <=
+        landscape.date.day.height,
+    "JetBrains Mono time and date samples should fit their rectangles in both axes"
+  );
   expect_true(landscape.date.month.x == 204 && landscape.date.month.y == 3 &&
                   landscape.date.month.width == 28 && landscape.date.month.height == 12,
               "landscape month should fit a right-aligned three-letter abbreviation");

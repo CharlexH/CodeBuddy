@@ -21,10 +21,23 @@ struct StatusDashboardCounts {
   uint8_t unread;
 };
 
-static constexpr float STATUS_DASHBOARD_LABEL_TEXT_SIZE = 1.5f;
-static constexpr uint8_t STATUS_DASHBOARD_COUNT_TEXT_SIZE = 2;
+static constexpr uint8_t STATUS_DASHBOARD_ASCII_FONT_X_ADVANCE = 10;
+static constexpr uint8_t STATUS_DASHBOARD_ASCII_FONT_Y_ADVANCE = 21;
+static constexpr float STATUS_DASHBOARD_LABEL_TEXT_SIZE = 0.57f;
+static constexpr float STATUS_DASHBOARD_COUNT_TEXT_SIZE = 0.76f;
 static constexpr int16_t STATUS_DASHBOARD_LABEL_CENTER_Y = 11;
 static constexpr int16_t STATUS_DASHBOARD_COUNT_CENTER_Y = 40;
+
+inline constexpr float statusDashboardAsciiTextWidth(
+  uint8_t characterCount,
+  float textSize
+) {
+  return characterCount * STATUS_DASHBOARD_ASCII_FONT_X_ADVANCE * textSize;
+}
+
+inline constexpr float statusDashboardAsciiTextHeight(float textSize) {
+  return STATUS_DASHBOARD_ASCII_FONT_Y_ADVANCE * textSize;
+}
 
 inline constexpr int16_t statusDashboardLabelCenterY(int16_t originY) {
   return originY + STATUS_DASHBOARD_LABEL_CENTER_Y;

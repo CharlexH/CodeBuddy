@@ -14,6 +14,7 @@
 #include "ota_update.h"
 #include "ota_ui_logic.h"
 #include "clock_time_logic.h"
+#include "fonts/jetbrains_mono_ascii_8.h"
 #include "completion_chime_logic.h"
 #include "data.h"
 #include "persona_logic.h"
@@ -134,6 +135,12 @@ bool     responseSent = false;
 template <typename Canvas>
 static void useDefaultTextFont(Canvas& canvas) {
   canvas.setFont(nullptr);
+  canvas.setTextSize(1);
+}
+
+template <typename Canvas>
+static void useSharedFaceAsciiFont(Canvas& canvas) {
+  canvas.setFont(&code_buddy_fonts::JetBrainsMono_Regular8pt7b);
   canvas.setTextSize(1);
 }
 
@@ -948,9 +955,9 @@ static void drawSharedClockFaceTo(
     );
   }
 
-  // A functional screen may have selected a proportional/UTF-8 font before
-  // this face. Restore the default fixed font before applying pixel geometry.
-  useDefaultTextFont(canvas);
+  // A functional screen may have selected the proportional Chinese font.
+  // Restore the dedicated fixed ASCII face before applying pixel geometry.
+  useSharedFaceAsciiFont(canvas);
   if (decision.drawTime) {
     char hm[6];
     char seconds[4];
@@ -1198,14 +1205,14 @@ bool checkShake() {
 // B cycles pages here just like it does on PET.
 static void _infoHeader(const Palette& p, int& y, const char* section, uint8_t page) {
   spr.setTextColor(p.text, p.bg);
-  useUtf8FontForText(spr, "Info", &fonts::efontCN_14);
+  useUtf8FontForText(spr, "Info", &fonts::efontCN_12);
   spr.setCursor(4, y); spr.print("Info");
   useDefaultTextFont(spr);
   spr.setTextColor(p.textDim, p.bg);
   spr.setCursor(W - 28, y); spr.printf("%u/%u", page + 1, INFO_PAGES);
   y += 12;
   spr.setTextColor(p.body, p.bg);
-  useUtf8FontForText(spr, section, &fonts::efontCN_14);
+  useUtf8FontForText(spr, section, &fonts::efontCN_12);
   spr.setCursor(4, y); spr.print(section);
   y += utf8ContainsNonAscii(section) ? 14 : 12;
   useDefaultTextFont(spr);
@@ -1236,9 +1243,9 @@ void drawInfo() {
     utf8TrimIncompleteTail(b);
     char line[80];
     clipDisplayText(line, b, 20);
-    useUtf8FontForText(spr, line, &fonts::efontCN_10);
+    useUtf8FontForText(spr, line, &fonts::efontCN_12);
     spr.setCursor(4, y); spr.print(line);
-    y += utf8ContainsNonAscii(line) ? 11 : 8;
+    y += utf8ContainsNonAscii(line) ? 13 : 8;
     useDefaultTextFont(spr);
   };
 
@@ -1412,7 +1419,7 @@ static void drawApproval() {
   clipDisplayText(toolLine, tama.promptTool, toolUtf8 ? 14 : (toolCells <= 10 ? 10 : 20));
   spr.setTextColor(p.text, p.bg);
   if (toolUtf8) {
-    spr.setFont(&fonts::efontCN_14);
+    spr.setFont(&fonts::efontCN_12);
     spr.setTextSize(1);
     spr.setCursor(4, H - AREA + 18);
   } else {
@@ -1656,7 +1663,7 @@ static void drawLandscapeApproval(const Palette& p, uint8_t hintOffset) {
 
   char toolLine[48];
   clipDisplayText(toolLine, tama.promptTool, utf8ContainsNonAscii(tama.promptTool) ? 24 : 32);
-  useUtf8FontForText(M5.Lcd, toolLine, &fonts::efontCN_14);
+  useUtf8FontForText(M5.Lcd, toolLine, &fonts::efontCN_12);
   M5.Lcd.setTextColor(p.text, p.bg);
   M5.Lcd.setCursor(4, LH - AREA + 18);
   M5.Lcd.print(toolLine);

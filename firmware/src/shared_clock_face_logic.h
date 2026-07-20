@@ -128,6 +128,19 @@ struct SharedClockTimePolicy {
 };
 
 static constexpr uint32_t SHARED_CLOCK_PET_FRAME_INTERVAL_MS = 200;
+static constexpr uint8_t SHARED_CLOCK_ASCII_FONT_X_ADVANCE = 10;
+static constexpr uint8_t SHARED_CLOCK_ASCII_FONT_Y_ADVANCE = 21;
+
+inline constexpr float sharedClockAsciiTextWidth(
+  uint8_t characterCount,
+  float textSize
+) {
+  return characterCount * SHARED_CLOCK_ASCII_FONT_X_ADVANCE * textSize;
+}
+
+inline constexpr float sharedClockAsciiTextHeight(float textSize) {
+  return SHARED_CLOCK_ASCII_FONT_Y_ADVANCE * textSize;
+}
 
 inline constexpr bool sharedClockPetLocalSurfaceNeedsClear(
   bool asciiMode,
@@ -143,11 +156,11 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
         135,
         {0, 44, 120, 64, 1, -13, true},
         {
-          {8, 4, 120, 32, SHARED_CLOCK_TEXT_PRIMARY},
-          {120, 4, 72, 32, SHARED_CLOCK_TEXT_DIM},
+          {8, 0, 83, 36, SHARED_CLOCK_TEXT_PRIMARY},
+          {93, 0, 50, 36, SHARED_CLOCK_TEXT_DIM},
           20,
-          3.75f,
-          4.0f,
+          1.65f,
+          1.65f,
           true,
         },
         {
@@ -156,8 +169,8 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           0,
           {204, 3, 28, 12, SHARED_CLOCK_TEXT_DIM},
           {204, 21, 28, 16, SHARED_CLOCK_TEXT_DIM},
-          1.5f,
-          2.0f,
+          0.57f,
+          0.76f,
         },
         {true, 120, 49, 120, 54, 40},
         115,
@@ -168,11 +181,11 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
         240,
         {0, 0, 135, 90, 1, 0, false},
         {
-          {19, 166, 60, 16, SHARED_CLOCK_TEXT_PRIMARY},
-          {79, 166, 36, 16, SHARED_CLOCK_TEXT_DIM},
+          {36, 166, 38, 16, SHARED_CLOCK_TEXT_PRIMARY},
+          {75, 166, 23, 16, SHARED_CLOCK_TEXT_DIM},
           174,
-          2.0f,
-          2.0f,
+          0.75f,
+          0.75f,
           true,
         },
         {
@@ -181,8 +194,8 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           202,
           {0, 0, 0, 0, SHARED_CLOCK_TEXT_DIM},
           {0, 0, 0, 0, SHARED_CLOCK_TEXT_DIM},
-          1.0f,
-          1.0f,
+          0.38f,
+          0.38f,
         },
         {false, 0, 0, 0, 0, 0},
         224,

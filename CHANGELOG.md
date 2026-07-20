@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.27 - 2026-07-20
+
+- Added a reproducible JetBrains Mono Regular ASCII subset for the landscape clock, date, and task dashboard, licensed under SIL Open Font License 1.1.
+- Consolidated non-ASCII UI text on the single proportional `efontCN_12` face and removed the smaller and larger Chinese faces from the linked firmware image.
+- Reduced firmware flash usage by about 408 KiB versus v0.1.25 while preserving the small built-in fallback font for compact utility screens.
+
 ## 0.1.25 - 2026-07-20
 
 - Changed the running quota matrix's bottom row from warm yellow to lavender `#CB9DFF`.
