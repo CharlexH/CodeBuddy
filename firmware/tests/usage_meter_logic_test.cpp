@@ -111,40 +111,41 @@ int main() {
   UsageMeterRenderPlan dashboardPlan = usageMeterLandscapeSinglePlan(meterUsage, 240, 135);
   expect_true(dashboardPlan.count == 2,
               "landscape dashboard should render one base and one fill");
-  expect_true(dashboardPlan.dotted && dashboardPlan.dotSize == 2 &&
+  expect_true(dashboardPlan.dotted && dashboardPlan.dotSize == 4 &&
                   dashboardPlan.dotGap == 2,
-              "landscape dashboard should use two-pixel dots with two-pixel gaps");
-  expect_true(dashboardPlan.dotColumns == 59 && dashboardPlan.dotRows == 5,
-              "landscape dashboard should fit a 59 by 5 dot matrix");
-  expect_true(dashboardPlan.dotFilledColumns == 53,
-              "91 percent weekly remaining should fill 53 of 59 columns");
+              "landscape dashboard should use four-pixel dots with two-pixel gaps");
+  expect_true(dashboardPlan.dotColumns == 15 && dashboardPlan.dotRows == 3,
+              "landscape dashboard should use the selected 15 by 3 dot matrix");
+  expect_true(dashboardPlan.dotFilledColumns == 13,
+              "91 percent weekly remaining should fill 13 of 15 columns");
   expectMeterRect(
-    dashboardPlan.rects[0], 2, 116, 236, 18, LANDSCAPE_USAGE_METER_CONSUMED,
+    dashboardPlan.rects[0], 76, 117, 88, 16, LANDSCAPE_USAGE_METER_CONSUMED,
     "landscape dashboard bounds should center the dot matrix in the 20-pixel footer"
   );
   expect_true(dashboardPlan.rects[1].color == LANDSCAPE_USAGE_METER_ACTIVE,
               "landscape dashboard should use the same bright green as RUN");
   expectMeterRect(
-    usageMeterDotRect(dashboardPlan, 0, 0), 2, 116, 2, 2,
+    usageMeterDotRect(dashboardPlan, 0, 0), 76, 117, 4, 4,
     LANDSCAPE_USAGE_METER_ACTIVE,
     "the first filled dot should start at the left and top grid inset"
   );
   expectMeterRect(
-    usageMeterDotRect(dashboardPlan, 53, 0), 214, 116, 2, 2,
+    usageMeterDotRect(dashboardPlan, 13, 0), 154, 117, 4, 4,
     LANDSCAPE_USAGE_METER_CONSUMED,
     "the first unfilled dot should use the consumed color after the weekly fill"
   );
   expectMeterRect(
-    usageMeterDotRect(dashboardPlan, 58, 4), 234, 132, 2, 2,
+    usageMeterDotRect(dashboardPlan, 14, 2), 160, 129, 4, 4,
     LANDSCAPE_USAGE_METER_CONSUMED,
     "the final dot should preserve the centered footer margins"
   );
   expect_true(
     usageMeterLandscapeAnimationFrame(0) == 0 &&
-      usageMeterLandscapeAnimationFrame(49) == 0 &&
-      usageMeterLandscapeAnimationFrame(50) == 1 &&
-      usageMeterLandscapeAnimationFrame(800) == 0,
-    "the landscape shimmer should advance every 50ms and loop in 800ms"
+      usageMeterLandscapeAnimationFrame(46) == 0 &&
+      usageMeterLandscapeAnimationFrame(47) == 1 &&
+      usageMeterLandscapeAnimationFrame(749) == 15 &&
+      usageMeterLandscapeAnimationFrame(750) == 0,
+    "the landscape shimmer should distribute 16 frames across an exact 750ms period"
   );
   expect_true(
     !usageMeterLandscapeAnimationEnabled(dashboardPlan, 0) &&
@@ -171,14 +172,21 @@ int main() {
     "advancing one quarter-period should move the diagonal block to the right"
   );
   expect_true(
-    usageMeterDotColor(dashboardPlan, 0, 0, true, 0) ==
-      LANDSCAPE_USAGE_METER_ACTIVE &&
-      usageMeterDotColor(dashboardPlan, 0, 4, true, 0) ==
-        LANDSCAPE_USAGE_METER_BLUE_GREEN,
-    "animated colors should run from RUN green on the top row to blue-green on the bottom row"
+    usageMeterDiagonalBrightness(0, 2, 0) == 40 &&
+      usageMeterDiagonalBrightness(0, 1, 3) == 53,
+    "the diagonal animation should use the selected 0.40 dim floor and end ramp"
   );
   expect_true(
-    usageMeterDotColor(dashboardPlan, 53, 0, true, 0) ==
+    usageMeterDotColor(dashboardPlan, 0, 0, true, 0) ==
+      LANDSCAPE_USAGE_METER_MINT_TOP &&
+      usageMeterDotColor(dashboardPlan, 3, 1, true, 0) ==
+        LANDSCAPE_USAGE_METER_MINT_MIDDLE &&
+      usageMeterDotColor(dashboardPlan, 2, 2, true, 0) ==
+        LANDSCAPE_USAGE_METER_ACTIVE,
+    "animated colors should use mint top-down with a RUN-green bottom row"
+  );
+  expect_true(
+    usageMeterDotColor(dashboardPlan, 13, 0, true, 0) ==
       LANDSCAPE_USAGE_METER_CONSUMED,
     "consumed dots should remain static while remaining quota animates"
   );
@@ -242,7 +250,7 @@ int main() {
     "five-hour-only usage should use the bright-green single bar"
   );
   UsageMeterRenderPlan fiveOnlyDashboard = usageMeterLandscapeSinglePlan(fiveOnlyUsage, 240, 135);
-  expect_true(fiveOnlyDashboard.dotFilledColumns == 58 &&
+  expect_true(fiveOnlyDashboard.dotFilledColumns == 14 &&
                   fiveOnlyDashboard.rects[1].color == LANDSCAPE_USAGE_METER_ACTIVE,
               "landscape dashboard should keep the same bright-green dots for five-hour usage");
   expect_true(

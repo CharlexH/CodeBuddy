@@ -23,18 +23,22 @@ static constexpr uint16_t USAGE_METER_FIVE_HOUR = 0x07E0;
 static constexpr uint16_t USAGE_METER_SEVEN_DAY = 0x03A0;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_ACTIVE = 0x07E0;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_CONSUMED = 0x19C5;
-static constexpr uint16_t LANDSCAPE_USAGE_METER_BLUE_GREEN = 0x05F5;
+static constexpr uint16_t LANDSCAPE_USAGE_METER_MINT_TOP = 0xDE7D;
+static constexpr uint16_t LANDSCAPE_USAGE_METER_MINT_MIDDLE = 0x7E1E;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_FOOTPRINT = 20;
-static constexpr uint8_t LANDSCAPE_USAGE_METER_TOP_INSET = 1;
-static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_SIZE = 2;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_SIZE = 4;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_GAP = 2;
-static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_ROWS = 5;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_ROWS = 3;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_COLUMNS = 15;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_SCROLL_BAND = 4;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_ANIMATION_STEPS = 16;
-static constexpr uint8_t LANDSCAPE_USAGE_METER_ANIMATION_FRAME_MS = 50;
+static constexpr uint16_t LANDSCAPE_USAGE_METER_ANIMATION_PERIOD_MS = 750;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_GRID_HEIGHT =
   (LANDSCAPE_USAGE_METER_DOT_ROWS * LANDSCAPE_USAGE_METER_DOT_SIZE) +
   ((LANDSCAPE_USAGE_METER_DOT_ROWS - 1) * LANDSCAPE_USAGE_METER_DOT_GAP);
+static constexpr uint8_t LANDSCAPE_USAGE_METER_GRID_WIDTH =
+  (LANDSCAPE_USAGE_METER_DOT_COLUMNS * LANDSCAPE_USAGE_METER_DOT_SIZE) +
+  ((LANDSCAPE_USAGE_METER_DOT_COLUMNS - 1) * LANDSCAPE_USAGE_METER_DOT_GAP);
 
 struct UsageMeterRect {
   uint16_t x;
@@ -184,8 +188,9 @@ inline void usageMeterRenderReset(UsageMeterRenderState* state) {
 
 inline uint8_t usageMeterLandscapeAnimationFrame(uint32_t nowMs) {
   return static_cast<uint8_t>(
-    (nowMs / LANDSCAPE_USAGE_METER_ANIMATION_FRAME_MS) %
-    LANDSCAPE_USAGE_METER_ANIMATION_STEPS
+    ((nowMs % LANDSCAPE_USAGE_METER_ANIMATION_PERIOD_MS) *
+      LANDSCAPE_USAGE_METER_ANIMATION_STEPS) /
+    LANDSCAPE_USAGE_METER_ANIMATION_PERIOD_MS
   );
 }
 
@@ -241,9 +246,9 @@ inline uint8_t usageMeterDiagonalBrightness(
   );
   if (progress == 0) return 100;
   if (progress <= 7) {
-    return static_cast<uint8_t>(100 - ((72 * progress) / 7));
+    return static_cast<uint8_t>(100 - ((60 * progress) / 7));
   }
-  return progress == 15 ? 44 : 28;
+  return progress == 15 ? 53 : 40;
 }
 
 inline uint16_t usageMeterDotColor(
@@ -256,15 +261,11 @@ inline uint16_t usageMeterDotColor(
   if (column >= plan.dotFilledColumns) return plan.rects[0].color;
   if (!animationActive || plan.dotFilledColumns == 0) return plan.rects[1].color;
 
-  const uint16_t gradientMaximum = plan.dotRows > 1
-    ? plan.dotRows - 1
-    : 0;
-  const uint16_t gradientColor = usageMeterRgb565Interpolate(
-    LANDSCAPE_USAGE_METER_ACTIVE,
-    LANDSCAPE_USAGE_METER_BLUE_GREEN,
-    row,
-    gradientMaximum
-  );
+  const uint16_t gradientColor = row == 0
+    ? LANDSCAPE_USAGE_METER_MINT_TOP
+    : (row + 1 >= plan.dotRows
+      ? LANDSCAPE_USAGE_METER_ACTIVE
+      : LANDSCAPE_USAGE_METER_MINT_MIDDLE);
   return usageMeterRgb565Scale(
     gradientColor,
     usageMeterDiagonalBrightness(row, column, animationFrame)
@@ -324,24 +325,25 @@ inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
   uint16_t fullHeight
 ) {
   UsageMeterRenderPlan plan = {};
-  if (!usageMeterStateValid(state) || fullWidth < USAGE_METER_MIN_WIDTH ||
+  if (!usageMeterStateValid(state) ||
+      fullWidth < LANDSCAPE_USAGE_METER_GRID_WIDTH ||
       fullHeight < LANDSCAPE_USAGE_METER_FOOTPRINT) {
     return plan;
   }
 
-  const uint16_t usableWidth = fullWidth - (USAGE_METER_SIDE_INSET * 2);
+  const uint16_t x = (fullWidth - LANDSCAPE_USAGE_METER_GRID_WIDTH) / 2;
   const uint16_t y = fullHeight - LANDSCAPE_USAGE_METER_FOOTPRINT +
-    LANDSCAPE_USAGE_METER_TOP_INSET;
-  const uint16_t dotPitch = LANDSCAPE_USAGE_METER_DOT_SIZE +
-    LANDSCAPE_USAGE_METER_DOT_GAP;
-  const uint16_t dotColumns = (usableWidth + LANDSCAPE_USAGE_METER_DOT_GAP) /
-    dotPitch;
+    ((LANDSCAPE_USAGE_METER_FOOTPRINT -
+      LANDSCAPE_USAGE_METER_GRID_HEIGHT) / 2);
   const bool useSevenDay = state.hasSevenDay;
   const uint8_t remaining = useSevenDay
     ? state.sevenDayRemaining
     : state.fiveHourRemaining;
   const uint16_t color = LANDSCAPE_USAGE_METER_ACTIVE;
-  const uint16_t filledColumns = usageMeterFillWidth(dotColumns, remaining);
+  const uint16_t filledColumns = usageMeterFillWidth(
+    LANDSCAPE_USAGE_METER_DOT_COLUMNS,
+    remaining
+  );
   const uint16_t filledWidth = filledColumns == 0
     ? 0
     : (filledColumns * LANDSCAPE_USAGE_METER_DOT_SIZE) +
@@ -349,14 +351,14 @@ inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
 
   plan.count = 2;
   plan.rects[0] = {
-    USAGE_METER_SIDE_INSET,
+    x,
     y,
-    usableWidth,
+    LANDSCAPE_USAGE_METER_GRID_WIDTH,
     LANDSCAPE_USAGE_METER_GRID_HEIGHT,
     LANDSCAPE_USAGE_METER_CONSUMED,
   };
   plan.rects[1] = {
-    USAGE_METER_SIDE_INSET,
+    x,
     y,
     filledWidth,
     LANDSCAPE_USAGE_METER_GRID_HEIGHT,
@@ -366,7 +368,7 @@ inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
   plan.dotSize = LANDSCAPE_USAGE_METER_DOT_SIZE;
   plan.dotGap = LANDSCAPE_USAGE_METER_DOT_GAP;
   plan.dotRows = LANDSCAPE_USAGE_METER_DOT_ROWS;
-  plan.dotColumns = dotColumns;
+  plan.dotColumns = LANDSCAPE_USAGE_METER_DOT_COLUMNS;
   plan.dotFilledColumns = filledColumns;
   return plan;
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.20 - 2026-07-20
+
+- Changed the landscape quota display to the selected 15-by-3 matrix with 4 px cells, 2 px gaps, and centered 88-by-16 px geometry.
+- Matched the Mint diagonal/top-down preset with a 750 ms period and 0.40 dim floor, while keeping the bottom row aligned with the bright RUN green.
+
 ## 0.1.19 - 2026-07-19
 
 - Replaced the single vertical quota shimmer with tiled diagonal wave blocks that move right across the full remaining-dot matrix.

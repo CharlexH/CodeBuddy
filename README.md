@@ -30,10 +30,10 @@
 - A StickS3 firmware build with status, approval, settings, and offline screens.
 - A daily workflow designed to stay out of the way: run `code-buddy` once, then just use `codex`.
 
-## Highlights in v0.1.13
+## Highlights in v0.1.20
 
 - A landscape dashboard keeps the pet on the left and shows `RUN`, `ASK`, and `NEW` task counts on the right.
-- The bottom dot-matrix meter shows the remaining Codex allowance, preferring the seven-day window when available and falling back to the five-hour window.
+- The centered 15-by-3 quota matrix uses 4 px cells and a Mint diagonal wave while tasks run, with the bottom row matching the bright RUN green.
 - One short chime plays after a complete Codex turn. This includes managed CLI sessions and main Codex Desktop tasks discovered from local session logs; repeated snapshots and subagent turns are de-duplicated.
 - Secure Wi-Fi OTA supports manual Mac-push updates and an optional automatic update mode, with signed manifests, physical confirmation, rollback checks, and compact on-device progress.
 - The charging clock and active runtime share the landscape layout while keeping approval and settings interactions readable.
@@ -51,7 +51,7 @@ Preferred path:
 Fallback:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.13-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.20-full.bin
 ```
 
 Developer release build:

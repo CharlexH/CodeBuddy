@@ -18,7 +18,7 @@ Primary path:
 Fallback path:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.13-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.20-full.bin
 ```
 
 After flashing, go back to the Mac and run:
@@ -32,9 +32,11 @@ That will request Bluetooth permission, pair the StickS3, sync time, and finish 
 ## Runtime display
 
 When the device is landscape, the shared face keeps the pet on the left and
-shows `RUN`, `ASK`, and `NEW` task counts on the right. The bottom 2x2-dot meter
-shows the remaining Codex allowance. A short chime plays once per completed
-turn when **Settings > sound** is enabled.
+shows `RUN`, `ASK`, and `NEW` task counts on the right. The centered bottom
+15-by-3 meter uses 4 px dots with 2 px gaps to show the remaining Codex
+allowance. While a task runs, its remaining dots animate with a diagonal Mint
+wave and a bright-green bottom row. A short chime plays once per completed turn
+when **Settings > sound** is enabled.
 
 The OTA-capable firmware can receive signed app-only updates from
 `code-buddy firmware update`. **Settings > auto ota** enables automatic trusted
