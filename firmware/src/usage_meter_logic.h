@@ -23,7 +23,7 @@ static constexpr uint16_t USAGE_METER_FIVE_HOUR = 0x07E0;
 static constexpr uint16_t USAGE_METER_SEVEN_DAY = 0x03A0;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_ACTIVE = 0x07E0;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_CONSUMED = 0x19C5;
-static constexpr uint16_t LANDSCAPE_USAGE_METER_MINT_TOP = 0xDE7D;
+static constexpr uint16_t LANDSCAPE_USAGE_METER_WARM = 0xFE92;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_MINT_MIDDLE = 0x7E1E;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_FOOTPRINT = 22;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_SIZE = 6;
@@ -242,9 +242,9 @@ inline uint8_t usageMeterDiagonalBrightness(
   );
   if (progress == 0) return 100;
   if (progress <= 7) {
-    return static_cast<uint8_t>(100 - ((20 * progress) / 7));
+    return static_cast<uint8_t>(100 - ((32 * progress) / 7));
   }
-  return progress == 15 ? 84 : 80;
+  return progress == 15 ? 75 : 68;
 }
 
 inline uint16_t usageMeterDotColor(
@@ -258,9 +258,9 @@ inline uint16_t usageMeterDotColor(
   if (!animationActive || plan.dotFilledColumns == 0) return plan.rects[1].color;
 
   const uint16_t gradientColor = row == 0
-    ? LANDSCAPE_USAGE_METER_MINT_TOP
+    ? LANDSCAPE_USAGE_METER_ACTIVE
     : (row + 1 >= plan.dotRows
-      ? LANDSCAPE_USAGE_METER_ACTIVE
+      ? LANDSCAPE_USAGE_METER_WARM
       : LANDSCAPE_USAGE_METER_MINT_MIDDLE);
   return usageMeterRgb565Scale(
     gradientColor,

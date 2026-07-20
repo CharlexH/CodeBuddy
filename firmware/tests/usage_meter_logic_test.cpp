@@ -172,18 +172,22 @@ int main() {
     "advancing one quarter-period should move the diagonal block to the right"
   );
   expect_true(
-    usageMeterDiagonalBrightness(0, 2, 0) == 80 &&
-      usageMeterDiagonalBrightness(0, 1, 3) == 84,
-    "the diagonal animation should use the selected 0.80 dim floor and end ramp"
+    usageMeterDiagonalBrightness(0, 2, 0) == 68 &&
+      usageMeterDiagonalBrightness(0, 1, 3) == 75,
+    "the diagonal animation should use the selected 0.68 dim floor and end ramp"
+  );
+  expect_true(
+    LANDSCAPE_USAGE_METER_WARM == 0xFE92,
+    "the warm row should use the selected FAD297 color"
   );
   expect_true(
     usageMeterDotColor(dashboardPlan, 0, 0, true, 0) ==
-      LANDSCAPE_USAGE_METER_MINT_TOP &&
+      LANDSCAPE_USAGE_METER_ACTIVE &&
       usageMeterDotColor(dashboardPlan, 3, 1, true, 0) ==
         LANDSCAPE_USAGE_METER_MINT_MIDDLE &&
       usageMeterDotColor(dashboardPlan, 2, 2, true, 0) ==
-        LANDSCAPE_USAGE_METER_ACTIVE,
-    "animated colors should use Mint top-down with a RUN-green bottom row"
+        LANDSCAPE_USAGE_METER_WARM,
+    "animated colors should use RUN green on top, blue in the middle, and warm color below"
   );
   expect_true(
     usageMeterDotColor(dashboardPlan, 26, 0, true, 0) ==

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.24 - 2026-07-20
+
+- Set the running quota matrix rows to RUN green, blue, and warm `#FAD297` from top to bottom.
+
+## 0.1.23 - 2026-07-20
+
+- Tuned the running quota animation's dim floor to 0.68 for a clearer wave while retaining a continuous remaining-quota region.
+
 ## 0.1.22 - 2026-07-20
 
 - Raised the running quota animation's dim floor from 0.40 to 0.80 so the remaining region stays visually continuous while the diagonal wave passes through it.
