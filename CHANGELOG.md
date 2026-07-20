@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.21 - 2026-07-20
+
+- Restored the landscape quota matrix to the original full-width region and enlarged dots to 6 px.
+- Used three rows with 2 px gaps, extending the matrix two pixels upward while keeping its bottom edge fixed.
+
 ## 0.1.20 - 2026-07-20
 
 - Changed the landscape quota display to the selected 15-by-3 matrix with 4 px cells, 2 px gaps, and centered 88-by-16 px geometry.

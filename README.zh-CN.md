@@ -30,10 +30,10 @@
 - 一套 StickS3 固件，包含状态页、审批页、设置页和离线页。
 - 一套尽量不打扰日常工作的流程：先跑一次 `code-buddy`，之后直接用 `codex`。
 
-## v0.1.20 亮点
+## v0.1.21 亮点
 
 - 横屏状态页左侧显示宠物，右侧用 `RUN`、`ASK`、`NEW` 显示运行中、待确认和未查看任务数量。
-- 居中的 15×3 额度点阵使用 4px 单元格；任务运行时播放 Mint 对角波形，最下面一排与 RUN 的亮绿色一致。
+- 铺满原横向区域的 29×3 额度点阵使用 6px 单元格；任务运行时播放 Mint 对角波形，最下面一排与 RUN 的亮绿色一致。
 - 每个完整 Codex turn 结束后只响一次；既支持受管的 CLI 会话，也支持从本地日志发现的 Codex Desktop 主任务，并会自动排除重复快照和 subagent 完成事件。
 - 安全 Wi-Fi OTA 支持 Mac 手动推送和可选的自动更新，包含签名清单、物理确认、回滚检查和设备端紧凑进度提示。
 - 充电时钟和任务运行界面共用横屏布局，同时保证审批与设置界面可读。
@@ -51,7 +51,7 @@
 兜底方式：
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.20-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.21-full.bin
 ```
 
 开发者本地生成 release 镜像：
