@@ -30,7 +30,7 @@
 - 一套 StickS3 固件，包含状态页、审批页、设置页和离线页。
 - 一套尽量不打扰日常工作的流程：先跑一次 `code-buddy`，之后直接用 `codex`。
 
-## v0.1.21 亮点
+## v0.1.22 亮点
 
 - 横屏状态页左侧显示宠物，右侧用 `RUN`、`ASK`、`NEW` 显示运行中、待确认和未查看任务数量。
 - 铺满原横向区域的 29×3 额度点阵使用 6px 单元格；任务运行时播放 Mint 对角波形，最下面一排与 RUN 的亮绿色一致。
@@ -51,7 +51,7 @@
 兜底方式：
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.21-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.22-full.bin
 ```
 
 开发者本地生成 release 镜像：

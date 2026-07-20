@@ -242,9 +242,9 @@ inline uint8_t usageMeterDiagonalBrightness(
   );
   if (progress == 0) return 100;
   if (progress <= 7) {
-    return static_cast<uint8_t>(100 - ((60 * progress) / 7));
+    return static_cast<uint8_t>(100 - ((20 * progress) / 7));
   }
-  return progress == 15 ? 53 : 40;
+  return progress == 15 ? 84 : 80;
 }
 
 inline uint16_t usageMeterDotColor(

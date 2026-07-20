@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.22 - 2026-07-20
+
+- Raised the running quota animation's dim floor from 0.40 to 0.80 so the remaining region stays visually continuous while the diagonal wave passes through it.
+
 ## 0.1.21 - 2026-07-20
 
 - Restored the landscape quota matrix to the original full-width region and enlarged dots to 6 px.

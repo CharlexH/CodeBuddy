@@ -30,7 +30,7 @@
 - A StickS3 firmware build with status, approval, settings, and offline screens.
 - A daily workflow designed to stay out of the way: run `code-buddy` once, then just use `codex`.
 
-## Highlights in v0.1.21
+## Highlights in v0.1.22
 
 - A landscape dashboard keeps the pet on the left and shows `RUN`, `ASK`, and `NEW` task counts on the right.
 - The full-width 29-by-3 quota matrix uses 6 px cells and a Mint diagonal wave while tasks run, with the bottom row matching the bright RUN green.
@@ -51,7 +51,7 @@ Preferred path:
 Fallback:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.21-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.22-full.bin
 ```
 
 Developer release build:

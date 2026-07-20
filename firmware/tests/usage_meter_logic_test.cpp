@@ -172,9 +172,9 @@ int main() {
     "advancing one quarter-period should move the diagonal block to the right"
   );
   expect_true(
-    usageMeterDiagonalBrightness(0, 2, 0) == 40 &&
-      usageMeterDiagonalBrightness(0, 1, 3) == 53,
-    "the diagonal animation should use the selected 0.40 dim floor and end ramp"
+    usageMeterDiagonalBrightness(0, 2, 0) == 80 &&
+      usageMeterDiagonalBrightness(0, 1, 3) == 84,
+    "the diagonal animation should use the selected 0.80 dim floor and end ramp"
   );
   expect_true(
     usageMeterDotColor(dashboardPlan, 0, 0, true, 0) ==
