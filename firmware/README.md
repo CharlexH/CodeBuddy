@@ -18,7 +18,7 @@ Primary path:
 Fallback path:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.24-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.25-full.bin
 ```
 
 After flashing, go back to the Mac and run:
@@ -35,7 +35,7 @@ When the device is landscape, the shared face keeps the pet on the left and
 shows `RUN`, `ASK`, and `NEW` task counts on the right. The full-width bottom
 29-by-3 meter uses 6 px dots with 2 px gaps to show the remaining Codex
 allowance. While a task runs, its remaining dots animate with a diagonal wave
-across RUN-green, blue, and warm rows. A short chime plays once per completed turn
+across RUN-green, blue, and lavender rows. A short chime plays once per completed turn
 when **Settings > sound** is enabled.
 
 The OTA-capable firmware can receive signed app-only updates from

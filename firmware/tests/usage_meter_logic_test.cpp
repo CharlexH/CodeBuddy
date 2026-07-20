@@ -177,8 +177,8 @@ int main() {
     "the diagonal animation should use the selected 0.68 dim floor and end ramp"
   );
   expect_true(
-    LANDSCAPE_USAGE_METER_WARM == 0xFE92,
-    "the warm row should use the selected FAD297 color"
+    LANDSCAPE_USAGE_METER_BOTTOM == 0xCCFF,
+    "the bottom row should use the selected CB9DFF color"
   );
   expect_true(
     usageMeterDotColor(dashboardPlan, 0, 0, true, 0) ==
@@ -186,8 +186,8 @@ int main() {
       usageMeterDotColor(dashboardPlan, 3, 1, true, 0) ==
         LANDSCAPE_USAGE_METER_MINT_MIDDLE &&
       usageMeterDotColor(dashboardPlan, 2, 2, true, 0) ==
-        LANDSCAPE_USAGE_METER_WARM,
-    "animated colors should use RUN green on top, blue in the middle, and warm color below"
+        LANDSCAPE_USAGE_METER_BOTTOM,
+    "animated colors should use RUN green on top, blue in the middle, and lavender below"
   );
   expect_true(
     usageMeterDotColor(dashboardPlan, 26, 0, true, 0) ==

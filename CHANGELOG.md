@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.25 - 2026-07-20
+
+- Changed the running quota matrix's bottom row from warm yellow to lavender `#CB9DFF`.
+
 ## 0.1.24 - 2026-07-20
 
 - Set the running quota matrix rows to RUN green, blue, and warm `#FAD297` from top to bottom.
