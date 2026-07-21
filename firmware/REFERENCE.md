@@ -48,6 +48,7 @@ a keepalive every 10 seconds:
   "entries": ["10:42 git push", "10:41 yarn test", "10:39 reading file..."],
   "tokens": 184502,
   "tokens_today": 31200,
+  "activity20": 8193,
   "prompt": {
     "id": "req_abc123",
     "tool": "Bash",
@@ -65,6 +66,7 @@ a keepalive every 10 seconds:
 | `entries`      | Recent transcript lines, newest first (capped to a few)                           |
 | `tokens`       | Cumulative output tokens since the desktop app started                            |
 | `tokens_today` | Output tokens since local midnight (persisted, survives restart)                  |
+| `activity20`   | Optional 20-bit activity mask; bit 0 is the current second and bit 19 is 19 seconds ago |
 | `prompt`       | Only present when a permission decision is needed. The `id` is what you echo back |
 
 A few useful derived signals: `running > 0` means at least one session is

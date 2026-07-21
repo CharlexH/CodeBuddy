@@ -147,6 +147,26 @@ def test_agent_loads_persisted_completion_sequence_into_snapshot(tmp_path):
     assert agent._snapshot().as_ble_payload()["completion_seq"] == 41
 
 
+def test_managed_events_populate_twenty_second_activity_heartbeat(tmp_path):
+    now = [100.0]
+    agent = BuddyAgent(tmp_path / "state.json", watcher=None, clock=lambda: now[0])
+    agent._managed_runtime["managed-1"] = ManagedSessionRuntime(
+        control_id="managed-1",
+        workdir=tmp_path,
+    )
+
+    asyncio.run(
+        agent._handle_managed_event(
+            "managed-1",
+            TurnState(thread_id="thr-1", turn_id="turn-1", active=True),
+        )
+    )
+    assert agent._snapshot().as_ble_payload()["activity20"] == 0b1
+
+    now[0] = 101.0
+    assert agent._snapshot().as_ble_payload()["activity20"] == 0b10
+
+
 def test_agent_persists_current_completion_sequence(tmp_path):
     state_path = tmp_path / "state.json"
     agent = BuddyAgent(state_path, watcher=None)

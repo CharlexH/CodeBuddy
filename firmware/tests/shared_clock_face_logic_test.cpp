@@ -49,93 +49,10 @@ int main() {
   const SharedClockFaceLayout landscape = sharedClockFaceLayout(true);
   expect_true(landscape.screenWidth == 240 && landscape.screenHeight == 135,
               "landscape shared face should use the full 240x135 display");
-  expect_true(landscape.pet.x == 0 && landscape.pet.y == 44 &&
-                  landscape.pet.width == 120 && landscape.pet.height == 64,
-              "landscape shared face should enlarge and lift the pet region");
-  expect_true(landscape.pet.x + landscape.pet.width / 2 == 60 &&
-                  landscape.pet.y + landscape.pet.height / 2 == 76,
-              "landscape compact pet should be centered at 60,76");
-  expect_true(landscape.status.visible && landscape.status.x == 120 &&
-                  landscape.status.y == 49 && landscape.status.width == 120 &&
-                  landscape.status.height == 54 && landscape.status.columnWidth == 40,
-              "landscape status dashboard should share the enlarged pet's center line");
-  expect_true(landscape.status.y + landscape.status.height / 2 ==
-                  landscape.pet.y + landscape.pet.height / 2,
-              "landscape pet and status regions should be vertically centered together");
-  expect_true(landscape.pet.useLocalSurface && landscape.pet.asciiScale == 1 &&
-                  landscape.pet.asciiYOffset == -13,
-              "landscape pet rendering should clip through its local surface and lift 1x ASCII into it");
-  expect_true(landscape.pet.asciiYOffset + 30 + 1 + 4 * 8 + 8 <=
-                  landscape.pet.height,
-              "the lowest five-line ASCII frame should fit inside the enlarged local surface");
-  expect_true(!sharedClockPetLocalSurfaceNeedsClear(false, false),
-              "an unchanged compact frame should retain the local pet surface");
-  expect_true(sharedClockPetLocalSurfaceNeedsClear(true, false) &&
-                  sharedClockPetLocalSurfaceNeedsClear(false, true),
-              "ASCII frames and full repaints should clear the local pet surface");
-  expect_true(landscape.time.primary.x == 8 && landscape.time.primary.y == 0 &&
-                  landscape.time.primary.width == 83 && landscape.time.primary.height == 36,
-              "landscape HH:MM should offset the custom font's top bearing at the display edge");
-  expect_true(landscape.time.primaryTextSize == 1.65f &&
-                  landscape.time.secondsTextSize == 1.65f &&
-                  landscape.time.centerY == 20,
-              "landscape time should retain JetBrains Mono's natural aspect ratio");
-  expect_true(landscape.time.showSeconds &&
-                  landscape.time.seconds.x == 93 &&
-                  landscape.time.seconds.y == 0 &&
-                  landscape.time.seconds.width == 50 &&
-                  landscape.time.seconds.height == 36,
-              "landscape :SS should close the extra gap after HH:MM");
-  expect_true(landscape.time.seconds.role == SHARED_CLOCK_TEXT_DIM,
-              "landscape seconds should stay visually secondary");
-  expect_true(landscape.time.primary.role == SHARED_CLOCK_TEXT_PRIMARY,
-              "landscape HH:MM should retain the primary text role");
-  expect_true(landscape.date.mode == SHARED_CLOCK_DATE_STACKED_MONTH_DAY &&
-                  landscape.date.monthTextSize == 0.57f &&
-                  landscape.date.dayTextSize == 0.76f,
-              "landscape date should use a compact three-letter month above the numeric day");
-  expect_true(
-    sharedClockAsciiTextWidth(5, landscape.time.primaryTextSize) <=
-        landscape.time.primary.width &&
-      sharedClockAsciiTextWidth(3, landscape.time.secondsTextSize) <=
-        landscape.time.seconds.width &&
-      sharedClockAsciiTextWidth(3, landscape.date.monthTextSize) <=
-        landscape.date.month.width &&
-      sharedClockAsciiTextWidth(2, landscape.date.dayTextSize) <=
-        landscape.date.day.width &&
-      sharedClockAsciiTextHeight(landscape.time.primaryTextSize) <=
-        landscape.time.primary.height &&
-      sharedClockAsciiTextHeight(landscape.date.monthTextSize) <=
-        landscape.date.month.height &&
-      sharedClockAsciiTextHeight(landscape.date.dayTextSize) <=
-        landscape.date.day.height,
-    "JetBrains Mono time and date samples should fit their rectangles in both axes"
-  );
-  expect_true(landscape.date.month.x == 204 && landscape.date.month.y == 3 &&
-                  landscape.date.month.width == 28 && landscape.date.month.height == 12,
-              "landscape month should fit a right-aligned three-letter abbreviation");
-  expect_true(landscape.date.day.x == 204 && landscape.date.day.y == 21 &&
-                  landscape.date.day.width == 28 && landscape.date.day.height == 16,
-              "landscape day should share the month block width below it");
-  expect_true(sharedClockTextRectCenterX(landscape.date.month) == 218 &&
-                  sharedClockTextRectCenterX(landscape.date.day) == 218 &&
-                  landscape.date.month.x + landscape.date.month.width == 232 &&
-                  landscape.date.day.x + landscape.date.day.width == 232 &&
-                  landscape.date.day.y -
-                    (landscape.date.month.y + landscape.date.month.height) == 6,
-              "landscape month and day should be centered together in a right-aligned block");
-  expect_true(landscape.time.primary.y + landscape.time.primary.height < landscape.pet.y &&
-                  landscape.date.day.y + landscape.date.day.height < landscape.status.y &&
-                  landscape.pet.y + landscape.pet.height <= 111 &&
-                  landscape.status.y + landscape.status.height <= 111,
-              "landscape top time and date should stay clear of the middle pet and status regions");
-  expect_true(landscape.pet.y -
-                    (landscape.time.primary.y + landscape.time.primary.height) == 8 &&
-                  landscape.meterY -
-                    (landscape.pet.y + landscape.pet.height) == 7,
-              "landscape pet should have balanced clearance above and below");
-  expect_true(landscape.meterY == 115 && landscape.meterFootprint == 20,
-              "landscape meter footprint should occupy the final 20 pixels from y 115");
+  expect_true(landscape.status.visible,
+              "landscape should keep count-change scheduling enabled for the dashboard cards");
+  expect_true(landscape.meterY == 109 && landscape.meterFootprint == 26,
+              "landscape meter should match the Figma footer's four-pixel bottom inset");
 
   SharedClockFaceContext context = {};
   context.normalDisplay = true;

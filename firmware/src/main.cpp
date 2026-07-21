@@ -15,6 +15,7 @@
 #include "ota_ui_logic.h"
 #include "clock_time_logic.h"
 #include "fonts/jetbrains_mono_ascii_8.h"
+#include "landscape_dashboard_logic.h"
 #include "completion_chime_logic.h"
 #include "data.h"
 #include "persona_logic.h"
@@ -141,6 +142,12 @@ static void useDefaultTextFont(Canvas& canvas) {
 template <typename Canvas>
 static void useSharedFaceAsciiFont(Canvas& canvas) {
   canvas.setFont(&code_buddy_fonts::JetBrainsMono_Regular8pt7b);
+  canvas.setTextSize(1);
+}
+
+template <typename Canvas>
+static void useSharedFaceMediumAsciiFont(Canvas& canvas) {
+  canvas.setFont(&code_buddy_fonts::JetBrainsMono_Medium8pt7b);
   canvas.setTextSize(1);
 }
 
@@ -865,6 +872,230 @@ static void runtimeUpdateOrient() {
 static uint8_t clockDow() { return _clkDt.WeekDay; }
 
 template <typename Canvas>
+static void drawLandscapeDashboardStatusAndHeartbeat(
+  Canvas& canvas,
+  uint32_t now,
+  bool redrawStatus
+) {
+  static uint32_t lastHeartbeatSecond = UINT32_MAX;
+  static uint32_t lastActivityReceipt = UINT32_MAX;
+  const LandscapeDashboardLayout layout = landscapeDashboardLayout();
+  const LandscapeDashboardStatus status = landscapeDashboardStatus(
+    tama.connected,
+    tama.sessionsRunning,
+    tama.sessionsWaiting
+  );
+  const uint16_t color = landscapeDashboardStatusColor(status);
+  if (redrawStatus) {
+    canvas.fillRect(0, 0, 120, 18, LANDSCAPE_DASHBOARD_BG);
+    canvas.fillRoundRect(layout.statusX, layout.statusDotY, 12, 12, 4, color);
+    useSharedFaceAsciiFont(canvas);
+    canvas.setTextDatum(TL_DATUM);
+    canvas.setTextSize(
+      LANDSCAPE_DASHBOARD_STATUS_SCALE_X,
+      LANDSCAPE_DASHBOARD_STATUS_SCALE_Y
+    );
+    canvas.setTextColor(color, LANDSCAPE_DASHBOARD_BG);
+    canvas.drawString(
+      landscapeDashboardStatusLabel(status),
+      layout.statusX + 20,
+      layout.statusY
+    );
+  }
+
+  const uint32_t heartbeatSecond = now / 1000U;
+  if (!redrawStatus && heartbeatSecond == lastHeartbeatSecond &&
+      tama.activity20ReceivedAt == lastActivityReceipt) {
+    return;
+  }
+  lastHeartbeatSecond = heartbeatSecond;
+  lastActivityReceipt = tama.activity20ReceivedAt;
+
+  canvas.fillRect(
+    layout.heartbeatX,
+    layout.heartbeatY,
+    layout.heartbeatWidth,
+    layout.heartbeatHeight,
+    LANDSCAPE_DASHBOARD_BG
+  );
+  canvas.drawFastHLine(
+    layout.heartbeatX,
+    layout.heartbeatCenterY,
+    layout.heartbeatWidth,
+    LANDSCAPE_DASHBOARD_DIM
+  );
+  const uint32_t activityMask = tama.hasActivity20
+    ? landscapeDashboardActivityMaskAt(
+        tama.activity20,
+        tama.activity20ReceivedAt,
+        now
+      )
+    : 0;
+  for (uint8_t i = 0; i < 20; ++i) {
+    if (!landscapeDashboardActivityVisibleAt(activityMask, i)) continue;
+    const uint8_t height = landscapeDashboardHeartbeatHeight(i);
+    canvas.fillRect(
+      layout.heartbeatX + (i * 3),
+      layout.heartbeatCenterY - (height / 2),
+      2,
+      height,
+      LANDSCAPE_DASHBOARD_GREEN
+    );
+  }
+}
+
+template <typename Canvas>
+static void drawLandscapeDashboardProgressCell(
+  Canvas& canvas,
+  int16_t x,
+  int16_t y,
+  uint16_t color
+) {
+  canvas.fillTriangle(x + 3, y, x + 7, y, x, y + 6, color);
+  canvas.fillTriangle(x + 7, y, x + 4, y + 6, x, y + 6, color);
+}
+
+template <typename Canvas>
+static void drawLandscapeDashboardTime(
+  Canvas& canvas,
+  bool fieldsValid
+) {
+  const LandscapeDashboardLayout layout = landscapeDashboardLayout();
+  char hm[6];
+  char seconds[3];
+  if (fieldsValid) {
+    clockFormatHm(hm, sizeof(hm), _clkTm.Hours, _clkTm.Minutes);
+    clockFormatSecondNumber(seconds, sizeof(seconds), _clkTm.Seconds);
+  } else {
+    snprintf(hm, sizeof(hm), "--:--");
+    snprintf(seconds, sizeof(seconds), "--");
+  }
+
+  canvas.fillRect(layout.timeX, layout.timeY, 160, 40, LANDSCAPE_DASHBOARD_BG);
+  useSharedFaceAsciiFont(canvas);
+  canvas.setTextDatum(TL_DATUM);
+  canvas.setTextColor(LANDSCAPE_DASHBOARD_IDLE, LANDSCAPE_DASHBOARD_BG);
+  canvas.setTextSize(
+    LANDSCAPE_DASHBOARD_TIME_SCALE_X,
+    LANDSCAPE_DASHBOARD_TIME_SCALE_Y
+  );
+  canvas.drawString(hm, layout.timeX, layout.timeY);
+
+  const uint8_t litBlocks = fieldsValid
+    ? landscapeDashboardSecondBlocks(_clkTm.Seconds)
+    : 0;
+  for (uint8_t i = 0; i < 4; ++i) {
+    drawLandscapeDashboardProgressCell(
+      canvas,
+      layout.secondProgressX + (i * 8),
+      layout.secondProgressY,
+      i < litBlocks ? LANDSCAPE_DASHBOARD_IDLE : LANDSCAPE_DASHBOARD_DIM
+    );
+  }
+  canvas.setTextSize(
+    LANDSCAPE_DASHBOARD_SECONDS_SCALE_X,
+    LANDSCAPE_DASHBOARD_SECONDS_SCALE_Y
+  );
+  canvas.setTextColor(LANDSCAPE_DASHBOARD_DIM, LANDSCAPE_DASHBOARD_BG);
+  canvas.drawString(seconds, layout.secondsX, layout.secondsY);
+}
+
+template <typename Canvas>
+static void drawLandscapeDashboardDate(
+  Canvas& canvas,
+  bool fieldsValid
+) {
+  const LandscapeDashboardLayout layout = landscapeDashboardLayout();
+  char dateLine[8];
+  clockFormatSharedDateLine(
+    dateLine,
+    sizeof(dateLine),
+    false,
+    fieldsValid,
+    _clkDt.WeekDay,
+    _clkDt.Month,
+    _clkDt.Date
+  );
+  const char* weekday = fieldsValid
+    ? clockWeekdayFullLabel(_clkDt.WeekDay)
+    : "---";
+  canvas.fillRect(4, layout.dateY, 160, 14, LANDSCAPE_DASHBOARD_BG);
+  useSharedFaceAsciiFont(canvas);
+  canvas.setTextSize(
+    LANDSCAPE_DASHBOARD_DATE_SCALE_X,
+    LANDSCAPE_DASHBOARD_DATE_SCALE_Y
+  );
+  canvas.setTextColor(LANDSCAPE_DASHBOARD_DIM, LANDSCAPE_DASHBOARD_BG);
+  canvas.setTextDatum(TL_DATUM);
+  canvas.drawString(dateLine, 4, layout.dateY);
+  canvas.setTextDatum(TR_DATUM);
+  canvas.drawString(weekday, 164, layout.dateY);
+  const int16_t weekdayWidth = canvas.textWidth(weekday);
+  const int16_t lineRight = 164 - weekdayWidth - 8;
+  if (lineRight > 63) {
+    canvas.drawFastHLine(63, layout.dateY + 7, lineRight - 63, LANDSCAPE_DASHBOARD_DIM);
+  }
+}
+
+template <typename Canvas>
+static void drawLandscapeDashboardCards(
+  Canvas& canvas,
+  SharedClockStatusCounts statusCounts
+) {
+  const LandscapeDashboardLayout layout = landscapeDashboardLayout();
+  static const char* labels[] = {"RUN", "ASK", "NEW"};
+  const uint8_t counts[] = {
+    statusCounts.running,
+    statusCounts.waiting,
+    statusCounts.unread,
+  };
+  const uint16_t colors[] = {
+    LANDSCAPE_DASHBOARD_RUN,
+    LANDSCAPE_DASHBOARD_ASK,
+    LANDSCAPE_DASHBOARD_NEW,
+  };
+  const uint16_t tints[] = {
+    LANDSCAPE_DASHBOARD_RUN_TINT,
+    LANDSCAPE_DASHBOARD_ASK_TINT,
+    LANDSCAPE_DASHBOARD_NEW_TINT,
+  };
+  useSharedFaceMediumAsciiFont(canvas);
+  for (uint8_t i = 0; i < 3; ++i) {
+    const int16_t y = layout.cardsY[i];
+    canvas.fillRoundRect(
+      layout.cardsX,
+      y,
+      layout.cardsWidth,
+      layout.cardHeight,
+      3,
+      tints[i]
+    );
+    canvas.fillRoundRect(layout.cardsX, y, 30, layout.cardHeight, 3, colors[i]);
+    canvas.setTextDatum(TL_DATUM);
+    canvas.setTextSize(
+      LANDSCAPE_DASHBOARD_CARD_LABEL_SCALE_X,
+      LANDSCAPE_DASHBOARD_CARD_LABEL_SCALE_Y
+    );
+    canvas.setTextColor(0x0000, colors[i]);
+    canvas.drawString(labels[i], layout.cardsX + 4, y + 1);
+
+    char countText[4] = {};
+    statusDashboardFormatCount(countText, sizeof(countText), counts[i]);
+    canvas.setTextDatum(MC_DATUM);
+    canvas.setTextSize(
+      LANDSCAPE_DASHBOARD_CARD_COUNT_SCALE_X,
+      LANDSCAPE_DASHBOARD_CARD_COUNT_SCALE_Y
+    );
+    canvas.setTextColor(colors[i], tints[i]);
+    canvas.drawString(
+      countText,
+      layout.cardsX + 47,
+      y + (layout.cardHeight / 2)
+    );
+  }
+}
+
+template <typename Canvas>
 static void drawSharedClockFaceTo(
   Canvas& canvas,
   bool landscape,
@@ -876,6 +1107,7 @@ static void drawSharedClockFaceTo(
 ) {
   const Palette& p = characterPalette();
   const SharedClockFaceLayout layout = sharedClockFaceLayout(landscape);
+  const uint16_t surfaceBg = landscape ? LANDSCAPE_DASHBOARD_BG : p.bg;
   const bool fieldsValid = clockSharedFieldsValid(
     dataRtcValid() || _clockHostTimeValid,
     _clkTm.Hours,
@@ -888,7 +1120,7 @@ static void drawSharedClockFaceTo(
 
   // Opening a new GIF state can clear the portrait sprite. Do it before the
   // cache decision so a persona transition and its text repaint are atomic.
-  if (!buddyMode) {
+  if (!landscape && !buddyMode) {
     characterSetPeek(true);
     characterSetState(activeState);
   }
@@ -931,7 +1163,7 @@ static void drawSharedClockFaceTo(
   );
 
   if (decision.clearSurface) {
-    canvas.fillScreen(p.bg);
+    canvas.fillScreen(surfaceBg);
     usageMeterRenderReset(meterState);
     meterFrame = landscape
       ? usageMeterLandscapeFrameForDisplay(
@@ -951,7 +1183,7 @@ static void drawSharedClockFaceTo(
       layout.meterY,
       layout.screenWidth,
       layout.meterFootprint,
-      p.bg
+      surfaceBg
     );
   }
 
@@ -959,31 +1191,37 @@ static void drawSharedClockFaceTo(
   // Restore the dedicated fixed ASCII face before applying pixel geometry.
   useSharedFaceAsciiFont(canvas);
   if (decision.drawTime) {
-    char hm[6];
-    char seconds[4];
-    clockFormatSharedTimeSegments(
-      hm,
-      sizeof(hm),
-      seconds,
-      sizeof(seconds),
-      fieldsValid,
-      _clkTm.Hours,
-      _clkTm.Minutes,
-      _clkTm.Seconds
-    );
-    canvas.setTextDatum(TL_DATUM);
-    canvas.setTextSize(layout.time.primaryTextSize);
-    canvas.setTextColor(p.text, p.bg);
-    canvas.drawString(hm, layout.time.primary.x, layout.time.primary.y);
-    if (layout.time.showSeconds) {
-      canvas.setTextSize(layout.time.secondsTextSize);
-      canvas.setTextColor(p.textDim, p.bg);
-      canvas.drawString(seconds, layout.time.seconds.x, layout.time.seconds.y);
+    if (landscape) {
+      drawLandscapeDashboardTime(canvas, fieldsValid);
+    } else {
+      char hm[6];
+      char seconds[4];
+      clockFormatSharedTimeSegments(
+        hm,
+        sizeof(hm),
+        seconds,
+        sizeof(seconds),
+        fieldsValid,
+        _clkTm.Hours,
+        _clkTm.Minutes,
+        _clkTm.Seconds
+      );
+      canvas.setTextDatum(TL_DATUM);
+      canvas.setTextSize(layout.time.primaryTextSize);
+      canvas.setTextColor(p.text, p.bg);
+      canvas.drawString(hm, layout.time.primary.x, layout.time.primary.y);
+      if (layout.time.showSeconds) {
+        canvas.setTextSize(layout.time.secondsTextSize);
+        canvas.setTextColor(p.textDim, p.bg);
+        canvas.drawString(seconds, layout.time.seconds.x, layout.time.seconds.y);
+      }
     }
   }
 
   if (decision.drawDate) {
-    if (layout.date.mode == SHARED_CLOCK_DATE_STACKED_MONTH_DAY) {
+    if (landscape) {
+      drawLandscapeDashboardDate(canvas, fieldsValid);
+    } else if (layout.date.mode == SHARED_CLOCK_DATE_STACKED_MONTH_DAY) {
       char month[4];
       char day[3];
       if (fieldsValid) {
@@ -1026,47 +1264,58 @@ static void drawSharedClockFaceTo(
   }
 
   if (decision.drawStatus && layout.status.visible) {
-    canvas.fillRect(
-      layout.status.x,
-      layout.status.y,
-      layout.status.width,
-      layout.status.height,
-      p.bg
-    );
-    static const char* labels[] = {"RUN", "ASK", "NEW"};
-    const uint8_t counts[] = {
-      statusCounts.running,
-      statusCounts.waiting,
-      statusCounts.unread,
-    };
-    const StatusDashboardKind kinds[] = {STATUS_RUN, STATUS_ASK, STATUS_NEW};
-    canvas.setTextDatum(MC_DATUM);
-    for (uint8_t i = 0; i < 3; ++i) {
-      const int16_t centerX = layout.status.x +
-        (i * layout.status.columnWidth) + (layout.status.columnWidth / 2);
-      canvas.setTextSize(STATUS_DASHBOARD_LABEL_TEXT_SIZE);
-      canvas.setTextColor(p.textDim, p.bg);
-      canvas.drawString(
-        labels[i],
-        centerX,
-        statusDashboardLabelCenterY(layout.status.y)
-      );
-      char countText[4] = {};
-      statusDashboardFormatCount(countText, sizeof(countText), counts[i]);
-      canvas.setTextSize(STATUS_DASHBOARD_COUNT_TEXT_SIZE);
-      canvas.setTextColor(
-        statusDashboardColor(statusDashboardColorRole(kinds[i], counts[i]), p),
+    if (landscape) {
+      drawLandscapeDashboardCards(canvas, statusCounts);
+    } else {
+      canvas.fillRect(
+        layout.status.x,
+        layout.status.y,
+        layout.status.width,
+        layout.status.height,
         p.bg
       );
-      canvas.drawString(
-        countText,
-        centerX,
-        statusDashboardCountCenterY(layout.status.y)
-      );
+      static const char* labels[] = {"RUN", "ASK", "NEW"};
+      const uint8_t counts[] = {
+        statusCounts.running,
+        statusCounts.waiting,
+        statusCounts.unread,
+      };
+      const StatusDashboardKind kinds[] = {STATUS_RUN, STATUS_ASK, STATUS_NEW};
+      canvas.setTextDatum(MC_DATUM);
+      for (uint8_t i = 0; i < 3; ++i) {
+        const int16_t centerX = layout.status.x +
+          (i * layout.status.columnWidth) + (layout.status.columnWidth / 2);
+        canvas.setTextSize(STATUS_DASHBOARD_LABEL_TEXT_SIZE);
+        canvas.setTextColor(p.textDim, p.bg);
+        canvas.drawString(
+          labels[i],
+          centerX,
+          statusDashboardLabelCenterY(layout.status.y)
+        );
+        char countText[4] = {};
+        statusDashboardFormatCount(countText, sizeof(countText), counts[i]);
+        canvas.setTextSize(STATUS_DASHBOARD_COUNT_TEXT_SIZE);
+        canvas.setTextColor(
+          statusDashboardColor(statusDashboardColorRole(kinds[i], counts[i]), p),
+          p.bg
+        );
+        canvas.drawString(
+          countText,
+          centerX,
+          statusDashboardCountCenterY(layout.status.y)
+        );
+      }
     }
   }
 
   if (decision.drawPet) {
+    if (landscape) {
+      drawLandscapeDashboardStatusAndHeartbeat(
+        canvas,
+        now,
+        decision.fullRepaint || decision.drawStatus
+      );
+    } else {
     lgfx::LovyanGFX* petCanvas = &canvas;
     int16_t petX = layout.pet.x;
     int16_t petY = layout.pet.y;
@@ -1123,6 +1372,7 @@ static void drawSharedClockFaceTo(
     }
     if (layout.pet.useLocalSurface && landscapeClockPetSpriteReady) {
       landscapeClockPetSprite.pushSprite(layout.pet.x, layout.pet.y);
+    }
     }
   }
 

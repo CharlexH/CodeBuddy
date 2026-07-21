@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.28 - 2026-07-21
+
+- Rebuilt the 240-by-135 landscape dashboard from the Figma layout with a four-state `RUNNING` / `WAITING` / `IDLE` / `OFFLINE` indicator, a compact time and full-date composition, and tinted `RUN` / `ASK` / `NEW` cards.
+- Added an optional 20-bit `activity20` snapshot field so the device can render the most recent 20 seconds of real managed and Codex Desktop activity independently from the BLE keepalive.
+- Added four quarter-minute blocks above the seconds display and preserved the existing animated 29-by-3 quota matrix with updated four-pixel side and bottom spacing.
+- Expanded the reproducible JetBrains Mono ASCII asset to include Regular and Medium weights while increasing firmware size by only about 3 KiB.
+
 ## 0.1.27 - 2026-07-20
 
 - Added a reproducible JetBrains Mono Regular ASCII subset for the landscape clock, date, and task dashboard, licensed under SIL Open Font License 1.1.

@@ -119,23 +119,23 @@ int main() {
   expect_true(dashboardPlan.dotFilledColumns == 26,
               "91 percent weekly remaining should fill 26 of 29 columns");
   expectMeterRect(
-    dashboardPlan.rects[0], 5, 113, 230, 22, LANDSCAPE_USAGE_METER_CONSUMED,
-    "landscape dashboard bounds should retain the original full-width region"
+    dashboardPlan.rects[0], 4, 109, 230, 22, LANDSCAPE_USAGE_METER_CONSUMED,
+    "landscape dashboard bounds should align to the Figma footer inset"
   );
   expect_true(dashboardPlan.rects[1].color == LANDSCAPE_USAGE_METER_ACTIVE,
               "landscape dashboard should use the same bright green as RUN");
   expectMeterRect(
-    usageMeterDotRect(dashboardPlan, 0, 0), 5, 113, 6, 6,
+    usageMeterDotRect(dashboardPlan, 0, 0), 4, 109, 6, 6,
     LANDSCAPE_USAGE_METER_ACTIVE,
     "the first filled dot should start at the left and top grid inset"
   );
   expectMeterRect(
-    usageMeterDotRect(dashboardPlan, 26, 0), 213, 113, 6, 6,
+    usageMeterDotRect(dashboardPlan, 26, 0), 212, 109, 6, 6,
     LANDSCAPE_USAGE_METER_CONSUMED,
     "the first unfilled dot should use the consumed color after the weekly fill"
   );
   expectMeterRect(
-    usageMeterDotRect(dashboardPlan, 28, 2), 229, 129, 6, 6,
+    usageMeterDotRect(dashboardPlan, 28, 2), 228, 125, 6, 6,
     LANDSCAPE_USAGE_METER_CONSUMED,
     "the final dot should preserve the centered footer margins"
   );

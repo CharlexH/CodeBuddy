@@ -11,6 +11,9 @@ static const char CLOCK_MON[][4] = {
 };
 
 static const char CLOCK_DOW[][4] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+static const char* const CLOCK_DOW_FULL[] = {
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+};
 
 inline bool clockValueInRange(int value, int min_value, int max_value) {
   return value >= min_value && value <= max_value;
@@ -22,6 +25,10 @@ inline const char* clockMonthLabel(int month) {
 
 inline const char* clockWeekdayLabel(int weekday) {
   return clockValueInRange(weekday, 0, 6) ? CLOCK_DOW[weekday] : "---";
+}
+
+inline const char* clockWeekdayFullLabel(int weekday) {
+  return clockValueInRange(weekday, 0, 6) ? CLOCK_DOW_FULL[weekday] : "---";
 }
 
 inline void clockFormatHm(char* out, size_t size, int hours, int minutes) {
@@ -38,6 +45,14 @@ inline void clockFormatSeconds(char* out, size_t size, int seconds) {
     return;
   }
   snprintf(out, size, ":%02d", seconds);
+}
+
+inline void clockFormatSecondNumber(char* out, size_t size, int seconds) {
+  if (!clockValueInRange(seconds, 0, 59)) {
+    snprintf(out, size, "--");
+    return;
+  }
+  snprintf(out, size, "%02d", seconds);
 }
 
 inline void clockFormatDateLine(char* out, size_t size, int month, int date) {

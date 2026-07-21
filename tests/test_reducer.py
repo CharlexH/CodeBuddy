@@ -31,6 +31,22 @@ def test_turn_lifecycle_and_entries_are_projected_into_snapshot():
     assert stopped.total == 0
 
 
+def test_snapshot_includes_optional_twenty_second_activity_mask():
+    snapshot = BuddySnapshot(
+        total=1,
+        running=1,
+        waiting=0,
+        msg="Working",
+        entries=[],
+        tokens=0,
+        tokens_today=0,
+        prompt=None,
+        activity20=0b10101,
+    )
+
+    assert snapshot.as_ble_payload()["activity20"] == 0b10101
+
+
 def test_approval_request_populates_prompt_and_waiting_state():
     reducer = BuddyStateReducer()
 

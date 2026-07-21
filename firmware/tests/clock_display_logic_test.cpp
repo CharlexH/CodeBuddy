@@ -35,6 +35,11 @@ int main() {
   clockFormatSeconds(buf, sizeof(buf), -1);
   expect_str_eq(buf, ":--", "invalid seconds should render as placeholder");
 
+  clockFormatSecondNumber(buf, sizeof(buf), 7);
+  expect_str_eq(buf, "07", "the Figma seconds group should omit the leading colon");
+  clockFormatSecondNumber(buf, sizeof(buf), 60);
+  expect_str_eq(buf, "--", "invalid compact seconds should render as a fixed placeholder");
+
   clockFormatDateLine(buf, sizeof(buf), 4, 20);
   expect_str_eq(buf, "APR 20", "valid month and date should use an uppercase abbreviation");
 
@@ -55,6 +60,7 @@ int main() {
   expect_str_eq(buf, "Sat APR 20", "the shared date formatter should uppercase only the month");
   clockFormatSharedDateLine(buf, sizeof(buf), true, false, 6, 4, 20);
   expect_str_eq(buf, "--- --- --", "an invalid shared-face date should use a fixed-width placeholder");
+  expect_str_eq(clockWeekdayFullLabel(2), "Tuesday", "landscape should use the full weekday label");
 
   expect_true(clockSharedFieldsValid(true, 23, 59, 59, 6, 12, 31),
               "trusted host-synced fields should be accepted when every clock field is valid");

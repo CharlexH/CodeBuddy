@@ -24,6 +24,9 @@ struct TamaState {
   bool     recentlyCompleted;
   bool     hasCompletionSeq;
   uint32_t completionSeq;
+  bool     hasActivity20;
+  uint32_t activity20;
+  uint32_t activity20ReceivedAt;
   uint32_t tokensToday;
   bool     hasFiveHourUsage;
   bool     hasSevenDayUsage;
@@ -282,6 +285,15 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
     out->hasCompletionSeq = true;
     out->completionSeq = completionSeq.as<uint32_t>();
   }
+  JsonVariantConst activity20 = doc["activity20"];
+  if (activity20.is<uint32_t>() && !activity20.is<bool>()) {
+    const uint32_t mask = activity20.as<uint32_t>();
+    if (mask <= 0x000FFFFFUL) {
+      out->hasActivity20 = true;
+      out->activity20 = mask;
+      out->activity20ReceivedAt = millis();
+    }
+  }
   uint32_t bridgeTokens = doc["tokens"] | 0;
   if (doc["tokens"].is<uint32_t>()) statsOnBridgeTokens(bridgeTokens);
   out->tokensToday = doc["tokens_today"] | out->tokensToday;
@@ -403,6 +415,7 @@ inline void dataPoll(TamaState* out) {
   if (!out->connected) {
     out->sessionsTotal=0; out->sessionsRunning=0; out->sessionsWaiting=0;
     out->recentlyCompleted=false; out->lastUpdated=now;
+    out->hasActivity20=false; out->activity20=0; out->activity20ReceivedAt=now;
     UsageMeterState usageState = {
       out->hasFiveHourUsage,
       out->hasSevenDayUsage,

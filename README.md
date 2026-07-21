@@ -30,11 +30,11 @@
 - A StickS3 firmware build with status, approval, settings, and offline screens.
 - A daily workflow designed to stay out of the way: run `code-buddy` once, then just use `codex`.
 
-## Highlights in v0.1.27
+## Highlights in v0.1.28
 
-- A landscape dashboard keeps the pet on the left and shows `RUN`, `ASK`, and `NEW` task counts on the right.
-- The full-width 29-by-3 quota matrix uses 6 px cells and a diagonal wave while tasks run, with RUN green, blue, and lavender `#CB9DFF` rows from top to bottom.
-- The landscape clock, date, and task dashboard use a compact JetBrains Mono ASCII subset; non-ASCII UI text is consolidated on one proportional font to keep more than 1.1 MiB of application flash free.
+- The Figma-based landscape dashboard shows `RUNNING`, `WAITING`, `IDLE`, or `OFFLINE`, a true 20-second Codex activity trace, quarter-minute progress blocks, and tinted `RUN`, `ASK`, and `NEW` cards.
+- The full-width 29-by-3 quota matrix retains its 6 px dots and diagonal running wave, aligned to the new 4 px footer baseline and left edge.
+- The landscape clock and dashboard use compact JetBrains Mono Regular and Medium ASCII subsets; non-ASCII UI text stays on one proportional font, leaving ample application flash free.
 - One short chime plays after a complete Codex turn. This includes managed CLI sessions and main Codex Desktop tasks discovered from local session logs; repeated snapshots and subagent turns are de-duplicated.
 - Secure Wi-Fi OTA supports manual Mac-push updates and an optional automatic update mode, with signed manifests, physical confirmation, rollback checks, and compact on-device progress.
 - The charging clock and active runtime share the landscape layout while keeping approval and settings interactions readable.
@@ -52,7 +52,7 @@ Preferred path:
 Fallback:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.27-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.28-full.bin
 ```
 
 Developer release build:

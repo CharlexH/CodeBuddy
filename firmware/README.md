@@ -18,7 +18,7 @@ Primary path:
 Fallback path:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.27-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.28-full.bin
 ```
 
 After flashing, go back to the Mac and run:
@@ -31,15 +31,17 @@ That will request Bluetooth permission, pair the StickS3, sync time, and finish 
 
 ## Runtime display
 
-When the device is landscape, the shared face keeps the pet on the left and
-shows `RUN`, `ASK`, and `NEW` task counts on the right. The full-width bottom
-29-by-3 meter uses 6 px dots with 2 px gaps to show the remaining Codex
-allowance. While a task runs, its remaining dots animate with a diagonal wave
-across RUN-green, blue, and lavender rows. A short chime plays once per completed turn
-when **Settings > sound** is enabled.
+When the device is landscape, the Figma-based face shows a four-state task
+indicator, the most recent 20 seconds of Codex activity, quarter-minute time
+progress, and `RUN`, `ASK`, and `NEW` task counts. The full-width bottom 29-by-3
+meter uses 6 px dots with 2 px gaps, aligned to the 4 px footer baseline and
+left edge, to show remaining
+Codex allowance. While a task runs, its remaining dots animate with a diagonal
+wave across RUN-green, blue, and lavender rows. A short chime plays once per
+completed turn when **Settings > sound** is enabled.
 
-The landscape clock, date, and task dashboard use an ASCII-only subset of
-JetBrains Mono Regular. Non-ASCII UI text uses the single proportional
+The landscape clock, date, and task dashboard use ASCII-only subsets of
+JetBrains Mono Regular and Medium. Non-ASCII UI text uses the single proportional
 `efontCN_12` face, and compact utility screens retain the built-in fallback
 font. The subset can be regenerated with
 `scripts/generate-jetbrains-mono-font.sh`; its SIL Open Font License 1.1 text is

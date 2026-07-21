@@ -20,6 +20,7 @@ from .agent_runtime import (
     require_current_user_peer,
     restrict_unix_socket,
 )
+from .activity_heartbeat import ActivityHeartbeat
 from .ble_transport import BleBuddyTransport
 from .bridge import ManagedSessionBridge
 from .catalog import SessionCatalog, SessionPrompt, SessionRecord
@@ -246,6 +247,8 @@ class BuddyAgent:
         self._completed_turn_order: Deque[tuple[str, str]] = deque()
         self._completed_turn_keys: set[tuple[str, str]] = set()
         self._readonly_completion_initialized = False
+        self._activity_heartbeat = ActivityHeartbeat()
+        self._readonly_activity_seen: dict[str, float] = {}
         self._ota_session_lock: Optional[asyncio.Lock] = None
         self._ota_session_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._ota_claim_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -561,6 +564,17 @@ class BuddyAgent:
     def _refresh_readonly_state(self) -> None:
         if self._watcher is not None:
             readonly = self._watcher.poll(now=self.clock())
+            readonly_ids = {session.session_id for session in readonly}
+            for session in readonly:
+                previous = self._readonly_activity_seen.get(session.session_id)
+                if previous is None or session.last_activity_at > previous:
+                    self._activity_heartbeat.record(session.last_activity_at)
+                self._readonly_activity_seen[session.session_id] = session.last_activity_at
+            self._readonly_activity_seen = {
+                session_id: timestamp
+                for session_id, timestamp in self._readonly_activity_seen.items()
+                if session_id in readonly_ids
+            }
             self._record_readonly_completions(readonly)
             self.catalog.replace_readonly(readonly)
         if self._client_state_watcher is not None:
@@ -652,8 +666,10 @@ class BuddyAgent:
 
     async def _handle_managed_event(self, control_id: str, event: object) -> None:
         runtime = self._managed_runtime[control_id]
+        now = self.clock()
+        self._activity_heartbeat.record(now)
         previous_session_id = runtime.session_id
-        runtime.apply(event, now=self.clock())
+        runtime.apply(event, now=now)
         record = runtime.to_record()
         if previous_session_id and record is not None and previous_session_id != record.session_id:
             self.catalog.remove(previous_session_id)
@@ -710,7 +726,9 @@ class BuddyAgent:
     async def _handle_managed_close(self, control_id: str) -> None:
         runtime = self._managed_runtime.get(control_id)
         if runtime is not None:
-            runtime.close(now=self.clock())
+            now = self.clock()
+            self._activity_heartbeat.record(now)
+            runtime.close(now=now)
             record = runtime.to_record()
             if record is not None:
                 self.catalog.upsert(record)
@@ -743,12 +761,14 @@ class BuddyAgent:
                     self._persist(snapshot, agent_running=True)
 
     def _snapshot(self):
+        now = self.clock()
         return replace(
-            self.catalog.snapshot(now=self.clock()),
+            self.catalog.snapshot(now=now),
             usage=self._usage,
             usage_is_known=self._usage_is_known,
             completion_seq=self._completion_seq,
             unread=self._unread,
+            activity20=self._activity_heartbeat.mask(now),
         )
 
     def _persist(self, snapshot: Any, *, agent_running: bool) -> None:

@@ -25,16 +25,19 @@ static constexpr uint16_t LANDSCAPE_USAGE_METER_ACTIVE = 0x07E0;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_CONSUMED = 0x19C5;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_BOTTOM = 0xCCFF;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_MINT_MIDDLE = 0x7E1E;
-static constexpr uint8_t LANDSCAPE_USAGE_METER_FOOTPRINT = 22;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_SIZE = 6;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_GAP = 2;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_DOT_ROWS = 3;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_SIDE_INSET = 4;
+static constexpr uint8_t LANDSCAPE_USAGE_METER_BOTTOM_INSET = 4;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_SCROLL_BAND = 4;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_ANIMATION_STEPS = 16;
 static constexpr uint16_t LANDSCAPE_USAGE_METER_ANIMATION_PERIOD_MS = 750;
 static constexpr uint8_t LANDSCAPE_USAGE_METER_GRID_HEIGHT =
   (LANDSCAPE_USAGE_METER_DOT_ROWS * LANDSCAPE_USAGE_METER_DOT_SIZE) +
   ((LANDSCAPE_USAGE_METER_DOT_ROWS - 1) * LANDSCAPE_USAGE_METER_DOT_GAP);
+static constexpr uint8_t LANDSCAPE_USAGE_METER_FOOTPRINT =
+  LANDSCAPE_USAGE_METER_GRID_HEIGHT + LANDSCAPE_USAGE_METER_BOTTOM_INSET;
 
 struct UsageMeterRect {
   uint16_t x;
@@ -326,7 +329,7 @@ inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
     return plan;
   }
 
-  const uint16_t usableWidth = fullWidth - (USAGE_METER_SIDE_INSET * 2);
+  const uint16_t usableWidth = fullWidth - (LANDSCAPE_USAGE_METER_SIDE_INSET * 2);
   const uint16_t dotPitch = LANDSCAPE_USAGE_METER_DOT_SIZE +
     LANDSCAPE_USAGE_METER_DOT_GAP;
   const uint16_t dotColumns = (usableWidth + LANDSCAPE_USAGE_METER_DOT_GAP) /
@@ -335,10 +338,11 @@ inline UsageMeterRenderPlan usageMeterLandscapeSinglePlan(
   const uint16_t gridWidth =
     (dotColumns * LANDSCAPE_USAGE_METER_DOT_SIZE) +
     ((dotColumns - 1) * LANDSCAPE_USAGE_METER_DOT_GAP);
-  const uint16_t x = (fullWidth - gridWidth) / 2;
-  const uint16_t y = fullHeight - LANDSCAPE_USAGE_METER_FOOTPRINT +
-    ((LANDSCAPE_USAGE_METER_FOOTPRINT -
-      LANDSCAPE_USAGE_METER_GRID_HEIGHT) / 2);
+  // Keep the established 29 x 3 grid intact while aligning its first dot to
+  // the Figma footer's four-pixel left edge. The fixed integer pitch leaves a
+  // six-pixel optical margin on the opposite side.
+  const uint16_t x = LANDSCAPE_USAGE_METER_SIDE_INSET;
+  const uint16_t y = fullHeight - LANDSCAPE_USAGE_METER_FOOTPRINT;
   const bool useSevenDay = state.hasSevenDay;
   const uint8_t remaining = useSevenDay
     ? state.sevenDayRemaining

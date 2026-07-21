@@ -173,8 +173,8 @@ inline constexpr SharedClockFaceLayout sharedClockFaceLayout(bool landscape) {
           0.76f,
         },
         {true, 120, 49, 120, 54, 40},
-        115,
-        20,
+        109,
+        26,
       }
     : SharedClockFaceLayout{
         135,
