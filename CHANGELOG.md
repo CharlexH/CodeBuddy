@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.29 - 2026-07-21
+
+- Replaced fractional, non-uniform scaling of the 1-bit dashboard font with native-size JetBrains Mono bitmaps for the status, time, seconds, date, task labels, and counts.
+- Kept the 8 pt Regular ASCII subset for legacy screens while adding tightly scoped 6, 7, 14, and 20 pt dashboard subsets, avoiding distorted strokes for about 3 KiB of additional flash.
+
 ## 0.1.28 - 2026-07-21
 
 - Rebuilt the 240-by-135 landscape dashboard from the Figma layout with a four-state `RUNNING` / `WAITING` / `IDLE` / `OFFLINE` indicator, a compact time and full-date composition, and tinted `RUN` / `ASK` / `NEW` cards.

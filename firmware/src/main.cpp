@@ -146,8 +146,26 @@ static void useSharedFaceAsciiFont(Canvas& canvas) {
 }
 
 template <typename Canvas>
-static void useSharedFaceMediumAsciiFont(Canvas& canvas) {
-  canvas.setFont(&code_buddy_fonts::JetBrainsMono_Medium8pt7b);
+static void useDashboardStatusFont(Canvas& canvas) {
+  canvas.setFont(&code_buddy_fonts::JetBrainsMono_Regular7pt7b);
+  canvas.setTextSize(1);
+}
+
+template <typename Canvas>
+static void useDashboardTimeFont(Canvas& canvas) {
+  canvas.setFont(&code_buddy_fonts::JetBrainsMono_Regular20pt7b);
+  canvas.setTextSize(1);
+}
+
+template <typename Canvas>
+static void useDashboardSecondsFont(Canvas& canvas) {
+  canvas.setFont(&code_buddy_fonts::JetBrainsMono_Regular14pt7b);
+  canvas.setTextSize(1);
+}
+
+template <typename Canvas>
+static void useDashboardCardFont(Canvas& canvas) {
+  canvas.setFont(&code_buddy_fonts::JetBrainsMono_Medium6pt7b);
   canvas.setTextSize(1);
 }
 
@@ -889,12 +907,8 @@ static void drawLandscapeDashboardStatusAndHeartbeat(
   if (redrawStatus) {
     canvas.fillRect(0, 0, 120, 18, LANDSCAPE_DASHBOARD_BG);
     canvas.fillRoundRect(layout.statusX, layout.statusDotY, 12, 12, 4, color);
-    useSharedFaceAsciiFont(canvas);
+    useDashboardStatusFont(canvas);
     canvas.setTextDatum(TL_DATUM);
-    canvas.setTextSize(
-      LANDSCAPE_DASHBOARD_STATUS_SCALE_X,
-      LANDSCAPE_DASHBOARD_STATUS_SCALE_Y
-    );
     canvas.setTextColor(color, LANDSCAPE_DASHBOARD_BG);
     canvas.drawString(
       landscapeDashboardStatusLabel(status),
@@ -972,13 +986,9 @@ static void drawLandscapeDashboardTime(
   }
 
   canvas.fillRect(layout.timeX, layout.timeY, 160, 40, LANDSCAPE_DASHBOARD_BG);
-  useSharedFaceAsciiFont(canvas);
+  useDashboardTimeFont(canvas);
   canvas.setTextDatum(TL_DATUM);
   canvas.setTextColor(LANDSCAPE_DASHBOARD_IDLE, LANDSCAPE_DASHBOARD_BG);
-  canvas.setTextSize(
-    LANDSCAPE_DASHBOARD_TIME_SCALE_X,
-    LANDSCAPE_DASHBOARD_TIME_SCALE_Y
-  );
   canvas.drawString(hm, layout.timeX, layout.timeY);
 
   const uint8_t litBlocks = fieldsValid
@@ -992,10 +1002,8 @@ static void drawLandscapeDashboardTime(
       i < litBlocks ? LANDSCAPE_DASHBOARD_IDLE : LANDSCAPE_DASHBOARD_DIM
     );
   }
-  canvas.setTextSize(
-    LANDSCAPE_DASHBOARD_SECONDS_SCALE_X,
-    LANDSCAPE_DASHBOARD_SECONDS_SCALE_Y
-  );
+  useDashboardSecondsFont(canvas);
+  canvas.setTextDatum(TL_DATUM);
   canvas.setTextColor(LANDSCAPE_DASHBOARD_DIM, LANDSCAPE_DASHBOARD_BG);
   canvas.drawString(seconds, layout.secondsX, layout.secondsY);
 }
@@ -1020,11 +1028,7 @@ static void drawLandscapeDashboardDate(
     ? clockWeekdayFullLabel(_clkDt.WeekDay)
     : "---";
   canvas.fillRect(4, layout.dateY, 160, 14, LANDSCAPE_DASHBOARD_BG);
-  useSharedFaceAsciiFont(canvas);
-  canvas.setTextSize(
-    LANDSCAPE_DASHBOARD_DATE_SCALE_X,
-    LANDSCAPE_DASHBOARD_DATE_SCALE_Y
-  );
+  useDashboardStatusFont(canvas);
   canvas.setTextColor(LANDSCAPE_DASHBOARD_DIM, LANDSCAPE_DASHBOARD_BG);
   canvas.setTextDatum(TL_DATUM);
   canvas.drawString(dateLine, 4, layout.dateY);
@@ -1059,7 +1063,6 @@ static void drawLandscapeDashboardCards(
     LANDSCAPE_DASHBOARD_ASK_TINT,
     LANDSCAPE_DASHBOARD_NEW_TINT,
   };
-  useSharedFaceMediumAsciiFont(canvas);
   for (uint8_t i = 0; i < 3; ++i) {
     const int16_t y = layout.cardsY[i];
     canvas.fillRoundRect(
@@ -1071,21 +1074,15 @@ static void drawLandscapeDashboardCards(
       tints[i]
     );
     canvas.fillRoundRect(layout.cardsX, y, 30, layout.cardHeight, 3, colors[i]);
+    useDashboardCardFont(canvas);
     canvas.setTextDatum(TL_DATUM);
-    canvas.setTextSize(
-      LANDSCAPE_DASHBOARD_CARD_LABEL_SCALE_X,
-      LANDSCAPE_DASHBOARD_CARD_LABEL_SCALE_Y
-    );
     canvas.setTextColor(0x0000, colors[i]);
     canvas.drawString(labels[i], layout.cardsX + 4, y + 1);
 
     char countText[4] = {};
     statusDashboardFormatCount(countText, sizeof(countText), counts[i]);
+    useDashboardStatusFont(canvas);
     canvas.setTextDatum(MC_DATUM);
-    canvas.setTextSize(
-      LANDSCAPE_DASHBOARD_CARD_COUNT_SCALE_X,
-      LANDSCAPE_DASHBOARD_CARD_COUNT_SCALE_Y
-    );
     canvas.setTextColor(colors[i], tints[i]);
     canvas.drawString(
       countText,

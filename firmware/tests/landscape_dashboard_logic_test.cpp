@@ -14,16 +14,6 @@ int main() {
   assert(layout.cardsX == 172 && layout.cardsWidth == 64);
   assert(layout.cardsY[0] == 34 && layout.cardsY[1] == 57 && layout.cardsY[2] == 79);
   assert(layout.meterY == 109 && layout.meterFootprint == 26);
-  assert(landscapeDashboardTextWidth(7, LANDSCAPE_DASHBOARD_STATUS_SCALE_X) > 58.7f);
-  assert(landscapeDashboardTextHeight(LANDSCAPE_DASHBOARD_STATUS_SCALE_Y) < 14.1f);
-  assert(landscapeDashboardTextWidth(5, LANDSCAPE_DASHBOARD_TIME_SCALE_X) > 119.9f);
-  assert(landscapeDashboardTextHeight(LANDSCAPE_DASHBOARD_TIME_SCALE_Y) < 40.0f);
-  assert(landscapeDashboardTextWidth(2, LANDSCAPE_DASHBOARD_SECONDS_SCALE_X) > 33.9f);
-  assert(landscapeDashboardTextHeight(LANDSCAPE_DASHBOARD_SECONDS_SCALE_Y) < 28.0f);
-  assert(landscapeDashboardTextWidth(6, LANDSCAPE_DASHBOARD_DATE_SCALE_X) > 50.9f);
-  assert(landscapeDashboardTextWidth(3, LANDSCAPE_DASHBOARD_CARD_LABEL_SCALE_X) < 22.0f);
-  assert(landscapeDashboardTextWidth(3, LANDSCAPE_DASHBOARD_CARD_COUNT_SCALE_X) < 26.0f);
-
   assert(landscapeDashboardStatus(false, 3, 2) == DASHBOARD_OFFLINE);
   assert(landscapeDashboardStatus(true, 3, 2) == DASHBOARD_WAITING);
   assert(landscapeDashboardStatus(true, 3, 0) == DASHBOARD_RUNNING);

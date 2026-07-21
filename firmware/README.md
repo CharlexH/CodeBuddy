@@ -18,7 +18,7 @@ Primary path:
 Fallback path:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.28-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.29-full.bin
 ```
 
 After flashing, go back to the Mac and run:
@@ -40,8 +40,8 @@ Codex allowance. While a task runs, its remaining dots animate with a diagonal
 wave across RUN-green, blue, and lavender rows. A short chime plays once per
 completed turn when **Settings > sound** is enabled.
 
-The landscape clock, date, and task dashboard use ASCII-only subsets of
-JetBrains Mono Regular and Medium. Non-ASCII UI text uses the single proportional
+The landscape clock, date, and task dashboard use native-size ASCII subsets of
+JetBrains Mono Regular and Medium without fractional bitmap scaling. Non-ASCII UI text uses the single proportional
 `efontCN_12` face, and compact utility screens retain the built-in fallback
 font. The subset can be regenerated with
 `scripts/generate-jetbrains-mono-font.sh`; its SIL Open Font License 1.1 text is

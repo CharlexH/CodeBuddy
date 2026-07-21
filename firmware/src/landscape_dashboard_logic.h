@@ -48,32 +48,6 @@ static constexpr uint16_t LANDSCAPE_DASHBOARD_RUN_TINT = 0x1142;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_ASK_TINT = 0x2105;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_NEW_TINT = 0x1925;
 static constexpr uint32_t LANDSCAPE_DASHBOARD_ACTIVITY_MASK = 0x000FFFFFUL;
-static constexpr uint8_t LANDSCAPE_DASHBOARD_FONT_X_ADVANCE = 10;
-static constexpr uint8_t LANDSCAPE_DASHBOARD_FONT_Y_ADVANCE = 21;
-static constexpr float LANDSCAPE_DASHBOARD_STATUS_SCALE_X = 0.84f;
-static constexpr float LANDSCAPE_DASHBOARD_STATUS_SCALE_Y = 0.67f;
-static constexpr float LANDSCAPE_DASHBOARD_TIME_SCALE_X = 2.4f;
-static constexpr float LANDSCAPE_DASHBOARD_TIME_SCALE_Y = 1.9f;
-static constexpr float LANDSCAPE_DASHBOARD_SECONDS_SCALE_X = 1.7f;
-static constexpr float LANDSCAPE_DASHBOARD_SECONDS_SCALE_Y = 1.33f;
-static constexpr float LANDSCAPE_DASHBOARD_DATE_SCALE_X = 0.85f;
-static constexpr float LANDSCAPE_DASHBOARD_DATE_SCALE_Y = 0.67f;
-static constexpr float LANDSCAPE_DASHBOARD_CARD_LABEL_SCALE_X = 0.73f;
-static constexpr float LANDSCAPE_DASHBOARD_CARD_LABEL_SCALE_Y = 0.57f;
-static constexpr float LANDSCAPE_DASHBOARD_CARD_COUNT_SCALE_X = 0.84f;
-static constexpr float LANDSCAPE_DASHBOARD_CARD_COUNT_SCALE_Y = 0.67f;
-
-inline constexpr float landscapeDashboardTextWidth(
-  uint8_t characters,
-  float scaleX
-) {
-  return characters * LANDSCAPE_DASHBOARD_FONT_X_ADVANCE * scaleX;
-}
-
-inline constexpr float landscapeDashboardTextHeight(float scaleY) {
-  return LANDSCAPE_DASHBOARD_FONT_Y_ADVANCE * scaleY;
-}
-
 inline constexpr LandscapeDashboardLayout landscapeDashboardLayout() {
   return {
     240, 135,
