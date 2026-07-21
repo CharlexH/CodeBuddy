@@ -32,7 +32,7 @@ int main() {
   assert(layout.statusX == 4 && layout.statusY == 4);
   assert(layout.heartbeatX == 172 && layout.heartbeatY == 4);
   assert(layout.timeX == 4 && layout.timeY == 34);
-  assert(layout.secondsX == 129 && layout.secondsY == 44);
+  assert(layout.secondsX == 129 && layout.secondsY == 48);
   assert(layout.dateY == 79);
   assert(layout.cardsX == 172 && layout.cardsWidth == 64);
   assert(layout.cardsY[0] == 34 && layout.cardsY[1] == 57 && layout.cardsY[2] == 79);
@@ -45,6 +45,16 @@ int main() {
   assert(strcmp(landscapeDashboardStatusLabel(DASHBOARD_WAITING), "WAITING") == 0);
   assert(strcmp(landscapeDashboardStatusLabel(DASHBOARD_IDLE), "IDLE") == 0);
   assert(strcmp(landscapeDashboardStatusLabel(DASHBOARD_OFFLINE), "OFFLINE") == 0);
+  assert(LANDSCAPE_DASHBOARD_SECONDS_TEXT == 0xA514);
+  assert(LANDSCAPE_DASHBOARD_DATE_TEXT == LANDSCAPE_DASHBOARD_IDLE);
+  assert(
+    landscapeDashboardCountColor(0, LANDSCAPE_DASHBOARD_RUN) ==
+    LANDSCAPE_DASHBOARD_WHITE_40
+  );
+  assert(
+    landscapeDashboardCountColor(1, LANDSCAPE_DASHBOARD_RUN) ==
+    LANDSCAPE_DASHBOARD_RUN
+  );
 
   assert(landscapeDashboardSecondBlocks(-1) == 0);
   assert(landscapeDashboardSecondBlocks(0) == 0);

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.31 - 2026-07-21
+
+- Moved the seconds value down four pixels and changed it to 60% white, while making the date and weekday fully white.
+- Switched `RUN` / `ASK` / `NEW` labels to a native JetBrains Mono Bold subset and rendered zero counts in 40% white instead of their task color.
+
 ## 0.1.30 - 2026-07-21
 
 - Replaced the discrete 20-second activity bars with a continuous anti-aliased heartbeat curve that smoothly departs from and returns to the center baseline.

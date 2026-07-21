@@ -44,6 +44,9 @@ static constexpr uint16_t LANDSCAPE_DASHBOARD_OFFLINE = 0xFA8A;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_ASK = 0xCCFF;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_NEW = 0x5E1F;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_DIM = 0x738E;
+static constexpr uint16_t LANDSCAPE_DASHBOARD_WHITE_40 = 0x738E;
+static constexpr uint16_t LANDSCAPE_DASHBOARD_SECONDS_TEXT = 0xA514;
+static constexpr uint16_t LANDSCAPE_DASHBOARD_DATE_TEXT = 0xFFFF;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_RUN_TINT = 0x1142;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_ASK_TINT = 0x2105;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_NEW_TINT = 0x1925;
@@ -54,7 +57,7 @@ inline constexpr LandscapeDashboardLayout landscapeDashboardLayout() {
     4, 4, 5,
     172, 4, 64, 14, 11,
     4, 34,
-    129, 44,
+    129, 48,
     129, 36,
     79,
     172, 64, 14, {34, 57, 79},
@@ -94,6 +97,13 @@ inline constexpr uint16_t landscapeDashboardStatusColor(
       : (status == DASHBOARD_IDLE
         ? LANDSCAPE_DASHBOARD_IDLE
         : LANDSCAPE_DASHBOARD_OFFLINE));
+}
+
+inline constexpr uint16_t landscapeDashboardCountColor(
+  uint8_t count,
+  uint16_t activeColor
+) {
+  return count == 0 ? LANDSCAPE_DASHBOARD_WHITE_40 : activeColor;
 }
 
 inline constexpr uint8_t landscapeDashboardSecondBlocks(int seconds) {

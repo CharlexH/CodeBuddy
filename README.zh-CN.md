@@ -30,9 +30,10 @@
 - 一套 StickS3 固件，包含状态页、审批页、设置页和离线页。
 - 一套尽量不打扰日常工作的流程：先跑一次 `code-buddy`，之后直接用 `codex`。
 
-## v0.1.30 亮点
+## v0.1.31 亮点
 
 - 按 Figma 重做横屏状态页：显示 `RUNNING`、`WAITING`、`IDLE` 或 `OFFLINE`，加入连续平滑的 Codex 近 20 秒活动心跳、分钟四等分进度块，以及带底色的 `RUN`、`ASK`、`NEW` 卡片。
+- `RUN / ASK / NEW` 使用原生 JetBrains Mono Bold；0 计数显示为 40% 白，秒显示为 60% 白，月日和星期使用纯白，强化紧凑界面的信息层级。
 - 29×3 额度点阵保留 6px 圆点和任务运行时的对角波形，底部和左侧对齐到新的 4px 边界。
 - 横屏时钟和状态页使用原生字号的 JetBrains Mono Regular 与 Medium 位图子集，不再做分数倍拉伸；非 ASCII 界面继续使用一套比例字体，并保留充足的应用分区空间。
 - 每个完整 Codex turn 结束后只响一次；既支持受管的 CLI 会话，也支持从本地日志发现的 Codex Desktop 主任务，并会自动排除重复快照和 subagent 完成事件。
@@ -52,7 +53,7 @@
 兜底方式：
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.30-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.31-full.bin
 ```
 
 开发者本地生成 release 镜像：

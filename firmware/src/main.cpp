@@ -165,7 +165,7 @@ static void useDashboardSecondsFont(Canvas& canvas) {
 
 template <typename Canvas>
 static void useDashboardCardFont(Canvas& canvas) {
-  canvas.setFont(&code_buddy_fonts::JetBrainsMono_Medium6pt7b);
+  canvas.setFont(&code_buddy_fonts::JetBrainsMono_Bold6pt7b);
   canvas.setTextSize(1);
 }
 
@@ -1000,7 +1000,7 @@ static void drawLandscapeDashboardTime(
   }
   useDashboardSecondsFont(canvas);
   canvas.setTextDatum(TL_DATUM);
-  canvas.setTextColor(LANDSCAPE_DASHBOARD_DIM, LANDSCAPE_DASHBOARD_BG);
+  canvas.setTextColor(LANDSCAPE_DASHBOARD_SECONDS_TEXT, LANDSCAPE_DASHBOARD_BG);
   canvas.drawString(seconds, layout.secondsX, layout.secondsY);
 }
 
@@ -1025,7 +1025,7 @@ static void drawLandscapeDashboardDate(
     : "---";
   canvas.fillRect(4, layout.dateY, 160, 14, LANDSCAPE_DASHBOARD_BG);
   useDashboardStatusFont(canvas);
-  canvas.setTextColor(LANDSCAPE_DASHBOARD_DIM, LANDSCAPE_DASHBOARD_BG);
+  canvas.setTextColor(LANDSCAPE_DASHBOARD_DATE_TEXT, LANDSCAPE_DASHBOARD_BG);
   canvas.setTextDatum(TL_DATUM);
   canvas.drawString(dateLine, 4, layout.dateY);
   canvas.setTextDatum(TR_DATUM);
@@ -1079,7 +1079,10 @@ static void drawLandscapeDashboardCards(
     statusDashboardFormatCount(countText, sizeof(countText), counts[i]);
     useDashboardStatusFont(canvas);
     canvas.setTextDatum(MC_DATUM);
-    canvas.setTextColor(colors[i], tints[i]);
+    canvas.setTextColor(
+      landscapeDashboardCountColor(counts[i], colors[i]),
+      tints[i]
+    );
     canvas.drawString(
       countText,
       layout.cardsX + 47,
