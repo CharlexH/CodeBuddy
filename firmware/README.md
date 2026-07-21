@@ -18,7 +18,7 @@ Primary path:
 Fallback path:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.29-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.30-full.bin
 ```
 
 After flashing, go back to the Mac and run:
@@ -32,7 +32,7 @@ That will request Bluetooth permission, pair the StickS3, sync time, and finish 
 ## Runtime display
 
 When the device is landscape, the Figma-based face shows a four-state task
-indicator, the most recent 20 seconds of Codex activity, quarter-minute time
+indicator, a smooth continuous trace of the most recent 20 seconds of Codex activity, quarter-minute time
 progress, and `RUN`, `ASK`, and `NEW` task counts. The full-width bottom 29-by-3
 meter uses 6 px dots with 2 px gaps, aligned to the 4 px footer baseline and
 left edge, to show remaining

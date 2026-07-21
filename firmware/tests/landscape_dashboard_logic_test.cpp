@@ -3,6 +3,29 @@
 
 #include "landscape_dashboard_logic.h"
 
+struct RecordedHeartbeatLine {
+  int16_t x0;
+  int16_t y0;
+  int16_t x1;
+  int16_t y1;
+};
+
+struct HeartbeatCanvas {
+  RecordedHeartbeatLine lines[128] = {};
+  uint8_t count = 0;
+
+  void drawSmoothLine(
+    int16_t x0,
+    int16_t y0,
+    int16_t x1,
+    int16_t y1,
+    uint16_t
+  ) {
+    assert(count < 128);
+    lines[count++] = {x0, y0, x1, y1};
+  }
+};
+
 int main() {
   const LandscapeDashboardLayout layout = landscapeDashboardLayout();
   assert(layout.screenWidth == 240 && layout.screenHeight == 135);
@@ -38,8 +61,37 @@ int main() {
   assert(landscapeDashboardActivityVisibleAt(1UL << 19, 0));
   assert(landscapeDashboardActivityVisibleAt(1UL, 19));
   assert(!landscapeDashboardActivityVisibleAt(0, 10));
-  assert(landscapeDashboardHeartbeatHeight(0) == 4);
-  assert(landscapeDashboardHeartbeatHeight(2) == 12);
-  assert(landscapeDashboardHeartbeatHeight(19) >= 4);
+  HeartbeatCanvas emptyCurve;
+  landscapeDashboardDrawHeartbeatCurve(
+    emptyCurve, 0, layout.heartbeatX, layout.heartbeatCenterY,
+    LANDSCAPE_DASHBOARD_GREEN
+  );
+  assert(emptyCurve.count == 0);
+
+  HeartbeatCanvas activeCurve;
+  const uint32_t adjacentActivity = (1UL << (19 - 9)) | (1UL << (19 - 10));
+  landscapeDashboardDrawHeartbeatCurve(
+    activeCurve, adjacentActivity, layout.heartbeatX,
+    layout.heartbeatCenterY, LANDSCAPE_DASHBOARD_GREEN
+  );
+  assert(activeCurve.count > 8);
+  bool risesAboveBaseline = false;
+  bool fallsBelowBaseline = false;
+  for (uint8_t i = 0; i < activeCurve.count; ++i) {
+    const RecordedHeartbeatLine& line = activeCurve.lines[i];
+    assert(line.x0 >= layout.heartbeatX);
+    assert(line.x1 < layout.heartbeatX + layout.heartbeatWidth);
+    assert(line.y0 >= layout.heartbeatY);
+    assert(line.y1 < layout.heartbeatY + layout.heartbeatHeight);
+    risesAboveBaseline |= line.y0 < layout.heartbeatCenterY ||
+      line.y1 < layout.heartbeatCenterY;
+    fallsBelowBaseline |= line.y0 > layout.heartbeatCenterY ||
+      line.y1 > layout.heartbeatCenterY;
+    if (i > 0) {
+      assert(activeCurve.lines[i - 1].x1 == line.x0);
+      assert(activeCurve.lines[i - 1].y1 == line.y0);
+    }
+  }
+  assert(risesAboveBaseline && fallsBelowBaseline);
   return 0;
 }

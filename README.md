@@ -30,9 +30,9 @@
 - A StickS3 firmware build with status, approval, settings, and offline screens.
 - A daily workflow designed to stay out of the way: run `code-buddy` once, then just use `codex`.
 
-## Highlights in v0.1.29
+## Highlights in v0.1.30
 
-- The Figma-based landscape dashboard shows `RUNNING`, `WAITING`, `IDLE`, or `OFFLINE`, a true 20-second Codex activity trace, quarter-minute progress blocks, and tinted `RUN`, `ASK`, and `NEW` cards.
+- The Figma-based landscape dashboard shows `RUNNING`, `WAITING`, `IDLE`, or `OFFLINE`, a smooth continuous 20-second Codex activity trace, quarter-minute progress blocks, and tinted `RUN`, `ASK`, and `NEW` cards.
 - The full-width 29-by-3 quota matrix retains its 6 px dots and diagonal running wave, aligned to the new 4 px footer baseline and left edge.
 - The landscape clock and dashboard use native-size JetBrains Mono Regular and Medium bitmap subsets with no fractional stretching; non-ASCII UI text stays on one proportional font, leaving ample application flash free.
 - One short chime plays after a complete Codex turn. This includes managed CLI sessions and main Codex Desktop tasks discovered from local session logs; repeated snapshots and subagent turns are de-duplicated.
@@ -52,7 +52,7 @@ Preferred path:
 Fallback:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.29-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.30-full.bin
 ```
 
 Developer release build:

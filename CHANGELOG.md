@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.30 - 2026-07-21
+
+- Replaced the discrete 20-second activity bars with a continuous anti-aliased heartbeat curve that smoothly departs from and returns to the center baseline.
+
 ## 0.1.29 - 2026-07-21
 
 - Replaced fractional, non-uniform scaling of the 1-bit dashboard font with native-size JetBrains Mono bitmaps for the status, time, seconds, date, task labels, and counts.

@@ -945,17 +945,13 @@ static void drawLandscapeDashboardStatusAndHeartbeat(
         now
       )
     : 0;
-  for (uint8_t i = 0; i < 20; ++i) {
-    if (!landscapeDashboardActivityVisibleAt(activityMask, i)) continue;
-    const uint8_t height = landscapeDashboardHeartbeatHeight(i);
-    canvas.fillRect(
-      layout.heartbeatX + (i * 3),
-      layout.heartbeatCenterY - (height / 2),
-      2,
-      height,
-      LANDSCAPE_DASHBOARD_GREEN
-    );
-  }
+  landscapeDashboardDrawHeartbeatCurve(
+    canvas,
+    activityMask,
+    layout.heartbeatX,
+    layout.heartbeatCenterY,
+    LANDSCAPE_DASHBOARD_GREEN
+  );
 }
 
 template <typename Canvas>

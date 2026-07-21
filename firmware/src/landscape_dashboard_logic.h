@@ -121,13 +121,88 @@ inline constexpr bool landscapeDashboardActivityVisibleAt(
     (activityMask & (1UL << (19 - leftToRightIndex))) != 0;
 }
 
-inline constexpr uint8_t landscapeDashboardHeartbeatHeight(uint8_t index) {
-  return (index % 8) == 0 ? 4
-    : (index % 8) == 1 ? 8
-    : (index % 8) == 2 ? 12
-    : (index % 8) == 3 ? 7
-    : (index % 8) == 4 ? 9
-    : (index % 8) == 5 ? 12
-    : (index % 8) == 6 ? 5
-    : 10;
+inline constexpr int8_t landscapeDashboardHeartbeatOffset(uint8_t index) {
+  return (index % 8) == 0 ? -2
+    : (index % 8) == 1 ? 3
+    : (index % 8) == 2 ? -5
+    : (index % 8) == 3 ? 4
+    : (index % 8) == 4 ? -3
+    : (index % 8) == 5 ? 5
+    : (index % 8) == 6 ? -4
+    : 2;
+}
+
+inline int16_t landscapeDashboardHeartbeatCurveY(
+  uint32_t activityMask,
+  uint8_t pointIndex,
+  int16_t centerY
+) {
+  if (pointIndex == 0 || pointIndex > 20) return centerY;
+  const uint8_t activityIndex = pointIndex - 1;
+  return landscapeDashboardActivityVisibleAt(activityMask, activityIndex)
+    ? centerY + landscapeDashboardHeartbeatOffset(activityIndex)
+    : centerY;
+}
+
+inline int16_t landscapeDashboardRoundCurveCoordinate(float value) {
+  return static_cast<int16_t>(value + (value < 0.0f ? -0.5f : 0.5f));
+}
+
+template <typename Canvas>
+inline void landscapeDashboardDrawHeartbeatCurve(
+  Canvas& canvas,
+  uint32_t activityMask,
+  int16_t originX,
+  int16_t centerY,
+  uint16_t color
+) {
+  static constexpr uint8_t pointCount = 22;
+  static constexpr uint8_t pointPitch = 3;
+  static constexpr uint8_t curveSubsteps = 3;
+
+  for (uint8_t segment = 0; segment < pointCount - 1; ++segment) {
+    const bool leftActive = segment > 0 && segment <= 20 &&
+      landscapeDashboardActivityVisibleAt(activityMask, segment - 1);
+    const bool rightActive = segment < 20 &&
+      landscapeDashboardActivityVisibleAt(activityMask, segment);
+    if (!leftActive && !rightActive) continue;
+
+    const uint8_t p0Index = segment == 0 ? 0 : segment - 1;
+    const uint8_t p1Index = segment;
+    const uint8_t p2Index = segment + 1;
+    const uint8_t p3Index = segment + 2 < pointCount
+      ? segment + 2
+      : pointCount - 1;
+    const float p0 = landscapeDashboardHeartbeatCurveY(
+      activityMask, p0Index, centerY
+    );
+    const float p1 = landscapeDashboardHeartbeatCurveY(
+      activityMask, p1Index, centerY
+    );
+    const float p2 = landscapeDashboardHeartbeatCurveY(
+      activityMask, p2Index, centerY
+    );
+    const float p3 = landscapeDashboardHeartbeatCurveY(
+      activityMask, p3Index, centerY
+    );
+    int16_t previousX = originX + (segment * pointPitch);
+    int16_t previousY = static_cast<int16_t>(p1);
+
+    for (uint8_t step = 1; step <= curveSubsteps; ++step) {
+      const float t = static_cast<float>(step) / curveSubsteps;
+      const float t2 = t * t;
+      const float t3 = t2 * t;
+      const float curveY = 0.5f * (
+        (2.0f * p1) +
+        ((-p0 + p2) * t) +
+        (((2.0f * p0) - (5.0f * p1) + (4.0f * p2) - p3) * t2) +
+        ((-p0 + (3.0f * p1) - (3.0f * p2) + p3) * t3)
+      );
+      const int16_t nextX = previousX + 1;
+      const int16_t nextY = landscapeDashboardRoundCurveCoordinate(curveY);
+      canvas.drawSmoothLine(previousX, previousY, nextX, nextY, color);
+      previousX = nextX;
+      previousY = nextY;
+    }
+  }
 }
