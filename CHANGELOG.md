@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.32 - 2026-07-21
+
+- Moved the seconds and quarter-minute indicators up two pixels and raised the status label by two pixels without moving its status dot.
+- Made the 20-second Codex heartbeat a full-width continuous curve, refreshed independently at up to 20 FPS with subsecond interpolation for faster, smoother activity feedback.
+
 ## 0.1.31 - 2026-07-21
 
 - Moved the seconds value down four pixels and changed it to 60% white, while making the date and weekday fully white.

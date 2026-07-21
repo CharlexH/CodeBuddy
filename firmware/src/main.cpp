@@ -890,13 +890,7 @@ static void runtimeUpdateOrient() {
 static uint8_t clockDow() { return _clkDt.WeekDay; }
 
 template <typename Canvas>
-static void drawLandscapeDashboardStatusAndHeartbeat(
-  Canvas& canvas,
-  uint32_t now,
-  bool redrawStatus
-) {
-  static uint32_t lastHeartbeatSecond = UINT32_MAX;
-  static uint32_t lastActivityReceipt = UINT32_MAX;
+static void drawLandscapeDashboardStatus(Canvas& canvas) {
   const LandscapeDashboardLayout layout = landscapeDashboardLayout();
   const LandscapeDashboardStatus status = landscapeDashboardStatus(
     tama.connected,
@@ -904,27 +898,37 @@ static void drawLandscapeDashboardStatusAndHeartbeat(
     tama.sessionsWaiting
   );
   const uint16_t color = landscapeDashboardStatusColor(status);
-  if (redrawStatus) {
-    canvas.fillRect(0, 0, 120, 18, LANDSCAPE_DASHBOARD_BG);
-    canvas.fillRoundRect(layout.statusX, layout.statusDotY, 12, 12, 4, color);
-    useDashboardStatusFont(canvas);
-    canvas.setTextDatum(TL_DATUM);
-    canvas.setTextColor(color, LANDSCAPE_DASHBOARD_BG);
-    canvas.drawString(
-      landscapeDashboardStatusLabel(status),
-      layout.statusX + 20,
-      layout.statusY
-    );
-  }
+  canvas.fillRect(0, 0, 120, 18, LANDSCAPE_DASHBOARD_BG);
+  canvas.fillRoundRect(layout.statusX, layout.statusDotY, 12, 12, 4, color);
+  useDashboardStatusFont(canvas);
+  canvas.setTextDatum(TL_DATUM);
+  canvas.setTextColor(color, LANDSCAPE_DASHBOARD_BG);
+  canvas.drawString(
+    landscapeDashboardStatusLabel(status),
+    layout.statusX + 20,
+    layout.statusY
+  );
+}
 
-  const uint32_t heartbeatSecond = now / 1000U;
-  if (!redrawStatus && heartbeatSecond == lastHeartbeatSecond &&
-      tama.activity20ReceivedAt == lastActivityReceipt) {
+template <typename Canvas>
+static void drawLandscapeDashboardHeartbeat(
+  Canvas& canvas,
+  uint32_t now,
+  bool force
+) {
+  static uint32_t lastFrameAt = UINT32_MAX;
+  static uint32_t lastActivityReceipt = UINT32_MAX;
+  const bool activityChanged =
+    tama.activity20ReceivedAt != lastActivityReceipt;
+  if (!landscapeDashboardHeartbeatFrameDue(
+        now, lastFrameAt, activityChanged, force
+      )) {
     return;
   }
-  lastHeartbeatSecond = heartbeatSecond;
+  lastFrameAt = now;
   lastActivityReceipt = tama.activity20ReceivedAt;
 
+  const LandscapeDashboardLayout layout = landscapeDashboardLayout();
   canvas.fillRect(
     layout.heartbeatX,
     layout.heartbeatY,
@@ -950,7 +954,12 @@ static void drawLandscapeDashboardStatusAndHeartbeat(
     activityMask,
     layout.heartbeatX,
     layout.heartbeatCenterY,
-    LANDSCAPE_DASHBOARD_GREEN
+    LANDSCAPE_DASHBOARD_GREEN,
+    tama.hasActivity20
+      ? landscapeDashboardHeartbeatPhasePermille(
+          tama.activity20ReceivedAt, now
+        )
+      : 0
   );
 }
 
@@ -1186,6 +1195,9 @@ static void drawSharedClockFaceTo(
   // A functional screen may have selected the proportional Chinese font.
   // Restore the dedicated fixed ASCII face before applying pixel geometry.
   useSharedFaceAsciiFont(canvas);
+  if (landscape) {
+    drawLandscapeDashboardHeartbeat(canvas, now, decision.fullRepaint);
+  }
   if (decision.drawTime) {
     if (landscape) {
       drawLandscapeDashboardTime(canvas, fieldsValid);
@@ -1306,11 +1318,7 @@ static void drawSharedClockFaceTo(
 
   if (decision.drawPet) {
     if (landscape) {
-      drawLandscapeDashboardStatusAndHeartbeat(
-        canvas,
-        now,
-        decision.fullRepaint || decision.drawStatus
-      );
+      drawLandscapeDashboardStatus(canvas);
     } else {
     lgfx::LovyanGFX* petCanvas = &canvas;
     int16_t petX = layout.pet.x;

@@ -51,14 +51,15 @@ static constexpr uint16_t LANDSCAPE_DASHBOARD_RUN_TINT = 0x1142;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_ASK_TINT = 0x2105;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_NEW_TINT = 0x1925;
 static constexpr uint32_t LANDSCAPE_DASHBOARD_ACTIVITY_MASK = 0x000FFFFFUL;
+static constexpr uint16_t LANDSCAPE_DASHBOARD_HEARTBEAT_FRAME_MS = 50;
 inline constexpr LandscapeDashboardLayout landscapeDashboardLayout() {
   return {
     240, 135,
-    4, 4, 5,
+    4, 2, 5,
     172, 4, 64, 14, 11,
     4, 34,
-    129, 48,
-    129, 36,
+    129, 46,
+    129, 34,
     79,
     172, 64, 14, {34, 57, 79},
     109, 26,
@@ -131,6 +132,23 @@ inline constexpr bool landscapeDashboardActivityVisibleAt(
     (activityMask & (1UL << (19 - leftToRightIndex))) != 0;
 }
 
+inline constexpr uint16_t landscapeDashboardHeartbeatPhasePermille(
+  uint32_t receivedAtMs,
+  uint32_t nowMs
+) {
+  return static_cast<uint16_t>((nowMs - receivedAtMs) % 1000U);
+}
+
+inline constexpr bool landscapeDashboardHeartbeatFrameDue(
+  uint32_t nowMs,
+  uint32_t lastFrameAtMs,
+  bool activityChanged,
+  bool force
+) {
+  return force || activityChanged || lastFrameAtMs == UINT32_MAX ||
+    (nowMs - lastFrameAtMs) >= LANDSCAPE_DASHBOARD_HEARTBEAT_FRAME_MS;
+}
+
 inline constexpr int8_t landscapeDashboardHeartbeatOffset(uint8_t index) {
   return (index % 8) == 0 ? -2
     : (index % 8) == 1 ? 3
@@ -145,13 +163,24 @@ inline constexpr int8_t landscapeDashboardHeartbeatOffset(uint8_t index) {
 inline int16_t landscapeDashboardHeartbeatCurveY(
   uint32_t activityMask,
   uint8_t pointIndex,
-  int16_t centerY
+  int16_t centerY,
+  uint16_t phasePermille
 ) {
-  if (pointIndex == 0 || pointIndex > 20) return centerY;
-  const uint8_t activityIndex = pointIndex - 1;
-  return landscapeDashboardActivityVisibleAt(activityMask, activityIndex)
-    ? centerY + landscapeDashboardHeartbeatOffset(activityIndex)
-    : centerY;
+  const int16_t currentOffset = pointIndex > 0 && pointIndex <= 20 &&
+      landscapeDashboardActivityVisibleAt(activityMask, pointIndex - 1)
+    ? landscapeDashboardHeartbeatOffset(pointIndex - 1)
+    : 0;
+  const uint8_t nextPointIndex = pointIndex + 1;
+  const int16_t nextOffset = nextPointIndex > 0 && nextPointIndex <= 20 &&
+      landscapeDashboardActivityVisibleAt(activityMask, nextPointIndex - 1)
+    ? landscapeDashboardHeartbeatOffset(nextPointIndex - 1)
+    : 0;
+  const int32_t interpolated =
+    (currentOffset * static_cast<int32_t>(1000U - phasePermille)) +
+    (nextOffset * static_cast<int32_t>(phasePermille));
+  return centerY + static_cast<int16_t>(
+    (interpolated + (interpolated < 0 ? -500 : 500)) / 1000
+  );
 }
 
 inline int16_t landscapeDashboardRoundCurveCoordinate(float value) {
@@ -164,18 +193,16 @@ inline void landscapeDashboardDrawHeartbeatCurve(
   uint32_t activityMask,
   int16_t originX,
   int16_t centerY,
-  uint16_t color
+  uint16_t color,
+  uint16_t phasePermille
 ) {
   static constexpr uint8_t pointCount = 22;
   static constexpr uint8_t pointPitch = 3;
   static constexpr uint8_t curveSubsteps = 3;
 
+  if (activityMask == 0) return;
+
   for (uint8_t segment = 0; segment < pointCount - 1; ++segment) {
-    const bool leftActive = segment > 0 && segment <= 20 &&
-      landscapeDashboardActivityVisibleAt(activityMask, segment - 1);
-    const bool rightActive = segment < 20 &&
-      landscapeDashboardActivityVisibleAt(activityMask, segment);
-    if (!leftActive && !rightActive) continue;
 
     const uint8_t p0Index = segment == 0 ? 0 : segment - 1;
     const uint8_t p1Index = segment;
@@ -184,16 +211,16 @@ inline void landscapeDashboardDrawHeartbeatCurve(
       ? segment + 2
       : pointCount - 1;
     const float p0 = landscapeDashboardHeartbeatCurveY(
-      activityMask, p0Index, centerY
+      activityMask, p0Index, centerY, phasePermille
     );
     const float p1 = landscapeDashboardHeartbeatCurveY(
-      activityMask, p1Index, centerY
+      activityMask, p1Index, centerY, phasePermille
     );
     const float p2 = landscapeDashboardHeartbeatCurveY(
-      activityMask, p2Index, centerY
+      activityMask, p2Index, centerY, phasePermille
     );
     const float p3 = landscapeDashboardHeartbeatCurveY(
-      activityMask, p3Index, centerY
+      activityMask, p3Index, centerY, phasePermille
     );
     int16_t previousX = originX + (segment * pointPitch);
     int16_t previousY = static_cast<int16_t>(p1);
