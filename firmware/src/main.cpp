@@ -2605,19 +2605,14 @@ void loop() {
     runtimeOrienting,
     runtimeOrientationState.resolved
   );
-  bool runtimeSurfaceModeChanged = screenOrientRuntimeModeChanged(
-    previousPromptVisible, inPrompt, runtimeOrienting
-  );
-  if (runtimeSurfaceDecision.entered || runtimeSurfaceModeChanged) {
-    clockOrientBeginAutoSurface(&runtimeOrientationState);
-  }
+  if (runtimeSurfaceDecision.entered) clockOrientBeginAutoSurface(&runtimeOrientationState);
   if (runtimeOrienting) runtimeUpdateOrient();
   bool runtimeSurfaceRenderable = runtimeOrienting && runtimeOrientationState.resolved;
   bool landscapeRuntime = runtimeSurfaceRenderable && runtimeOrientationState.orientation != 0;
   bool portraitSharedFace = (clockSurfaceRenderable && !landscapeClock)
     || (runtimeSurfaceRenderable && !landscapeRuntime);
   bool autoSurfaceAwaitingOrientation = (clocking && !clockSurfaceRenderable)
-    || (runtimeOrienting && !runtimeSurfaceRenderable);
+    || (runtimeSharedFace && runtimeOrienting && !runtimeSurfaceRenderable);
 
   if (clocking != previousStandbyClockFace ||
       landscapeClock != previousLandscapeClockFace) {
@@ -2697,10 +2692,8 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
-  if (autoSurfaceAwaitingOrientation) {
-    // Keep the current LCD contents unchanged until the IMU pose resolves.
-  } else {
-  if (napping || screenOff || landscapeClock || landscapeRuntime || portraitSharedFace) {
+  if (napping || screenOff || landscapeClock || landscapeRuntime || portraitSharedFace ||
+      autoSurfaceAwaitingOrientation) {
     // skip sprite render — face-down, powered off, or a direct-to-LCD
     // landscape surface below.
   } else if (buddyMode) {
@@ -2804,7 +2797,6 @@ void loop() {
       if (otaCompactOverlay) drawOtaCompactOverlayTo(spr, false, updateView);
       spr.pushSprite(0, 0);
     }
-  }
   }
   previousPromptVisible = inPrompt;
 
