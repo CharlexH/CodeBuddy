@@ -49,7 +49,11 @@ inline bool clockOrientResolveInitialForStickS3(
     return true;
   }
   if (lock == 2) {
-    clockOrientRemember(state, primary >= 0.0f ? 1 : 3);
+    uint8_t orientation = state->orientation;
+    if (orientation == 0) orientation = primary >= 0.0f ? 1 : 3;
+    if (primary > 0.5f) orientation = 1;
+    else if (primary < -0.5f) orientation = 3;
+    clockOrientRemember(state, orientation);
     state->orientFrames = 0;
     state->swapFrames = 0;
     return true;

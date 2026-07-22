@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <fstream>
+#include <sstream>
+#include <string>
 
 #include "clock_orient_logic.h"
 #include "screen_orient_logic.h"
@@ -12,6 +15,33 @@ static void expect_true(bool condition, const char* message) {
 }
 
 int main() {
+  std::ifstream mainSourceFile("firmware/src/main.cpp");
+  std::stringstream mainSourceBuffer;
+  mainSourceBuffer << mainSourceFile.rdbuf();
+  const std::string mainSource = mainSourceBuffer.str();
+  expect_true(!mainSource.empty(), "orientation integration test should load firmware/src/main.cpp");
+  expect_true(
+    mainSource.find(
+      "bool renderSurface = !autoSurfaceAwaitingOrientation;"
+    ) != std::string::npos,
+    "an unresolved auto surface must gate the entire update and render chain"
+  );
+  expect_true(
+    mainSource.find("screenOrientRuntimeModeChanged(") != std::string::npos &&
+      mainSource.find("runtimeSurfaceDecision.entered || runtimeSurfaceModeChanged") !=
+        std::string::npos,
+    "shared-face and approval transitions must trigger a fresh immediate orientation resolve"
+  );
+
+  expect_true(screenOrientRuntimeModeChanged(false, true, true),
+              "entering approval from the shared runtime face should restart initial resolve");
+  expect_true(screenOrientRuntimeModeChanged(true, false, true),
+              "returning from approval to the shared runtime face should restart initial resolve");
+  expect_true(!screenOrientRuntimeModeChanged(true, true, true),
+              "remaining on the approval surface should not restart resolve every frame");
+  expect_true(!screenOrientRuntimeModeChanged(true, false, false),
+              "leaving runtime orientation entirely should use the ordinary eligibility exit");
+
   ScreenOrientationRenderState gate = {};
   ClockOrientationState sideways = {};
   ScreenOrientationRenderDecision gateDecision = screenOrientAutoSurfaceDecision(

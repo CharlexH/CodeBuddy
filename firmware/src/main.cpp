@@ -2605,14 +2605,19 @@ void loop() {
     runtimeOrienting,
     runtimeOrientationState.resolved
   );
-  if (runtimeSurfaceDecision.entered) clockOrientBeginAutoSurface(&runtimeOrientationState);
+  bool runtimeSurfaceModeChanged = screenOrientRuntimeModeChanged(
+    previousPromptVisible, inPrompt, runtimeOrienting
+  );
+  if (runtimeSurfaceDecision.entered || runtimeSurfaceModeChanged) {
+    clockOrientBeginAutoSurface(&runtimeOrientationState);
+  }
   if (runtimeOrienting) runtimeUpdateOrient();
   bool runtimeSurfaceRenderable = runtimeOrienting && runtimeOrientationState.resolved;
   bool landscapeRuntime = runtimeSurfaceRenderable && runtimeOrientationState.orientation != 0;
   bool portraitSharedFace = (clockSurfaceRenderable && !landscapeClock)
     || (runtimeSurfaceRenderable && !landscapeRuntime);
   bool autoSurfaceAwaitingOrientation = (clocking && !clockSurfaceRenderable)
-    || (runtimeSharedFace && runtimeOrienting && !runtimeSurfaceRenderable);
+    || (runtimeOrienting && !runtimeSurfaceRenderable);
 
   if (clocking != previousStandbyClockFace ||
       landscapeClock != previousLandscapeClockFace) {
@@ -2692,8 +2697,11 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
-  if (napping || screenOff || landscapeClock || landscapeRuntime || portraitSharedFace ||
-      autoSurfaceAwaitingOrientation) {
+  // Keep the current LCD contents unchanged until the IMU pose resolves. Both
+  // the sprite update path and the complete draw/push chain honor this gate.
+  bool renderSurface = !autoSurfaceAwaitingOrientation;
+  if (!renderSurface || napping || screenOff || landscapeClock || landscapeRuntime ||
+      portraitSharedFace) {
     // skip sprite render — face-down, powered off, or a direct-to-LCD
     // landscape surface below.
   } else if (buddyMode) {
@@ -2723,7 +2731,7 @@ void loop() {
       spr.print("no character loaded");
     }
   }
-  if (landscapeRuntime && !napping && !screenOff) {
+  if (renderSurface && landscapeRuntime && !napping && !screenOff) {
     if (inPrompt) drawRuntimeLandscape(true);
     else if (runtimeSharedFace) {
       drawSharedClockFace(
@@ -2738,7 +2746,7 @@ void loop() {
     if (otaCompactOverlay) {
       drawLandscapeOtaCompactOverlay(runtimeOrientationState.orientation, updateView);
     }
-  } else if (inPrompt) {
+  } else if (renderSurface && inPrompt) {
     const Palette& p = characterPalette();
     UsageMeterRenderFrame meterFrame = usageMeterFrameForDisplay(
       &portraitUsageMeterRenderState, W, H, true
@@ -2747,7 +2755,7 @@ void loop() {
     drawApproval();
     if (meterFrame.decision.draw) paintUsageMeter(spr, meterFrame.plan);
     spr.pushSprite(0, 0);
-  } else if (landscapeClock) {
+  } else if (renderSurface && landscapeClock) {
     drawSharedClockFace(
       true,
       clockOrientationState.orientation,
@@ -2757,7 +2765,7 @@ void loop() {
     if (otaCompactOverlay) {
       drawLandscapeOtaCompactOverlay(clockOrientationState.orientation, updateView);
     }
-  } else if (!napping && !screenOff) {
+  } else if (renderSurface && !napping && !screenOff) {
     if (clocking) {
       drawSharedClockFace(
         false,

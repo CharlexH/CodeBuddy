@@ -91,5 +91,17 @@ int main() {
   expect_true(orient.orientation == 3,
               "post-resolution landscape-side swaps should occur on the eighth frame");
 
+  orient = {};
+  clockOrientResolveInitialForStickS3(&orient, 0.0f, -0.95f, 0.0f, 2);
+  clockOrientUpdateStateForStickS3(&orient, 0.0f, 0.01f, 0.0f, 2);
+  expect_true(orient.orientation == 3,
+              "forced landscape should ignore near-zero sign noise and retain its current side");
+  clockOrientUpdateStateForStickS3(&orient, 0.0f, 0.49f, 0.0f, 2);
+  expect_true(orient.orientation == 3,
+              "forced landscape should retain its current side below the swap threshold");
+  clockOrientUpdateStateForStickS3(&orient, 0.0f, 0.51f, 0.0f, 2);
+  expect_true(orient.orientation == 1,
+              "forced landscape should swap sides only past the positive threshold");
+
   return 0;
 }

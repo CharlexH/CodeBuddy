@@ -42,6 +42,14 @@ inline bool screenOrientRuntimeEligible(
       && (codex_active || codex_waiting || approval_visible);
 }
 
+inline bool screenOrientRuntimeModeChanged(
+  bool previousApprovalVisible,
+  bool approvalVisible,
+  bool runtimeOrienting
+) {
+  return runtimeOrienting && previousApprovalVisible != approvalVisible;
+}
+
 struct RuntimeLandscapeRenderState {
   bool initialized;
   bool overlayVisible;
