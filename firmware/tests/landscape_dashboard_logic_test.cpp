@@ -2,12 +2,14 @@
 #include <string.h>
 
 #include "landscape_dashboard_logic.h"
+#include "token_heartbeat_logic.h"
 
 struct RecordedHeartbeatLine {
   int16_t x0;
   int16_t y0;
   int16_t x1;
   int16_t y1;
+  uint16_t color;
 };
 
 struct HeartbeatCanvas {
@@ -19,10 +21,10 @@ struct HeartbeatCanvas {
     int16_t y0,
     int16_t x1,
     int16_t y1,
-    uint16_t
+    uint16_t color
   ) {
     assert(count < 128);
-    lines[count++] = {x0, y0, x1, y1};
+    lines[count++] = {x0, y0, x1, y1, color};
   }
 };
 
@@ -156,6 +158,94 @@ int main() {
     assert(scrolledCurve.lines[i].x1 == activeCurve.lines[i].x1 - 2);
     assert(scrolledCurve.lines[i].y0 == activeCurve.lines[i].y0);
     assert(scrolledCurve.lines[i].y1 == activeCurve.lines[i].y1);
+  }
+
+  assert(landscapeDashboardTokenHeartbeatY(0, layout.heartbeatCenterY) ==
+    layout.heartbeatCenterY);
+  assert(landscapeDashboardTokenHeartbeatY(255, layout.heartbeatCenterY) ==
+    layout.heartbeatY);
+  int16_t previousTokenY = layout.heartbeatCenterY;
+  for (uint16_t intensity = 0; intensity <= 255; ++intensity) {
+    const int16_t y = landscapeDashboardTokenHeartbeatY(
+      static_cast<uint8_t>(intensity), layout.heartbeatCenterY
+    );
+    assert(y >= layout.heartbeatY);
+    assert(y <= layout.heartbeatCenterY);
+    assert(y <= previousTokenY);
+    previousTokenY = y;
+  }
+
+  assert(landscapeDashboardHeartbeatSource(true, true) ==
+    LANDSCAPE_HEARTBEAT_TOKEN);
+  assert(landscapeDashboardHeartbeatSource(false, true) ==
+    LANDSCAPE_HEARTBEAT_ACTIVITY);
+  assert(landscapeDashboardHeartbeatSource(false, false) ==
+    LANDSCAPE_HEARTBEAT_NONE);
+  assert(landscapeDashboardTokenHeartbeatFrameToken(1000, 1000) == 0);
+  assert(landscapeDashboardTokenHeartbeatFrameToken(1000, 1312) == 0);
+  assert(landscapeDashboardTokenHeartbeatFrameToken(1000, 1313) == 1);
+  assert(landscapeDashboardTokenHeartbeatFrameToken(1000, 20999) == 63);
+  assert(landscapeDashboardTokenHeartbeatFrameToken(1000, 21000) == 64);
+
+  const uint16_t quietColor = landscapeDashboardTokenHeartbeatColor(1);
+  const uint16_t mediumColor = landscapeDashboardTokenHeartbeatColor(128);
+  const uint16_t strongColor = landscapeDashboardTokenHeartbeatColor(255);
+  assert(quietColor == LANDSCAPE_DASHBOARD_GREEN);
+  assert(strongColor == LANDSCAPE_DASHBOARD_MINT);
+  assert(mediumColor != quietColor && mediumColor != strongColor);
+
+  uint8_t tokenSamples[64] = {};
+  for (uint8_t i = 0; i < 64; ++i) {
+    tokenSamples[i] = static_cast<uint8_t>(1U + (254U * i) / 63U);
+  }
+  HeartbeatCanvas tokenCurve;
+  landscapeDashboardDrawTokenHeartbeatCurve(
+    tokenCurve,
+    tokenSamples,
+    layout.heartbeatX,
+    layout.heartbeatCenterY
+  );
+  assert(tokenCurve.count == 63);
+  assert(tokenCurve.lines[0].x0 == layout.heartbeatX);
+  assert(tokenCurve.lines[tokenCurve.count - 1].x1 ==
+    layout.heartbeatX + layout.heartbeatWidth - 1);
+  assert(tokenCurve.lines[tokenCurve.count - 1].y1 == layout.heartbeatY);
+  assert(tokenCurve.lines[tokenCurve.count - 1].color ==
+    LANDSCAPE_DASHBOARD_MINT);
+  for (uint8_t i = 0; i < tokenCurve.count; ++i) {
+    const RecordedHeartbeatLine& line = tokenCurve.lines[i];
+    assert(line.x0 >= layout.heartbeatX);
+    assert(line.x1 < layout.heartbeatX + layout.heartbeatWidth);
+    assert(line.y0 >= layout.heartbeatY);
+    assert(line.y1 < layout.heartbeatY + layout.heartbeatHeight);
+    assert(line.y0 <= layout.heartbeatCenterY);
+    assert(line.y1 <= layout.heartbeatCenterY);
+    if (i > 0) {
+      assert(tokenCurve.lines[i - 1].x1 == line.x0);
+      assert(tokenCurve.lines[i - 1].y1 == line.y0);
+    }
+  }
+
+  uint8_t shiftedSamples[64] = {};
+  TokenHeartbeatState scrollingState = {};
+  scrollingState.intensities[63] = tokenSamples[63];
+  scrollingState.receivedAtMs = 1000;
+  scrollingState.valid = true;
+  tokenHeartbeatAgedIntensities(scrollingState, 1313, shiftedSamples);
+  assert(shiftedSamples[63] == 0);
+  assert(shiftedSamples[62] == tokenSamples[63]);
+  assert(landscapeDashboardTokenHeartbeatY(
+    tokenSamples[63], layout.heartbeatCenterY
+  ) == landscapeDashboardTokenHeartbeatY(
+    shiftedSamples[62], layout.heartbeatCenterY
+  ));
+
+  uint8_t sharpSamples[64] = {};
+  sharpSamples[30] = 255;
+  for (uint8_t i = 0; i < 64; ++i) {
+    const uint8_t curveIntensity =
+      landscapeDashboardTokenHeartbeatCurveIntensity(sharpSamples, i);
+    assert(curveIntensity <= 255);
   }
   return 0;
 }

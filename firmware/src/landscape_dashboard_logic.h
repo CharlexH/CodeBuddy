@@ -40,6 +40,7 @@ struct LandscapeDashboardLayout {
 
 static constexpr uint16_t LANDSCAPE_DASHBOARD_BG = 0x18C3;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_GREEN = 0x07A0;
+static constexpr uint16_t LANDSCAPE_DASHBOARD_MINT = 0x67FA;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_RUN = 0x07E0;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_WAITING = 0xFF80;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_IDLE = 0xFFFF;
@@ -55,6 +56,14 @@ static constexpr uint16_t LANDSCAPE_DASHBOARD_ASK_TINT = 0x2105;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_NEW_TINT = 0x1925;
 static constexpr uint32_t LANDSCAPE_DASHBOARD_ACTIVITY_MASK = 0x000FFFFFUL;
 static constexpr uint8_t LANDSCAPE_DASHBOARD_HEARTBEAT_SAMPLE_PITCH = 3;
+static constexpr uint8_t LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT = 64;
+static constexpr uint8_t LANDSCAPE_DASHBOARD_TOKEN_MAX_HEIGHT = 7;
+
+enum LandscapeDashboardHeartbeatSource : uint8_t {
+  LANDSCAPE_HEARTBEAT_NONE,
+  LANDSCAPE_HEARTBEAT_ACTIVITY,
+  LANDSCAPE_HEARTBEAT_TOKEN,
+};
 inline constexpr LandscapeDashboardLayout landscapeDashboardLayout() {
   return {
     240, 135,
@@ -79,6 +88,165 @@ inline constexpr LandscapeDashboardStatus landscapeDashboardStatus(
     : (waiting > 0
       ? DASHBOARD_WAITING
       : (running > 0 ? DASHBOARD_RUNNING : DASHBOARD_IDLE));
+}
+
+inline constexpr LandscapeDashboardHeartbeatSource
+landscapeDashboardHeartbeatSource(bool tokenValid, bool hasActivity20) {
+  return tokenValid
+    ? LANDSCAPE_HEARTBEAT_TOKEN
+    : (hasActivity20 ? LANDSCAPE_HEARTBEAT_ACTIVITY : LANDSCAPE_HEARTBEAT_NONE);
+}
+
+inline constexpr int16_t landscapeDashboardTokenHeartbeatY(
+  uint8_t intensity,
+  int16_t centerY
+) {
+  return centerY - static_cast<int16_t>(
+    (static_cast<uint16_t>(intensity) *
+      LANDSCAPE_DASHBOARD_TOKEN_MAX_HEIGHT + 127U) / 255U
+  );
+}
+
+inline uint8_t landscapeDashboardTokenHeartbeatFrameToken(
+  uint32_t receivedAtMs,
+  uint32_t nowMs
+) {
+  const uint32_t elapsedMs = nowMs - receivedAtMs;
+  return elapsedMs >= 20000U
+    ? LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT
+    : static_cast<uint8_t>(
+      (static_cast<uint64_t>(elapsedMs) *
+        LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT) / 20000U
+    );
+}
+
+inline uint8_t landscapeDashboardTokenHeartbeatCurveIntensity(
+  const uint8_t intensities[LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT],
+  uint8_t pointIndex
+) {
+  if (!intensities || pointIndex == 0 ||
+      pointIndex == LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT - 1) {
+    return intensities ? intensities[pointIndex] : 0;
+  }
+
+  const int16_t p0 = intensities[pointIndex > 1 ? pointIndex - 2 : 0];
+  const int16_t p1 = intensities[pointIndex - 1];
+  const int16_t p2 = intensities[pointIndex];
+  const int16_t p3 = intensities[pointIndex + 1];
+  const int16_t delta = p2 - p1;
+  int16_t slope1 = (p2 - p0) / 2;
+  int16_t slope2 = (p3 - p1) / 2;
+  if (delta == 0) {
+    slope1 = 0;
+    slope2 = 0;
+  } else {
+    if ((slope1 < 0) != (delta < 0)) slope1 = 0;
+    if ((slope2 < 0) != (delta < 0)) slope2 = 0;
+  }
+
+  // Cubic Hermite at t=0.5. Clamp to the segment endpoints so a sharp
+  // change can never overshoot below the centerline or above full scale.
+  int16_t midpoint = static_cast<int16_t>(
+    (4 * (p1 + p2) + slope1 - slope2 + 4) / 8
+  );
+  const int16_t low = p1 < p2 ? p1 : p2;
+  const int16_t high = p1 > p2 ? p1 : p2;
+  if (midpoint < low) midpoint = low;
+  if (midpoint > high) midpoint = high;
+  return static_cast<uint8_t>(midpoint);
+}
+
+inline constexpr uint8_t landscapeDashboardRgb565Red(uint16_t color) {
+  return static_cast<uint8_t>((color >> 11) & 0x1f);
+}
+
+inline constexpr uint8_t landscapeDashboardRgb565Green(uint16_t color) {
+  return static_cast<uint8_t>((color >> 5) & 0x3f);
+}
+
+inline constexpr uint8_t landscapeDashboardRgb565Blue(uint16_t color) {
+  return static_cast<uint8_t>(color & 0x1f);
+}
+
+inline constexpr uint8_t landscapeDashboardBlendChannel(
+  uint8_t from,
+  uint8_t to,
+  uint8_t amount,
+  uint16_t denominator
+) {
+  return static_cast<uint8_t>(
+    (static_cast<uint32_t>(from) * (denominator - amount) +
+      static_cast<uint32_t>(to) * amount + (denominator / 2U)) /
+    denominator
+  );
+}
+
+inline uint16_t landscapeDashboardTokenHeartbeatColor(
+  uint8_t intensity
+) {
+  if (intensity <= 1) return LANDSCAPE_DASHBOARD_GREEN;
+  if (intensity == 255) return LANDSCAPE_DASHBOARD_MINT;
+  const uint8_t amount = intensity - 1;
+  return static_cast<uint16_t>(
+    (static_cast<uint16_t>(landscapeDashboardBlendChannel(
+      landscapeDashboardRgb565Red(LANDSCAPE_DASHBOARD_GREEN),
+      landscapeDashboardRgb565Red(LANDSCAPE_DASHBOARD_MINT),
+      amount,
+      254
+    )) << 11) |
+    (static_cast<uint16_t>(landscapeDashboardBlendChannel(
+      landscapeDashboardRgb565Green(LANDSCAPE_DASHBOARD_GREEN),
+      landscapeDashboardRgb565Green(LANDSCAPE_DASHBOARD_MINT),
+      amount,
+      254
+    )) << 5) |
+    landscapeDashboardBlendChannel(
+      landscapeDashboardRgb565Blue(LANDSCAPE_DASHBOARD_GREEN),
+      landscapeDashboardRgb565Blue(LANDSCAPE_DASHBOARD_MINT),
+      amount,
+      254
+    )
+  );
+}
+
+template <typename Canvas>
+inline void landscapeDashboardDrawTokenHeartbeatCurve(
+  Canvas& canvas,
+  const uint8_t intensities[LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT],
+  int16_t originX,
+  int16_t centerY
+) {
+  if (!intensities) return;
+  uint8_t previousIntensity = landscapeDashboardTokenHeartbeatCurveIntensity(
+    intensities, 0
+  );
+  int16_t previousY = landscapeDashboardTokenHeartbeatY(
+    previousIntensity, centerY
+  );
+  for (uint8_t x = 1; x < LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT; ++x) {
+    const uint8_t nextIntensity =
+      landscapeDashboardTokenHeartbeatCurveIntensity(intensities, x);
+    const int16_t nextY = landscapeDashboardTokenHeartbeatY(
+      nextIntensity, centerY
+    );
+    const uint8_t segmentIntensity = nextIntensity > previousIntensity
+      ? nextIntensity
+      : previousIntensity;
+    if (segmentIntensity == 0) {
+      previousIntensity = nextIntensity;
+      previousY = nextY;
+      continue;
+    }
+    canvas.drawSmoothLine(
+      originX + x - 1,
+      previousY,
+      originX + x,
+      nextY,
+      landscapeDashboardTokenHeartbeatColor(segmentIntensity)
+    );
+    previousIntensity = nextIntensity;
+    previousY = nextY;
+  }
 }
 
 inline const char* landscapeDashboardStatusLabel(LandscapeDashboardStatus status) {

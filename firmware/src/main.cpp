@@ -919,37 +919,67 @@ static void drawLandscapeDashboardHeartbeat(
   uint32_t now,
   bool force
 ) {
+  static_assert(
+    TOKEN_HEARTBEAT_SAMPLE_COUNT == LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT,
+    "token heartbeat payload must map one sample to each graph pixel"
+  );
   static uint8_t lastFrameToken = UINT8_MAX;
   static uint32_t lastActivityReceipt = UINT32_MAX;
+  static uint32_t lastTokenReceipt = UINT32_MAX;
+  static LandscapeDashboardHeartbeatSource lastSource =
+    LANDSCAPE_HEARTBEAT_NONE;
+  const LandscapeDashboardHeartbeatSource source =
+    landscapeDashboardHeartbeatSource(
+      tama.tokenHeartbeat.valid,
+      tama.hasActivity20
+    );
   const bool activityChanged =
     tama.activity20ReceivedAt != lastActivityReceipt;
-  const uint8_t frameToken = tama.hasActivity20
-    ? landscapeDashboardHeartbeatFrameToken(tama.activity20ReceivedAt, now)
-    : 0;
-  if (!force && !activityChanged && frameToken == lastFrameToken) {
+  const bool tokenChanged =
+    tama.tokenHeartbeat.receivedAtMs != lastTokenReceipt;
+  const uint8_t frameToken = source == LANDSCAPE_HEARTBEAT_TOKEN
+    ? landscapeDashboardTokenHeartbeatFrameToken(
+        tama.tokenHeartbeat.receivedAtMs,
+        now
+      )
+    : (source == LANDSCAPE_HEARTBEAT_ACTIVITY
+      ? landscapeDashboardHeartbeatFrameToken(tama.activity20ReceivedAt, now)
+      : 0);
+  if (!force && source == lastSource && !activityChanged && !tokenChanged &&
+      frameToken == lastFrameToken) {
     return;
   }
   lastFrameToken = frameToken;
   lastActivityReceipt = tama.activity20ReceivedAt;
+  lastTokenReceipt = tama.tokenHeartbeat.receivedAtMs;
+  lastSource = source;
 
   const LandscapeDashboardLayout layout = landscapeDashboardLayout();
-  const uint32_t activityMask = tama.hasActivity20
+  const uint32_t activityMask = source == LANDSCAPE_HEARTBEAT_ACTIVITY
     ? landscapeDashboardActivityMaskAt(
         tama.activity20,
         tama.activity20ReceivedAt,
         now
       )
     : 0;
-  const uint32_t latestBucket = tama.hasActivity20
+  const uint32_t latestBucket = source == LANDSCAPE_HEARTBEAT_ACTIVITY
     ? landscapeDashboardHeartbeatLatestBucket(
         tama.activity20ReceivedAt, now
       )
     : 0;
-  const uint8_t scrollPixels = tama.hasActivity20
+  const uint8_t scrollPixels = source == LANDSCAPE_HEARTBEAT_ACTIVITY
     ? landscapeDashboardHeartbeatScrollPixels(
         tama.activity20ReceivedAt, now
       )
     : 0;
+  uint8_t tokenIntensities[TOKEN_HEARTBEAT_SAMPLE_COUNT] = {};
+  if (source == LANDSCAPE_HEARTBEAT_TOKEN) {
+    tokenHeartbeatAgedIntensities(
+      tama.tokenHeartbeat,
+      now,
+      tokenIntensities
+    );
+  }
 
   if (landscapeHeartbeatSpriteReady) {
     const int16_t localCenterY =
@@ -961,15 +991,24 @@ static void drawLandscapeDashboardHeartbeat(
       layout.heartbeatWidth,
       LANDSCAPE_DASHBOARD_DIM
     );
-    landscapeDashboardDrawHeartbeatCurve(
-      landscapeHeartbeatSprite,
-      activityMask,
-      latestBucket,
-      0,
-      localCenterY,
-      LANDSCAPE_DASHBOARD_GREEN,
-      scrollPixels
-    );
+    if (source == LANDSCAPE_HEARTBEAT_TOKEN) {
+      landscapeDashboardDrawTokenHeartbeatCurve(
+        landscapeHeartbeatSprite,
+        tokenIntensities,
+        0,
+        localCenterY
+      );
+    } else if (source == LANDSCAPE_HEARTBEAT_ACTIVITY) {
+      landscapeDashboardDrawHeartbeatCurve(
+        landscapeHeartbeatSprite,
+        activityMask,
+        latestBucket,
+        0,
+        localCenterY,
+        LANDSCAPE_DASHBOARD_GREEN,
+        scrollPixels
+      );
+    }
     landscapeHeartbeatSprite.pushSprite(
       layout.heartbeatX,
       layout.heartbeatY
@@ -990,15 +1029,24 @@ static void drawLandscapeDashboardHeartbeat(
     layout.heartbeatWidth,
     LANDSCAPE_DASHBOARD_DIM
   );
-  landscapeDashboardDrawHeartbeatCurve(
-    canvas,
-    activityMask,
-    latestBucket,
-    layout.heartbeatX,
-    layout.heartbeatCenterY,
-    LANDSCAPE_DASHBOARD_GREEN,
-    scrollPixels
-  );
+  if (source == LANDSCAPE_HEARTBEAT_TOKEN) {
+    landscapeDashboardDrawTokenHeartbeatCurve(
+      canvas,
+      tokenIntensities,
+      layout.heartbeatX,
+      layout.heartbeatCenterY
+    );
+  } else if (source == LANDSCAPE_HEARTBEAT_ACTIVITY) {
+    landscapeDashboardDrawHeartbeatCurve(
+      canvas,
+      activityMask,
+      latestBucket,
+      layout.heartbeatX,
+      layout.heartbeatCenterY,
+      LANDSCAPE_DASHBOARD_GREEN,
+      scrollPixels
+    );
+  }
 }
 
 template <typename Canvas>
