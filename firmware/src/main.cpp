@@ -923,6 +923,11 @@ static void drawLandscapeDashboardHeartbeat(
     TOKEN_HEARTBEAT_SAMPLE_COUNT == LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT,
     "token heartbeat payload must map one sample to each graph pixel"
   );
+  if (!landscapeDashboardHeartbeatCanPresent(landscapeHeartbeatSpriteReady)) {
+    // Retain the last complete frame rather than tearing the LCD with a
+    // clear-then-redraw fallback when the off-screen buffer is unavailable.
+    return;
+  }
   static uint8_t lastFrameToken = UINT8_MAX;
   static uint32_t lastActivityReceipt = UINT32_MAX;
   static uint32_t lastTokenReceipt = UINT32_MAX;
@@ -981,7 +986,7 @@ static void drawLandscapeDashboardHeartbeat(
     );
   }
 
-  if (landscapeHeartbeatSpriteReady) {
+  {
     const int16_t localCenterY =
       layout.heartbeatCenterY - layout.heartbeatY;
     landscapeHeartbeatSprite.fillSprite(LANDSCAPE_DASHBOARD_BG);
@@ -1014,38 +1019,6 @@ static void drawLandscapeDashboardHeartbeat(
       layout.heartbeatY
     );
     return;
-  }
-
-  canvas.fillRect(
-    layout.heartbeatX,
-    layout.heartbeatY,
-    layout.heartbeatWidth,
-    layout.heartbeatHeight,
-    LANDSCAPE_DASHBOARD_BG
-  );
-  canvas.drawFastHLine(
-    layout.heartbeatX,
-    layout.heartbeatCenterY,
-    layout.heartbeatWidth,
-    LANDSCAPE_DASHBOARD_DIM
-  );
-  if (source == LANDSCAPE_HEARTBEAT_TOKEN) {
-    landscapeDashboardDrawTokenHeartbeatCurve(
-      canvas,
-      tokenIntensities,
-      layout.heartbeatX,
-      layout.heartbeatCenterY
-    );
-  } else if (source == LANDSCAPE_HEARTBEAT_ACTIVITY) {
-    landscapeDashboardDrawHeartbeatCurve(
-      canvas,
-      activityMask,
-      latestBucket,
-      layout.heartbeatX,
-      layout.heartbeatCenterY,
-      LANDSCAPE_DASHBOARD_GREEN,
-      scrollPixels
-    );
   }
 }
 
@@ -2632,14 +2605,19 @@ void loop() {
     runtimeOrienting,
     runtimeOrientationState.resolved
   );
-  if (runtimeSurfaceDecision.entered) clockOrientBeginAutoSurface(&runtimeOrientationState);
+  bool runtimeSurfaceModeChanged = screenOrientRuntimeModeChanged(
+    previousPromptVisible, inPrompt, runtimeOrienting
+  );
+  if (runtimeSurfaceDecision.entered || runtimeSurfaceModeChanged) {
+    clockOrientBeginAutoSurface(&runtimeOrientationState);
+  }
   if (runtimeOrienting) runtimeUpdateOrient();
   bool runtimeSurfaceRenderable = runtimeOrienting && runtimeOrientationState.resolved;
   bool landscapeRuntime = runtimeSurfaceRenderable && runtimeOrientationState.orientation != 0;
   bool portraitSharedFace = (clockSurfaceRenderable && !landscapeClock)
     || (runtimeSurfaceRenderable && !landscapeRuntime);
   bool autoSurfaceAwaitingOrientation = (clocking && !clockSurfaceRenderable)
-    || (runtimeSharedFace && runtimeOrienting && !runtimeSurfaceRenderable);
+    || (runtimeOrienting && !runtimeSurfaceRenderable);
 
   if (clocking != previousStandbyClockFace ||
       landscapeClock != previousLandscapeClockFace) {
@@ -2719,8 +2697,10 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
-  if (napping || screenOff || landscapeClock || landscapeRuntime || portraitSharedFace ||
-      autoSurfaceAwaitingOrientation) {
+  if (autoSurfaceAwaitingOrientation) {
+    // Keep the current LCD contents unchanged until the IMU pose resolves.
+  } else {
+  if (napping || screenOff || landscapeClock || landscapeRuntime || portraitSharedFace) {
     // skip sprite render — face-down, powered off, or a direct-to-LCD
     // landscape surface below.
   } else if (buddyMode) {
@@ -2824,6 +2804,7 @@ void loop() {
       if (otaCompactOverlay) drawOtaCompactOverlayTo(spr, false, updateView);
       spr.pushSprite(0, 0);
     }
+  }
   }
   previousPromptVisible = inPrompt;
 
