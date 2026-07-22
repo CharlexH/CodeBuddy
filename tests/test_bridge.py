@@ -79,7 +79,13 @@ def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallbac
                 "method": "thread/tokenUsage/updated",
                 "params": {
                     "threadId": "thread-official",
-                    "tokenUsage": {"total": {"totalTokens": 1_100}},
+                    "tokenUsage": {
+                        "total": {
+                            "inputTokens": 850,
+                            "outputTokens": 250,
+                            "totalTokens": 1_100,
+                        }
+                    },
                 },
             }
         )
@@ -97,21 +103,41 @@ def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallbac
                 "method": "thread/tokenUsage/updated",
                 "params": {
                     "threadId": "thread-legacy",
-                    "usage": {"outputTokens": 90, "sessionOutputTokens": 80},
+                    "usage": {
+                        "totalTokens": 1_000,
+                        "outputTokens": 90,
+                        "sessionOutputTokens": 80,
+                    },
                 },
             }
         )
         heartbeat = TokenHeartbeat()
         for event in events:
             if isinstance(event, TokenUsage) and event.thread_id == "thread-official":
-                heartbeat.observe(event.thread_id, event.total_tokens, now=10.0)
+                assert event.heartbeat_total_tokens is not None
+                heartbeat.observe(event.thread_id, event.heartbeat_total_tokens, now=10.0)
         return events, heartbeat._raw_values(10.0)[-1]
 
     events, newest_raw_sample = asyncio.run(exercise())
     assert events == [
-        TokenUsage(thread_id="thread-official", total_tokens=1_000, tokens_today=1_000),
-        TokenUsage(thread_id="thread-official", total_tokens=1_100, tokens_today=1_100),
-        TokenUsage(thread_id="thread-summed", total_tokens=425, tokens_today=425),
+        TokenUsage(
+            thread_id="thread-official",
+            total_tokens=200,
+            tokens_today=200,
+            heartbeat_total_tokens=1_000,
+        ),
+        TokenUsage(
+            thread_id="thread-official",
+            total_tokens=250,
+            tokens_today=250,
+            heartbeat_total_tokens=1_100,
+        ),
+        TokenUsage(
+            thread_id="thread-summed",
+            total_tokens=125,
+            tokens_today=125,
+            heartbeat_total_tokens=425,
+        ),
         TokenUsage(thread_id="thread-legacy", total_tokens=90, tokens_today=80),
     ]
     assert newest_raw_sample == 20  # 20% leading sample of the real +100 delta.

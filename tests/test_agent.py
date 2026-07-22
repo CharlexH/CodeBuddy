@@ -9,7 +9,7 @@ import pytest
 from codex_buddy.agent import BuddyAgent, ManagedSessionRuntime
 from codex_buddy.bridge import BridgeController, RunConfig
 from codex_buddy.catalog import SessionPrompt, SessionRecord
-from codex_buddy.events import AgentOutput, ApprovalRequest, TurnState
+from codex_buddy.events import AgentOutput, ApprovalRequest, TokenUsage, TurnState
 from codex_buddy.proxy import ApprovalRequestResolved
 from codex_buddy.state_store import BridgeStateStore, PersistedState
 from codex_buddy.usage_limits import UsageDisplay
@@ -261,6 +261,49 @@ def test_agent_prunes_absent_token_baselines_before_a_session_reappears(tmp_path
     agent.catalog.upsert(replace(record, tokens_total=5_000))
 
     assert _decode_token_heartbeat(agent._snapshot().token20v1) == bytes(64)
+
+
+def test_managed_heartbeat_total_does_not_inflate_legacy_output_counters(tmp_path):
+    now = [100.0]
+    agent = BuddyAgent(tmp_path / "state.json", watcher=None, clock=lambda: now[0])
+    runtime = ManagedSessionRuntime(
+        control_id="managed-1",
+        workdir=tmp_path,
+        session_id="thread-1",
+    )
+    agent._managed_runtime["managed-1"] = runtime
+
+    asyncio.run(
+        agent._handle_managed_event(
+            "managed-1",
+            TokenUsage(
+                thread_id="thread-1",
+                total_tokens=200,
+                tokens_today=200,
+                heartbeat_total_tokens=1_000,
+            ),
+        )
+    )
+    first = agent._snapshot()
+    assert first.tokens == 200
+    assert first.tokens_today == 200
+    assert _decode_token_heartbeat(first.token20v1) == bytes(64)
+
+    asyncio.run(
+        agent._handle_managed_event(
+            "managed-1",
+            TokenUsage(
+                thread_id="thread-1",
+                total_tokens=250,
+                tokens_today=250,
+                heartbeat_total_tokens=1_100,
+            ),
+        )
+    )
+    second = agent._snapshot()
+    assert second.tokens == 250
+    assert second.tokens_today == 250
+    assert _decode_token_heartbeat(second.token20v1)[-1] > 0
 
 
 def _decode_token_heartbeat(encoded: str) -> bytes:

@@ -35,6 +35,7 @@ class SessionRecord:
     control_capability: str
     pending_prompt: Optional[SessionPrompt] = None
     completed_turn_id: Optional[str] = None
+    heartbeat_tokens_total: Optional[int] = None
 
     def as_dict(self) -> dict[str, object]:
         data = asdict(self)
@@ -97,6 +98,7 @@ class SessionCatalog:
             tokens_session=session.tokens_session,
             control_capability=session.control_capability,
             pending_prompt=None,
+            heartbeat_tokens_total=session.heartbeat_tokens_total,
         )
 
     def session_for_request(self, request_id: str) -> Optional[str]:

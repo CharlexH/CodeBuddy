@@ -16,6 +16,7 @@ def _session(
     originator: str = "codex-tui",
     tokens_total: int = 0,
     tokens_session: int = 0,
+    heartbeat_tokens_total: Optional[int] = None,
     pending_prompt: Optional[SessionPrompt] = None,
 ) -> SessionRecord:
     return SessionRecord(
@@ -31,6 +32,7 @@ def _session(
         tokens_session=tokens_session,
         control_capability=control_capability,
         pending_prompt=pending_prompt,
+        heartbeat_tokens_total=heartbeat_tokens_total,
     )
 
 
@@ -172,6 +174,25 @@ def test_readonly_replace_does_not_clobber_managed_prompt_for_same_session_id():
     }
     assert sessions[0].control_capability == "managed"
     assert sessions[0].pending_prompt == SessionPrompt(request_id="req-1", tool="Bash", hint="rm /tmp/demo")
+
+
+def test_resolving_prompt_preserves_managed_heartbeat_total():
+    catalog = SessionCatalog()
+    catalog.upsert(
+        _session(
+            "managed-1",
+            state="waiting",
+            control_capability="managed",
+            last_activity_at=100.0,
+            latest_message="approve: command",
+            heartbeat_tokens_total=1_000,
+            pending_prompt=SessionPrompt(request_id="req-1", tool="Bash", hint="command"),
+        )
+    )
+
+    catalog.resolve_prompt("req-1")
+
+    assert catalog.sessions(now=100.0)[0].heartbeat_tokens_total == 1_000
 
 
 def test_recent_completed_session_becomes_primary_when_no_active_sessions_remain():

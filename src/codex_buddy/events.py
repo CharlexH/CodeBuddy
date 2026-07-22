@@ -23,6 +23,7 @@ class TokenUsage:
     thread_id: str
     total_tokens: int
     tokens_today: int
+    heartbeat_total_tokens: Optional[int] = None
 
 
 @dataclass(frozen=True)

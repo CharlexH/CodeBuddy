@@ -113,6 +113,7 @@ class ManagedSessionRuntime:
     last_activity_at: float = 0.0
     tokens_total: int = 0
     tokens_session: int = 0
+    heartbeat_tokens_total: Optional[int] = None
     pending_prompt: Optional[SessionPrompt] = None
     entries: Deque[str] = field(default_factory=lambda: deque(maxlen=3))
 
@@ -140,6 +141,11 @@ class ManagedSessionRuntime:
         if isinstance(event, TokenUsage):
             self.tokens_total = max(0, event.total_tokens)
             self.tokens_session = max(0, event.tokens_today)
+            self.heartbeat_tokens_total = (
+                max(0, event.heartbeat_total_tokens)
+                if event.heartbeat_total_tokens is not None
+                else None
+            )
             return
 
         if isinstance(event, ApprovalRequest):
@@ -181,6 +187,7 @@ class ManagedSessionRuntime:
             tokens_session=self.tokens_session,
             control_capability="managed",
             pending_prompt=self.pending_prompt,
+            heartbeat_tokens_total=self.heartbeat_tokens_total,
         )
 
 
@@ -767,9 +774,14 @@ class BuddyAgent:
         sessions = self.catalog.sessions(now=now)
         session_ids = {session.session_id for session in sessions}
         for session in sessions:
+            heartbeat_total = session.heartbeat_tokens_total
+            if heartbeat_total is None and session.control_capability == "readonly":
+                heartbeat_total = session.tokens_total
+            if heartbeat_total is None:
+                continue
             self._token_heartbeat.observe(
                 session.session_id,
-                session.tokens_total,
+                heartbeat_total,
                 now,
             )
         self._token_heartbeat.retain_sessions(session_ids)
