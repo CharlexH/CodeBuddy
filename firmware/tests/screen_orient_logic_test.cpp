@@ -12,6 +12,25 @@ static void expect_true(bool condition, const char* message) {
 }
 
 int main() {
+  ScreenOrientationRenderState gate = {};
+  ClockOrientationState sideways = {};
+  ScreenOrientationRenderDecision gateDecision = screenOrientAutoSurfaceDecision(
+    &gate, true, sideways.resolved
+  );
+  expect_true(gateDecision.entered && !gateDecision.draw,
+              "a cold sideways home surface must not draw while its IMU pose is unresolved");
+  expect_true(clockOrientResolveInitialForStickS3(&sideways, 0.0f, 0.95f, 0.0f, 0),
+              "a clearly sideways home surface should resolve before its first draw");
+  gateDecision = screenOrientAutoSurfaceDecision(&gate, true, sideways.resolved);
+  expect_true(gateDecision.draw && sideways.orientation == 1,
+              "no portrait frame may precede a clearly sideways home frame");
+  gateDecision = screenOrientAutoSurfaceDecision(&gate, false, true);
+  expect_true(!gateDecision.draw && gateDecision.exited,
+              "menus, settings, Wi-Fi, reset, and OTA should make the auto surface ineligible");
+  gateDecision = screenOrientAutoSurfaceDecision(&gate, true, false);
+  expect_true(gateDecision.entered && !gateDecision.draw,
+              "returning from a portrait-only page must resolve before any auto-surface frame");
+
   expect_true(
     screenOrientRuntimeEligible(true, false, false, false, true, false, false),
     "active Codex work in the normal home screen should permit runtime landscape"
@@ -93,43 +112,6 @@ int main() {
   decision = runtimeLandscapeSchedule(&render, 280, true, false, 2, 1, 1);
   expect_true(decision.repaint && decision.pet && decision.overlay,
               "an orientation repaint should redraw all direct LCD layers");
-
-  uint8_t orient = 0;
-  int8_t orientFrames = 0;
-  int8_t swapFrames = 0;
-  for (int i = 0; i < 14; ++i) {
-    clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.0f, 0.95f, 0.0f, 0);
-  }
-  expect_true(orient == 0, "runtime landscape should enter only after 15 side frames");
-  clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.0f, 0.95f, 0.0f, 0);
-  expect_true(orient == 1, "runtime landscape should enter on the 15th side frame");
-
-  orientFrames = 0;
-  for (int i = 0; i < 7; ++i) {
-    clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.95f, 0.0f, 0.0f, 0);
-  }
-  expect_true(orient == 1, "runtime landscape should keep its orientation through seven portrait frames");
-  clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.95f, 0.0f, 0.0f, 0);
-  expect_true(orient == 0, "runtime landscape should exit on the eighth portrait frame");
-
-  orientFrames = 0;
-  swapFrames = 0;
-  for (int i = 0; i < 15; ++i) {
-    clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.0f, 0.95f, 0.0f, 0);
-  }
-  for (int i = 0; i < 7; ++i) {
-    clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.0f, -0.95f, 0.0f, 0);
-  }
-  expect_true(orient == 1, "runtime landscape side swap should wait for eight stable frames");
-  clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.0f, -0.95f, 0.0f, 0);
-  expect_true(orient == 3, "runtime landscape side swap should occur on the eighth stable frame");
-
-  clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.0f, 0.0f, 0.0f, 1);
-  expect_true(orient == 0, "forced portrait setting should override runtime landscape immediately");
-  clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.0f, 0.95f, 0.0f, 2);
-  expect_true(orient == 1, "forced landscape setting should select the positive side immediately");
-  clockOrientUpdateForStickS3(&orient, &orientFrames, &swapFrames, 0.0f, -0.95f, 0.0f, 2);
-  expect_true(orient == 3, "forced landscape setting should follow the negative side immediately");
 
   return 0;
 }

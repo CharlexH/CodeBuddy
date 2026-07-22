@@ -806,12 +806,10 @@ void drawMenu() {
 //   0 = portrait (sprite path, pet sleeps underneath)
 //   1 = landscape, BtnA-side down (M5.Lcd rotation 1)
 //   3 = landscape, USB-side down (M5.Lcd rotation 3)
-static uint8_t clockOrient   = 0;
-static int8_t  orientFrames  = 0;
-static int8_t  clockSwapFrames = 0;
-static uint8_t runtimeOrient = 0;
-static int8_t  runtimeOrientFrames = 0;
-static int8_t  runtimeSwapFrames = 0;
+static ClockOrientationState clockOrientationState = {};
+static ClockOrientationState runtimeOrientationState = {};
+static ScreenOrientationRenderState clockAutoSurfaceRenderState = {};
+static ScreenOrientationRenderState runtimeAutoSurfaceRenderState = {};
 static uint8_t paintedRuntimeOrient = 0;
 static RuntimeLandscapeRenderState runtimeLandscapeRenderState = {};
 static bool    runtimeLandscapePromptVisible = false;
@@ -864,10 +862,8 @@ static void clockRefreshRtc() {
 static void clockUpdateOrient() {
   float ax, ay, az;
   M5.Imu.getAccelData(&ax, &ay, &az);
-  clockOrientUpdateForStickS3(
-    &clockOrient,
-    &orientFrames,
-    &clockSwapFrames,
+  clockOrientUpdateStateForStickS3(
+    &clockOrientationState,
     ax,
     ay,
     az,
@@ -878,10 +874,8 @@ static void clockUpdateOrient() {
 static void runtimeUpdateOrient() {
   float ax, ay, az;
   M5.Imu.getAccelData(&ax, &ay, &az);
-  clockOrientUpdateForStickS3(
-    &runtimeOrient,
-    &runtimeOrientFrames,
-    &runtimeSwapFrames,
+  clockOrientUpdateStateForStickS3(
+    &runtimeOrientationState,
     ax,
     ay,
     az,
@@ -1998,13 +1992,13 @@ static void drawRuntimeLandscape(bool inPrompt) {
   const Palette& p = characterPalette();
   const RuntimePetLayout layout = runtimePetLayout(true);
   uint32_t now = millis();
-  M5.Lcd.setRotation(runtimeOrient);
+  M5.Lcd.setRotation(runtimeOrientationState.orientation);
   bool promptExited = runtimeNeedsFullRepaintOnPromptExit(
     runtimeLandscapePromptVisible,
     inPrompt
   );
   bool promptEntered = !runtimeLandscapePromptVisible && inPrompt;
-  bool repaint = paintedRuntimeOrient != runtimeOrient || promptEntered || promptExited;
+  bool repaint = paintedRuntimeOrient != runtimeOrientationState.orientation || promptEntered || promptExited;
   bool overlayVisible = runtimeStatusOverlayVisible(inPrompt);
   uint32_t overlayContentRevision = 0;
   uint32_t overlayTimeRevision = 0;
@@ -2025,7 +2019,7 @@ static void drawRuntimeLandscape(bool inPrompt) {
   );
   if (decision.repaint) {
     M5.Lcd.fillScreen(p.bg);
-    paintedRuntimeOrient = runtimeOrient;
+    paintedRuntimeOrient = runtimeOrientationState.orientation;
     usageMeterRenderReset(&runtimeUsageMeterRenderState);
     if (promptExited && !buddyMode) characterInvalidate();
   }
@@ -2563,9 +2557,15 @@ void loop() {
     : tama.sessionsWaiting > 0 ? SHARED_CLOCK_WAITING : SHARED_CLOCK_IDLE;
   bool runtimeSharedFace = (tama.sessionsRunning > 0 || tama.sessionsWaiting > 0)
     && sharedClockFaceSelected(sharedContext, sharedActivity);
+  ScreenOrientationRenderDecision clockSurfaceDecision = screenOrientAutoSurfaceDecision(
+    &clockAutoSurfaceRenderState,
+    clocking,
+    clockOrientationState.resolved
+  );
+  if (clockSurfaceDecision.entered) clockOrientBeginAutoSurface(&clockOrientationState);
   if (clocking) clockUpdateOrient();
-  else { clockOrient = 0; orientFrames = 0; clockSwapFrames = 0; }
-  bool landscapeClock = clocking && clockOrient != 0;
+  bool clockSurfaceRenderable = clocking && clockOrientationState.resolved;
+  bool landscapeClock = clockSurfaceRenderable && clockOrientationState.orientation != 0;
 
   // Codex activity gets the same StickS3 auto-orientation policy as the
   // charging clock, but only on the normal home surface. The portrait sprite
@@ -2579,16 +2579,19 @@ void loop() {
     false,
     inPrompt
   );
+  ScreenOrientationRenderDecision runtimeSurfaceDecision = screenOrientAutoSurfaceDecision(
+    &runtimeAutoSurfaceRenderState,
+    runtimeOrienting,
+    runtimeOrientationState.resolved
+  );
+  if (runtimeSurfaceDecision.entered) clockOrientBeginAutoSurface(&runtimeOrientationState);
   if (runtimeOrienting) runtimeUpdateOrient();
-  else {
-    runtimeOrient = 0;
-    runtimeOrientFrames = 0;
-    runtimeSwapFrames = 0;
-    paintedRuntimeOrient = 0;
-  }
-  bool landscapeRuntime = runtimeOrienting && runtimeOrient != 0;
-  bool portraitSharedFace = (clocking && !landscapeClock)
-    || (runtimeSharedFace && !landscapeRuntime);
+  bool runtimeSurfaceRenderable = runtimeOrienting && runtimeOrientationState.resolved;
+  bool landscapeRuntime = runtimeSurfaceRenderable && runtimeOrientationState.orientation != 0;
+  bool portraitSharedFace = (clockSurfaceRenderable && !landscapeClock)
+    || (runtimeSurfaceRenderable && !landscapeRuntime);
+  bool autoSurfaceAwaitingOrientation = (clocking && !clockSurfaceRenderable)
+    || (runtimeSharedFace && runtimeOrienting && !runtimeSurfaceRenderable);
 
   if (clocking != previousStandbyClockFace ||
       landscapeClock != previousLandscapeClockFace) {
@@ -2668,7 +2671,8 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
-  if (napping || screenOff || landscapeClock || landscapeRuntime || portraitSharedFace) {
+  if (napping || screenOff || landscapeClock || landscapeRuntime || portraitSharedFace ||
+      autoSurfaceAwaitingOrientation) {
     // skip sprite render — face-down, powered off, or a direct-to-LCD
     // landscape surface below.
   } else if (buddyMode) {
@@ -2703,7 +2707,7 @@ void loop() {
     else if (runtimeSharedFace) {
       drawSharedClockFace(
         true,
-        runtimeOrient,
+        runtimeOrientationState.orientation,
         &runtimeClockFaceCache,
         &runtimeUsageMeterRenderState,
         false,
@@ -2711,7 +2715,7 @@ void loop() {
       );
     }
     if (otaCompactOverlay) {
-      drawLandscapeOtaCompactOverlay(runtimeOrient, updateView);
+      drawLandscapeOtaCompactOverlay(runtimeOrientationState.orientation, updateView);
     }
   } else if (inPrompt) {
     const Palette& p = characterPalette();
@@ -2725,12 +2729,12 @@ void loop() {
   } else if (landscapeClock) {
     drawSharedClockFace(
       true,
-      clockOrient,
+      clockOrientationState.orientation,
       &standbyClockFaceCache,
       &clockUsageMeterRenderState
     );
     if (otaCompactOverlay) {
-      drawLandscapeOtaCompactOverlay(clockOrient, updateView);
+      drawLandscapeOtaCompactOverlay(clockOrientationState.orientation, updateView);
     }
   } else if (!napping && !screenOff) {
     if (clocking) {

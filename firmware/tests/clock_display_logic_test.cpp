@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "clock_display_logic.h"
+#include "screen_orient_logic.h"
 
 static void expect_true(bool condition, const char* message) {
   if (!condition) {
@@ -19,6 +20,19 @@ static void expect_str_eq(const char* actual, const char* expected, const char* 
 }
 
 int main() {
+  ScreenOrientationRenderState standbyGate = {};
+  ScreenOrientationRenderDecision standbyDecision = screenOrientAutoSurfaceDecision(
+    &standbyGate, true, false
+  );
+  expect_true(!standbyDecision.draw,
+              "an ambiguous standby-to-active transition must not produce a portrait shared-face frame");
+  standbyDecision = screenOrientAutoSurfaceDecision(&standbyGate, true, true);
+  expect_true(standbyDecision.draw,
+              "a resolved standby-to-active transition may draw its selected shared face");
+  standbyDecision = screenOrientAutoSurfaceDecision(&standbyGate, false, true);
+  expect_true(standbyDecision.exited && !standbyDecision.draw,
+              "approval exit should stop auto-surface drawing until the next eligible resolve");
+
   char buf[16];
   char hm[6];
   char seconds[4];

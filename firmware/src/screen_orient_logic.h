@@ -2,6 +2,30 @@
 
 #include <stdint.h>
 
+struct ScreenOrientationRenderState {
+  bool autoSurfaceEligible;
+};
+
+struct ScreenOrientationRenderDecision {
+  bool entered;
+  bool exited;
+  bool draw;
+};
+
+inline ScreenOrientationRenderDecision screenOrientAutoSurfaceDecision(
+  ScreenOrientationRenderState* state,
+  bool autoSurfaceEligible,
+  bool orientationResolved
+) {
+  ScreenOrientationRenderDecision decision = {false, false, false};
+  if (state == nullptr) return decision;
+  decision.entered = autoSurfaceEligible && !state->autoSurfaceEligible;
+  decision.exited = !autoSurfaceEligible && state->autoSurfaceEligible;
+  decision.draw = autoSurfaceEligible && orientationResolved;
+  state->autoSurfaceEligible = autoSurfaceEligible;
+  return decision;
+}
+
 inline bool screenOrientRuntimeEligible(
   bool normal_display,
   bool menu_open,
