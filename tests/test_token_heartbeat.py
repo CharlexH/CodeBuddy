@@ -11,9 +11,19 @@ def decode(encoded: str) -> bytes:
 def test_first_observation_establishes_a_quiet_session_baseline():
     heartbeat = TokenHeartbeat()
 
+    assert heartbeat.available is False
     heartbeat.observe("session-a", 1_000, now=10.0)
 
+    assert heartbeat.available is True
     assert decode(heartbeat.encoded(10.0)) == bytes(64)
+
+
+def test_zero_placeholder_does_not_make_token_data_available():
+    heartbeat = TokenHeartbeat()
+
+    heartbeat.observe("session-a", 0, now=10.0)
+
+    assert heartbeat.available is False
 
 
 def test_positive_delta_is_smoothed_across_future_bins():

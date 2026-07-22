@@ -780,7 +780,11 @@ class BuddyAgent:
             completion_seq=self._completion_seq,
             unread=self._unread,
             activity20=self._activity_heartbeat.mask(now),
-            token20v1=self._token_heartbeat.encoded(now),
+            token20v1=(
+                self._token_heartbeat.encoded(now)
+                if self._token_heartbeat.available
+                else None
+            ),
         )
 
     def _persist(self, snapshot: Any, *, agent_running: bool) -> None:

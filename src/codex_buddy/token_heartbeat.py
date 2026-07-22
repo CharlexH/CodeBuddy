@@ -18,6 +18,12 @@ class TokenHeartbeat:
     def __init__(self) -> None:
         self._baselines: dict[str, int] = {}
         self._source_deltas: dict[int, int] = {}
+        self._available = False
+
+    @property
+    def available(self) -> bool:
+        """Whether a positive cumulative token counter has been observed."""
+        return self._available
 
     def observe(self, session_id: str, total_tokens: int, now: float) -> None:
         """Record a cumulative token counter without creating reset spikes."""
@@ -25,6 +31,8 @@ class TokenHeartbeat:
             return
 
         total = int(total_tokens)
+        if total > 0:
+            self._available = True
         previous = self._baselines.get(session_id)
         self._baselines[session_id] = total
         if previous is None or total <= previous:

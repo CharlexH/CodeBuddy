@@ -137,7 +137,9 @@ def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(
         watcher=None,
     )
 
-    assert agent._snapshot().as_ble_payload()["usage"] is None
+    payload = agent._snapshot().as_ble_payload()
+    assert payload["usage"] is None
+    assert "token20v1" not in payload
 
 
 def test_agent_loads_persisted_completion_sequence_into_snapshot(tmp_path):

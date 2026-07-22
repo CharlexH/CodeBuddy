@@ -42,15 +42,17 @@ def _nonnegative_int(value: object) -> Optional[int]:
     return max(0, parsed)
 
 
-def _total_tokens(usage: object) -> int:
+def _total_tokens(usage: object) -> Optional[int]:
     if not isinstance(usage, dict):
-        return 0
+        return None
     supplied_total = _nonnegative_int(usage.get("totalTokens"))
     if supplied_total is not None:
         return supplied_total
-    input_tokens = _nonnegative_int(usage.get("inputTokens")) or 0
-    output_tokens = _nonnegative_int(usage.get("outputTokens")) or 0
-    return input_tokens + output_tokens
+    input_tokens = _nonnegative_int(usage.get("inputTokens"))
+    output_tokens = _nonnegative_int(usage.get("outputTokens"))
+    if input_tokens is None and output_tokens is None:
+        return None
+    return (input_tokens or 0) + (output_tokens or 0)
 
 
 def map_device_decision_to_codex_response(device_decision: str) -> dict[str, str]:
@@ -232,13 +234,16 @@ class CodexEventSource:
             legacy_usage = params.get("usage", {})
             if not isinstance(legacy_usage, dict):
                 legacy_usage = {}
-            if isinstance(official_total, dict) and official_total:
-                total_tokens = _total_tokens(official_total)
+            official_tokens = _total_tokens(official_total)
+            if official_tokens is not None:
+                total_tokens = official_tokens
                 session_tokens = total_tokens
             else:
                 total_tokens = _nonnegative_int(legacy_usage.get("totalTokens"))
                 if total_tokens is None:
                     total_tokens = _total_tokens(legacy_usage)
+                if total_tokens is None:
+                    return
                 session_tokens = _nonnegative_int(legacy_usage.get("sessionTotalTokens"))
                 if session_tokens is None:
                     session_tokens = _nonnegative_int(legacy_usage.get("sessionOutputTokens"))

@@ -4,6 +4,7 @@ from codex_buddy import bridge
 from codex_buddy.events import TokenUsage
 from codex_buddy.proxy import CodexEventSource
 from codex_buddy.state_store import PersistedState
+from codex_buddy.token_heartbeat import TokenHeartbeat
 
 
 class _ChangingStateStore:
@@ -52,6 +53,21 @@ def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallbac
         await source._emit_events(
             {
                 "method": "thread/tokenUsage/updated",
+                "params": {"threadId": "thread-official", "tokenUsage": {"total": {}}},
+            }
+        )
+        await source._emit_events(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": "thread-official",
+                    "tokenUsage": {"total": {"totalTokens": 1_100}},
+                },
+            }
+        )
+        await source._emit_events(
+            {
+                "method": "thread/tokenUsage/updated",
                 "params": {
                     "threadId": "thread-summed",
                     "tokenUsage": {"total": {"inputTokens": 300, "outputTokens": 125}},
@@ -67,13 +83,20 @@ def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallbac
                 },
             }
         )
-        return events
+        heartbeat = TokenHeartbeat()
+        for event in events:
+            if isinstance(event, TokenUsage) and event.thread_id == "thread-official":
+                heartbeat.observe(event.thread_id, event.total_tokens, now=10.0)
+        return events, heartbeat._raw_values(10.0)[-1]
 
-    assert asyncio.run(exercise()) == [
+    events, newest_raw_sample = asyncio.run(exercise())
+    assert events == [
         TokenUsage(thread_id="thread-official", total_tokens=1_000, tokens_today=1_000),
+        TokenUsage(thread_id="thread-official", total_tokens=1_100, tokens_today=1_100),
         TokenUsage(thread_id="thread-summed", total_tokens=425, tokens_today=425),
         TokenUsage(thread_id="thread-legacy", total_tokens=90, tokens_today=80),
     ]
+    assert newest_raw_sample == 20  # 20% leading sample of the real +100 delta.
 
 
 def test_shared_app_server_launcher_uses_real_binary_and_carefully_merged_environment(monkeypatch):
