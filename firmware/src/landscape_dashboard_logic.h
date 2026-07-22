@@ -97,6 +97,12 @@ landscapeDashboardHeartbeatSource(bool tokenValid, bool hasActivity20) {
     : (hasActivity20 ? LANDSCAPE_HEARTBEAT_ACTIVITY : LANDSCAPE_HEARTBEAT_NONE);
 }
 
+inline constexpr bool landscapeDashboardHeartbeatCanPresent(
+  bool spriteReady
+) {
+  return spriteReady;
+}
+
 inline constexpr int16_t landscapeDashboardTokenHeartbeatY(
   uint8_t intensity,
   int16_t centerY
@@ -118,42 +124,6 @@ inline uint8_t landscapeDashboardTokenHeartbeatFrameToken(
       (static_cast<uint64_t>(elapsedMs) *
         LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT) / 20000U
     );
-}
-
-inline uint8_t landscapeDashboardTokenHeartbeatCurveIntensity(
-  const uint8_t intensities[LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT],
-  uint8_t pointIndex
-) {
-  if (!intensities || pointIndex == 0 ||
-      pointIndex == LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT - 1) {
-    return intensities ? intensities[pointIndex] : 0;
-  }
-
-  const int16_t p0 = intensities[pointIndex > 1 ? pointIndex - 2 : 0];
-  const int16_t p1 = intensities[pointIndex - 1];
-  const int16_t p2 = intensities[pointIndex];
-  const int16_t p3 = intensities[pointIndex + 1];
-  const int16_t delta = p2 - p1;
-  int16_t slope1 = (p2 - p0) / 2;
-  int16_t slope2 = (p3 - p1) / 2;
-  if (delta == 0) {
-    slope1 = 0;
-    slope2 = 0;
-  } else {
-    if ((slope1 < 0) != (delta < 0)) slope1 = 0;
-    if ((slope2 < 0) != (delta < 0)) slope2 = 0;
-  }
-
-  // Cubic Hermite at t=0.5. Clamp to the segment endpoints so a sharp
-  // change can never overshoot below the centerline or above full scale.
-  int16_t midpoint = static_cast<int16_t>(
-    (4 * (p1 + p2) + slope1 - slope2 + 4) / 8
-  );
-  const int16_t low = p1 < p2 ? p1 : p2;
-  const int16_t high = p1 > p2 ? p1 : p2;
-  if (midpoint < low) midpoint = low;
-  if (midpoint > high) midpoint = high;
-  return static_cast<uint8_t>(midpoint);
 }
 
 inline constexpr uint8_t landscapeDashboardRgb565Red(uint16_t color) {
@@ -217,15 +187,12 @@ inline void landscapeDashboardDrawTokenHeartbeatCurve(
   int16_t centerY
 ) {
   if (!intensities) return;
-  uint8_t previousIntensity = landscapeDashboardTokenHeartbeatCurveIntensity(
-    intensities, 0
-  );
+  uint8_t previousIntensity = intensities[0];
   int16_t previousY = landscapeDashboardTokenHeartbeatY(
     previousIntensity, centerY
   );
   for (uint8_t x = 1; x < LANDSCAPE_DASHBOARD_TOKEN_SAMPLE_COUNT; ++x) {
-    const uint8_t nextIntensity =
-      landscapeDashboardTokenHeartbeatCurveIntensity(intensities, x);
+    const uint8_t nextIntensity = intensities[x];
     const int16_t nextY = landscapeDashboardTokenHeartbeatY(
       nextIntensity, centerY
     );

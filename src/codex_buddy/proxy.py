@@ -42,7 +42,11 @@ def _nonnegative_int(value: object) -> Optional[int]:
     return max(0, parsed)
 
 
-def _total_tokens(usage: object) -> Optional[int]:
+def _total_tokens(
+    usage: object,
+    *,
+    require_complete_pair: bool = False,
+) -> Optional[int]:
     if not isinstance(usage, dict):
         return None
     supplied_total = _nonnegative_int(usage.get("totalTokens"))
@@ -50,6 +54,8 @@ def _total_tokens(usage: object) -> Optional[int]:
         return supplied_total
     input_tokens = _nonnegative_int(usage.get("inputTokens"))
     output_tokens = _nonnegative_int(usage.get("outputTokens"))
+    if require_complete_pair and (input_tokens is None or output_tokens is None):
+        return None
     if input_tokens is None and output_tokens is None:
         return None
     return (input_tokens or 0) + (output_tokens or 0)
@@ -234,7 +240,10 @@ class CodexEventSource:
             legacy_usage = params.get("usage", {})
             if not isinstance(legacy_usage, dict):
                 legacy_usage = {}
-            official_tokens = _total_tokens(official_total)
+            official_tokens = _total_tokens(
+                official_total,
+                require_complete_pair=True,
+            )
             if official_tokens is not None:
                 total_tokens = official_tokens
                 session_tokens = total_tokens

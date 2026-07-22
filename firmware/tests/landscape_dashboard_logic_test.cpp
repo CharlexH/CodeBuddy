@@ -242,10 +242,24 @@ int main() {
 
   uint8_t sharpSamples[64] = {};
   sharpSamples[30] = 255;
-  for (uint8_t i = 0; i < 64; ++i) {
-    const uint8_t curveIntensity =
-      landscapeDashboardTokenHeartbeatCurveIntensity(sharpSamples, i);
-    assert(curveIntensity <= 255);
+  HeartbeatCanvas sharpCurve;
+  landscapeDashboardDrawTokenHeartbeatCurve(
+    sharpCurve,
+    sharpSamples,
+    layout.heartbeatX,
+    layout.heartbeatCenterY
+  );
+  bool preservedInteriorPeak = false;
+  for (uint8_t i = 0; i < sharpCurve.count; ++i) {
+    const RecordedHeartbeatLine& line = sharpCurve.lines[i];
+    if ((line.x0 == layout.heartbeatX + 30 && line.y0 == layout.heartbeatY) ||
+        (line.x1 == layout.heartbeatX + 30 && line.y1 == layout.heartbeatY)) {
+      preservedInteriorPeak = line.color == LANDSCAPE_DASHBOARD_MINT;
+    }
   }
+  assert(preservedInteriorPeak);
+
+  assert(landscapeDashboardHeartbeatCanPresent(true));
+  assert(!landscapeDashboardHeartbeatCanPresent(false));
   return 0;
 }
