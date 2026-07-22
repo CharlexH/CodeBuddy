@@ -9,6 +9,7 @@
 #include "ota_manifest.h"
 #include "ota_manifest_logic.h"
 #include "status_dashboard_json.h"
+#include "token_heartbeat_logic.h"
 #include "utf8_text_logic.h"
 #include "usage_meter_json.h"
 #include "wifi_manager.h"
@@ -27,6 +28,7 @@ struct TamaState {
   bool     hasActivity20;
   uint32_t activity20;
   uint32_t activity20ReceivedAt;
+  TokenHeartbeatState tokenHeartbeat;
   uint32_t tokensToday;
   bool     hasFiveHourUsage;
   bool     hasSevenDayUsage;
@@ -293,6 +295,14 @@ static void _applyJson(const char* line, TamaState* out, bool trustedTransport) 
       out->activity20 = mask;
       out->activity20ReceivedAt = millis();
     }
+  }
+  JsonVariantConst token20v1 = doc["token20v1"];
+  if (token20v1.is<const char*>()) {
+    tokenHeartbeatApplyEncoded(
+      &out->tokenHeartbeat,
+      token20v1.as<const char*>(),
+      millis()
+    );
   }
   uint32_t bridgeTokens = doc["tokens"] | 0;
   if (doc["tokens"].is<uint32_t>()) statsOnBridgeTokens(bridgeTokens);
