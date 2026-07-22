@@ -31,6 +31,22 @@ def test_turn_lifecycle_and_entries_are_projected_into_snapshot():
     assert stopped.total == 0
 
 
+def test_heartbeat_only_usage_does_not_clear_legacy_output_counters():
+    reducer = BuddyStateReducer(tokens=120, tokens_today=45)
+
+    reducer.apply(
+        TokenUsage(
+            thread_id="thr_1",
+            total_tokens=None,
+            tokens_today=None,
+            heartbeat_total_tokens=1_000,
+        )
+    )
+
+    assert reducer.snapshot().tokens == 120
+    assert reducer.snapshot().tokens_today == 45
+
+
 def test_snapshot_includes_optional_twenty_second_activity_mask():
     snapshot = BuddySnapshot(
         total=1,

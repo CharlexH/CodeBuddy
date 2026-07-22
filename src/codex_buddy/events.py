@@ -21,8 +21,8 @@ class AgentOutput:
 @dataclass(frozen=True)
 class TokenUsage:
     thread_id: str
-    total_tokens: int
-    tokens_today: int
+    total_tokens: Optional[int]
+    tokens_today: Optional[int]
     heartbeat_total_tokens: Optional[int] = None
 
 

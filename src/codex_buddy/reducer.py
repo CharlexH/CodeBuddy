@@ -134,8 +134,10 @@ class BuddyStateReducer:
             return
 
         if isinstance(event, TokenUsage):
-            self._tokens = max(0, event.total_tokens)
-            self._tokens_today = max(0, event.tokens_today)
+            if event.total_tokens is not None:
+                self._tokens = max(0, event.total_tokens)
+            if event.tokens_today is not None:
+                self._tokens_today = max(0, event.tokens_today)
             return
 
         if isinstance(event, ApprovalRequest):

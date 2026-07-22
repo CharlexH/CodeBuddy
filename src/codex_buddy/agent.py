@@ -139,13 +139,12 @@ class ManagedSessionRuntime:
             return
 
         if isinstance(event, TokenUsage):
-            self.tokens_total = max(0, event.total_tokens)
-            self.tokens_session = max(0, event.tokens_today)
-            self.heartbeat_tokens_total = (
-                max(0, event.heartbeat_total_tokens)
-                if event.heartbeat_total_tokens is not None
-                else None
-            )
+            if event.total_tokens is not None:
+                self.tokens_total = max(0, event.total_tokens)
+            if event.tokens_today is not None:
+                self.tokens_session = max(0, event.tokens_today)
+            if event.heartbeat_total_tokens is not None:
+                self.heartbeat_tokens_total = max(0, event.heartbeat_total_tokens)
             return
 
         if isinstance(event, ApprovalRequest):

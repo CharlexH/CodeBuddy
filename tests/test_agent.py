@@ -294,15 +294,15 @@ def test_managed_heartbeat_total_does_not_inflate_legacy_output_counters(tmp_pat
             "managed-1",
             TokenUsage(
                 thread_id="thread-1",
-                total_tokens=250,
-                tokens_today=250,
+                total_tokens=None,
+                tokens_today=None,
                 heartbeat_total_tokens=1_100,
             ),
         )
     )
     second = agent._snapshot()
-    assert second.tokens == 250
-    assert second.tokens_today == 250
+    assert second.tokens == 200
+    assert second.tokens_today == 200
     assert _decode_token_heartbeat(second.token20v1)[-1] > 0
 
 

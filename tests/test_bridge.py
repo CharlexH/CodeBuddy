@@ -53,6 +53,15 @@ def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallbac
         await source._emit_events(
             {
                 "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": "thread-official",
+                    "tokenUsage": {"total": {"totalTokens": 1_050}},
+                },
+            }
+        )
+        await source._emit_events(
+            {
+                "method": "thread/tokenUsage/updated",
                 "params": {"threadId": "thread-official", "tokenUsage": {"total": {}}},
             }
         )
@@ -106,8 +115,18 @@ def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallbac
                     "usage": {
                         "totalTokens": 1_000,
                         "outputTokens": 90,
+                        "sessionTotalTokens": 999,
                         "sessionOutputTokens": 80,
                     },
+                },
+            }
+        )
+        await source._emit_events(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": "thread-legacy",
+                    "usage": {"totalTokens": 1_100},
                 },
             }
         )
@@ -128,6 +147,12 @@ def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallbac
         ),
         TokenUsage(
             thread_id="thread-official",
+            total_tokens=None,
+            tokens_today=None,
+            heartbeat_total_tokens=1_050,
+        ),
+        TokenUsage(
+            thread_id="thread-official",
             total_tokens=250,
             tokens_today=250,
             heartbeat_total_tokens=1_100,
@@ -138,7 +163,18 @@ def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallbac
             tokens_today=125,
             heartbeat_total_tokens=425,
         ),
-        TokenUsage(thread_id="thread-legacy", total_tokens=90, tokens_today=80),
+        TokenUsage(
+            thread_id="thread-legacy",
+            total_tokens=90,
+            tokens_today=80,
+            heartbeat_total_tokens=1_000,
+        ),
+        TokenUsage(
+            thread_id="thread-legacy",
+            total_tokens=None,
+            tokens_today=None,
+            heartbeat_total_tokens=1_100,
+        ),
     ]
     assert newest_raw_sample == 20  # 20% leading sample of the real +100 delta.
 

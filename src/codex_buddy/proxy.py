@@ -249,20 +249,24 @@ class CodexEventSource:
                 if isinstance(official_total, dict)
                 else None
             )
-            if official_tokens is not None and official_output_tokens is not None:
+            if official_tokens is not None:
                 total_tokens = official_output_tokens
                 session_tokens = official_output_tokens
                 heartbeat_total_tokens = official_tokens
             else:
                 total_tokens = _nonnegative_int(legacy_usage.get("outputTokens"))
-                if total_tokens is None:
-                    return
-                session_tokens = _nonnegative_int(legacy_usage.get("sessionTotalTokens"))
-                if session_tokens is None:
-                    session_tokens = _nonnegative_int(legacy_usage.get("sessionOutputTokens"))
-                if session_tokens is None:
+                session_tokens = _nonnegative_int(legacy_usage.get("sessionOutputTokens"))
+                if session_tokens is None and total_tokens is not None:
                     session_tokens = total_tokens
-                heartbeat_total_tokens = None
+                heartbeat_total_tokens = _nonnegative_int(
+                    legacy_usage.get("totalTokens")
+                )
+                if (
+                    total_tokens is None
+                    and session_tokens is None
+                    and heartbeat_total_tokens is None
+                ):
+                    return
             await self.on_event(
                 TokenUsage(
                     thread_id=str(params.get("threadId", "")),
