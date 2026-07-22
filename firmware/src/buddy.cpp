@@ -181,6 +181,10 @@ void buddyRenderTo(
   if ((int32_t)(now - nextTickAt) >= 0) { nextTickAt = now + TICK_MS; tickCount++; }
   lgfx::LovyanGFX* prev = _tgt;
   _tgt = tgt;
+  // The shared clock face uses JetBrains Mono for its text. ASCII species
+  // are authored against the built-in 6x8 grid, so restore that grid before
+  // applying BUDDY_CHAR_W/BUDDY_CHAR_H centering calculations.
+  _tgt->setFont(nullptr);
   const Species* sp = SPECIES_TABLE[currentSpeciesIdx];
   if (sp->states[personaState]) sp->states[personaState](tickCount);
   _tgt = prev;

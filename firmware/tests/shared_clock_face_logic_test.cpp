@@ -17,30 +17,34 @@ int main() {
               "portrait shared face should use the full 135x240 display");
   expect_true(portrait.pet.x == 0 && portrait.pet.y == 0 &&
                   portrait.pet.width == 135 && portrait.pet.height == 90,
-              "portrait shared face should reserve the top 135x90 for the compact pet");
+              "portrait shared face should retain its original 90px pet region");
   expect_true(!portrait.pet.useLocalSurface && portrait.pet.asciiScale == 1 &&
                   portrait.pet.asciiYOffset == 0,
-              "portrait pet rendering should retain its existing direct 1x placement");
-  expect_true(portrait.time.primary.x == 36 && portrait.time.primary.y == 166 &&
-                  portrait.time.primary.width == 38 && portrait.time.primary.height == 16,
-              "portrait HH:MM should start the centered custom-font time line at y 174");
-  expect_true(portrait.time.seconds.x == 75 && portrait.time.seconds.y == 166 &&
-                  portrait.time.seconds.width == 23 && portrait.time.seconds.height == 16,
-              "portrait :SS should continue on the same line at the same size");
-  expect_true(portrait.time.primaryTextSize == 0.75f &&
-                  portrait.time.secondsTextSize == 0.75f &&
-                  portrait.time.centerY == 174,
-              "portrait time should retain its natural aspect ratio and stay centered");
+              "portrait ASCII animation should retain its original 1x geometry");
+  expect_true(portrait.time.primary.x == 3 && portrait.time.primary.y == 154 &&
+                  portrait.time.primary.width == 80 && portrait.time.primary.height == 36,
+              "portrait HH:MM should use the native 14pt numeric font");
+  expect_true(portrait.time.seconds.x == 83 && portrait.time.seconds.y == 154 &&
+                  portrait.time.seconds.width == 48 && portrait.time.seconds.height == 36,
+              "portrait :SS should continue at the same 14pt size and baseline");
+  expect_true(
+      portrait.time.primary.x + portrait.time.primary.width ==
+        portrait.time.seconds.x &&
+      portrait.time.seconds.x + portrait.time.seconds.width == 131,
+      "portrait HH:MM:SS should form one centered contiguous row");
+  expect_true(portrait.time.primaryTextSize == 1.0f &&
+                  portrait.time.secondsTextSize == 1.0f,
+              "portrait time should avoid fractional font scaling");
   expect_true(portrait.time.showSeconds,
               "portrait time should retain its existing seconds segment");
   expect_true(portrait.time.primary.role == SHARED_CLOCK_TEXT_PRIMARY &&
                   portrait.time.seconds.role == SHARED_CLOCK_TEXT_DIM,
               "portrait seconds should use the dim role while staying the same size");
   expect_true(portrait.date.mode == SHARED_CLOCK_DATE_SINGLE_LINE &&
-                  portrait.date.centerX == 67 && portrait.date.centerY == 202 &&
-                  portrait.date.monthTextSize == 0.38f &&
-                  portrait.date.dayTextSize == 0.38f,
-              "portrait date should fit the custom font's line height");
+                  portrait.date.centerX == 67 && portrait.date.centerY == 207 &&
+                  portrait.date.monthTextSize == 1.0f &&
+                  portrait.date.dayTextSize == 1.0f,
+              "portrait date should use the native 8pt font without downscaling");
   expect_true(portrait.meterY == 224 && portrait.meterFootprint == 16,
               "portrait meters should occupy the final 16 pixels from y 224");
   expect_true(!portrait.status.visible,

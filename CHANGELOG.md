@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.1.39 - 2026-07-22
+
+- Rendered portrait `HH:MM:SS` as one centered, contiguous row using the same native 14pt font and baseline for every digit and colon.
+- Preserved the existing color hierarchy by keeping seconds dim while hours and minutes remain primary.
+
+## 0.1.38 - 2026-07-22
+
+- Restored the portrait home screen's original 90px-high, 1x ASCII pet geometry after the v0.1.37 sizing experiment.
+- Fixed the actual horizontal distortion by resetting the pet renderer to its built-in 6x8 bitmap font before applying six-pixel character-width centering.
+- Retained the enlarged native-size portrait clock and date typography introduced in v0.1.37.
+
+## 0.1.37 - 2026-07-22
+
+- Temporarily enlarged the portrait ASCII pet while diagnosing its alignment; v0.1.38 restores the original geometry and fixes the underlying font mismatch instead.
+- Enlarged portrait `HH:MM` to the native 14pt numeric font and `:SS` plus the date line to native 8pt, removing the previous 0.75x and 0.38x fractional downscaling.
+- Kept the portrait quota footer at its existing position and retained the landscape heartbeat orientation fix from v0.1.36.
+
+## 0.1.36 - 2026-07-22
+
+- Fixed the landscape heartbeat so every new activity pulse keeps the same upward orientation instead of alternating above and below the centerline according to the wall-clock second.
+- Preserved the continuous right-to-left strip-chart motion, off-screen rendering, and the restored JetBrains Mono typography and spacing.
+
+## 0.1.35 - 2026-07-22
+
+- Restored the landscape dashboard's JetBrains Mono Regular/Bold labels after the built-in pixel fonts proved too coarse on the physical display.
+- Retained the slashed-zero numeric glyphs, two-pixel status-dot radius, and four-pixel dot-to-label gap from the preceding visual pass.
+
+## 0.1.34 - 2026-07-22
+
+- Changed the Codex heartbeat to a true strip chart: stable historical samples move left while the newest sample enters from the right, without reshaping old peaks.
+- Rendered the complete 64-by-14 heartbeat into an off-screen sprite before presenting it, removing the visible clear-and-redraw flash.
+- Increased the OTA I/O idle tolerance from 5 to 15 seconds so short Wi-Fi stalls do not abandon an otherwise healthy firmware download.
+- Switched dashboard English labels to crisp built-in pixel fonts while retaining JetBrains Mono for numbers and time punctuation, with its OpenType slashed-zero alternate baked into every generated size.
+- Reduced the 8-by-8 status dot corner radius to two pixels and tightened the dot-to-label gap to four pixels without moving the dot center.
+
+## 0.1.33 - 2026-07-21
+
+- Moved the landscape status label down one pixel and reduced its indicator from 12-by-12 to 8-by-8 while preserving the original vertical center.
+- Increased the continuous Codex heartbeat amplitude from five to six pixels within the existing 64-by-14 region.
+
 ## 0.1.32 - 2026-07-21
 
 - Moved the seconds and quarter-minute indicators up two pixels and raised the status label by two pixels without moving its status dot.

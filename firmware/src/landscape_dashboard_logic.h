@@ -12,9 +12,12 @@ enum LandscapeDashboardStatus : uint8_t {
 struct LandscapeDashboardLayout {
   uint16_t screenWidth;
   uint16_t screenHeight;
-  int16_t statusX;
+  int16_t statusLabelX;
   int16_t statusY;
+  int16_t statusDotX;
   int16_t statusDotY;
+  uint8_t statusDotSize;
+  uint8_t statusDotRadius;
   int16_t heartbeatX;
   int16_t heartbeatY;
   uint8_t heartbeatWidth;
@@ -51,11 +54,11 @@ static constexpr uint16_t LANDSCAPE_DASHBOARD_RUN_TINT = 0x1142;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_ASK_TINT = 0x2105;
 static constexpr uint16_t LANDSCAPE_DASHBOARD_NEW_TINT = 0x1925;
 static constexpr uint32_t LANDSCAPE_DASHBOARD_ACTIVITY_MASK = 0x000FFFFFUL;
-static constexpr uint16_t LANDSCAPE_DASHBOARD_HEARTBEAT_FRAME_MS = 50;
+static constexpr uint8_t LANDSCAPE_DASHBOARD_HEARTBEAT_SAMPLE_PITCH = 3;
 inline constexpr LandscapeDashboardLayout landscapeDashboardLayout() {
   return {
     240, 135,
-    4, 2, 5,
+    16, 3, 4, 7, 8, 2,
     172, 4, 64, 14, 11,
     4, 34,
     129, 46,
@@ -132,55 +135,49 @@ inline constexpr bool landscapeDashboardActivityVisibleAt(
     (activityMask & (1UL << (19 - leftToRightIndex))) != 0;
 }
 
-inline constexpr uint16_t landscapeDashboardHeartbeatPhasePermille(
+inline uint8_t landscapeDashboardHeartbeatFrameToken(
   uint32_t receivedAtMs,
   uint32_t nowMs
 ) {
-  return static_cast<uint16_t>((nowMs - receivedAtMs) % 1000U);
+  const uint32_t elapsedMs = nowMs - receivedAtMs;
+  if (elapsedMs >= 20000U) return 60;
+  return static_cast<uint8_t>(
+    (elapsedMs * LANDSCAPE_DASHBOARD_HEARTBEAT_SAMPLE_PITCH) / 1000U
+  );
 }
 
-inline constexpr bool landscapeDashboardHeartbeatFrameDue(
-  uint32_t nowMs,
-  uint32_t lastFrameAtMs,
-  bool activityChanged,
-  bool force
+inline uint8_t landscapeDashboardHeartbeatScrollPixels(
+  uint32_t receivedAtMs,
+  uint32_t nowMs
 ) {
-  return force || activityChanged || lastFrameAtMs == UINT32_MAX ||
-    (nowMs - lastFrameAtMs) >= LANDSCAPE_DASHBOARD_HEARTBEAT_FRAME_MS;
+  return landscapeDashboardHeartbeatFrameToken(receivedAtMs, nowMs) %
+    LANDSCAPE_DASHBOARD_HEARTBEAT_SAMPLE_PITCH;
 }
 
-inline constexpr int8_t landscapeDashboardHeartbeatOffset(uint8_t index) {
-  return (index % 8) == 0 ? -2
-    : (index % 8) == 1 ? 3
-    : (index % 8) == 2 ? -5
-    : (index % 8) == 3 ? 4
-    : (index % 8) == 4 ? -3
-    : (index % 8) == 5 ? 5
-    : (index % 8) == 6 ? -4
-    : 2;
+inline constexpr uint32_t landscapeDashboardHeartbeatLatestBucket(
+  uint32_t receivedAtMs,
+  uint32_t nowMs
+) {
+  return (receivedAtMs / 1000U) + ((nowMs - receivedAtMs) / 1000U);
+}
+
+inline constexpr int8_t landscapeDashboardHeartbeatOffset(uint8_t) {
+  return -6;
 }
 
 inline int16_t landscapeDashboardHeartbeatCurveY(
   uint32_t activityMask,
+  uint32_t latestBucket,
   uint8_t pointIndex,
-  int16_t centerY,
-  uint16_t phasePermille
+  int16_t centerY
 ) {
-  const int16_t currentOffset = pointIndex > 0 && pointIndex <= 20 &&
-      landscapeDashboardActivityVisibleAt(activityMask, pointIndex - 1)
-    ? landscapeDashboardHeartbeatOffset(pointIndex - 1)
-    : 0;
-  const uint8_t nextPointIndex = pointIndex + 1;
-  const int16_t nextOffset = nextPointIndex > 0 && nextPointIndex <= 20 &&
-      landscapeDashboardActivityVisibleAt(activityMask, nextPointIndex - 1)
-    ? landscapeDashboardHeartbeatOffset(nextPointIndex - 1)
-    : 0;
-  const int32_t interpolated =
-    (currentOffset * static_cast<int32_t>(1000U - phasePermille)) +
-    (nextOffset * static_cast<int32_t>(phasePermille));
-  return centerY + static_cast<int16_t>(
-    (interpolated + (interpolated < 0 ? -500 : 500)) / 1000
-  );
+  if (pointIndex == 0 || pointIndex > 20) return centerY;
+  const uint8_t activityIndex = pointIndex - 1;
+  if (!landscapeDashboardActivityVisibleAt(activityMask, activityIndex)) {
+    return centerY;
+  }
+  const uint8_t age = 19 - activityIndex;
+  return centerY + landscapeDashboardHeartbeatOffset(latestBucket - age);
 }
 
 inline int16_t landscapeDashboardRoundCurveCoordinate(float value) {
@@ -191,13 +188,13 @@ template <typename Canvas>
 inline void landscapeDashboardDrawHeartbeatCurve(
   Canvas& canvas,
   uint32_t activityMask,
+  uint32_t latestBucket,
   int16_t originX,
   int16_t centerY,
   uint16_t color,
-  uint16_t phasePermille
+  uint8_t scrollPixels
 ) {
   static constexpr uint8_t pointCount = 22;
-  static constexpr uint8_t pointPitch = 3;
   static constexpr uint8_t curveSubsteps = 3;
 
   if (activityMask == 0) return;
@@ -211,18 +208,19 @@ inline void landscapeDashboardDrawHeartbeatCurve(
       ? segment + 2
       : pointCount - 1;
     const float p0 = landscapeDashboardHeartbeatCurveY(
-      activityMask, p0Index, centerY, phasePermille
+      activityMask, latestBucket, p0Index, centerY
     );
     const float p1 = landscapeDashboardHeartbeatCurveY(
-      activityMask, p1Index, centerY, phasePermille
+      activityMask, latestBucket, p1Index, centerY
     );
     const float p2 = landscapeDashboardHeartbeatCurveY(
-      activityMask, p2Index, centerY, phasePermille
+      activityMask, latestBucket, p2Index, centerY
     );
     const float p3 = landscapeDashboardHeartbeatCurveY(
-      activityMask, p3Index, centerY, phasePermille
+      activityMask, latestBucket, p3Index, centerY
     );
-    int16_t previousX = originX + (segment * pointPitch);
+    int16_t previousX = originX +
+      (segment * LANDSCAPE_DASHBOARD_HEARTBEAT_SAMPLE_PITCH) - scrollPixels;
     int16_t previousY = static_cast<int16_t>(p1);
 
     for (uint8_t step = 1; step <= curveSubsteps; ++step) {

@@ -29,7 +29,11 @@ struct HeartbeatCanvas {
 int main() {
   const LandscapeDashboardLayout layout = landscapeDashboardLayout();
   assert(layout.screenWidth == 240 && layout.screenHeight == 135);
-  assert(layout.statusX == 4 && layout.statusY == 2);
+  assert(layout.statusLabelX == 16 && layout.statusY == 3);
+  assert(layout.statusDotX == 4 && layout.statusDotY == 7);
+  assert(layout.statusDotSize == 8 && layout.statusDotRadius == 2);
+  assert(layout.statusLabelX - (layout.statusDotX + layout.statusDotSize) == 4);
+  assert(layout.statusDotY + (layout.statusDotSize / 2) == 11);
   assert(layout.heartbeatX == 172 && layout.heartbeatY == 4);
   assert(layout.timeX == 4 && layout.timeY == 34);
   assert(layout.secondsX == 129 && layout.secondsY == 46);
@@ -69,20 +73,27 @@ int main() {
   assert(landscapeDashboardActivityMaskAt(0x1, 1000, 1000) == 0x1);
   assert(landscapeDashboardActivityMaskAt(0x1, 1000, 2999) == 0x2);
   assert(landscapeDashboardActivityMaskAt(0x1, 1000, 21000) == 0);
-  assert(landscapeDashboardHeartbeatPhasePermille(1000, 1000) == 0);
-  assert(landscapeDashboardHeartbeatPhasePermille(1000, 1250) == 250);
-  assert(landscapeDashboardHeartbeatPhasePermille(1000, 1999) == 999);
-  assert(landscapeDashboardHeartbeatFrameDue(1000, UINT32_MAX, false, false));
-  assert(!landscapeDashboardHeartbeatFrameDue(1049, 1000, false, false));
-  assert(landscapeDashboardHeartbeatFrameDue(1050, 1000, false, false));
-  assert(landscapeDashboardHeartbeatFrameDue(1001, 1000, true, false));
-  assert(landscapeDashboardHeartbeatFrameDue(1001, 1000, false, true));
+  assert(landscapeDashboardHeartbeatFrameToken(1000, 1000) == 0);
+  assert(landscapeDashboardHeartbeatFrameToken(1000, 1333) == 0);
+  assert(landscapeDashboardHeartbeatFrameToken(1000, 1334) == 1);
+  assert(landscapeDashboardHeartbeatFrameToken(1000, 1667) == 2);
+  assert(landscapeDashboardHeartbeatFrameToken(1000, 2000) == 3);
+  assert(landscapeDashboardHeartbeatFrameToken(1000, 2999) == 5);
+  assert(landscapeDashboardHeartbeatFrameToken(0, 0x55555556U) == 60);
+  assert(landscapeDashboardHeartbeatScrollPixels(1000, 1000) == 0);
+  assert(landscapeDashboardHeartbeatScrollPixels(1000, 1667) == 2);
+  assert(landscapeDashboardHeartbeatScrollPixels(1000, 2000) == 0);
+  assert(landscapeDashboardHeartbeatLatestBucket(1000, 1000) == 1);
+  assert(landscapeDashboardHeartbeatLatestBucket(1000, 2999) == 2);
   assert(landscapeDashboardActivityVisibleAt(1UL << 19, 0));
   assert(landscapeDashboardActivityVisibleAt(1UL, 19));
   assert(!landscapeDashboardActivityVisibleAt(0, 10));
+  for (uint8_t bucket = 0; bucket < 16; ++bucket) {
+    assert(landscapeDashboardHeartbeatOffset(bucket) == -6);
+  }
   HeartbeatCanvas emptyCurve;
   landscapeDashboardDrawHeartbeatCurve(
-    emptyCurve, 0, layout.heartbeatX, layout.heartbeatCenterY,
+    emptyCurve, 0, 100, layout.heartbeatX, layout.heartbeatCenterY,
     LANDSCAPE_DASHBOARD_GREEN, 0
   );
   assert(emptyCurve.count == 0);
@@ -90,7 +101,7 @@ int main() {
   HeartbeatCanvas activeCurve;
   const uint32_t adjacentActivity = (1UL << (19 - 9)) | (1UL << (19 - 10));
   landscapeDashboardDrawHeartbeatCurve(
-    activeCurve, adjacentActivity, layout.heartbeatX,
+    activeCurve, adjacentActivity, 100, layout.heartbeatX,
     layout.heartbeatCenterY, LANDSCAPE_DASHBOARD_GREEN, 0
   );
   assert(activeCurve.count == 63);
@@ -98,7 +109,6 @@ int main() {
   assert(activeCurve.lines[activeCurve.count - 1].x1 ==
     layout.heartbeatX + layout.heartbeatWidth - 1);
   bool risesAboveBaseline = false;
-  bool fallsBelowBaseline = false;
   for (uint8_t i = 0; i < activeCurve.count; ++i) {
     const RecordedHeartbeatLine& line = activeCurve.lines[i];
     assert(line.x0 >= layout.heartbeatX);
@@ -107,21 +117,45 @@ int main() {
     assert(line.y1 < layout.heartbeatY + layout.heartbeatHeight);
     risesAboveBaseline |= line.y0 < layout.heartbeatCenterY ||
       line.y1 < layout.heartbeatCenterY;
-    fallsBelowBaseline |= line.y0 > layout.heartbeatCenterY ||
-      line.y1 > layout.heartbeatCenterY;
+    assert(line.y0 <= layout.heartbeatCenterY);
+    assert(line.y1 <= layout.heartbeatCenterY);
     if (i > 0) {
       assert(activeCurve.lines[i - 1].x1 == line.x0);
       assert(activeCurve.lines[i - 1].y1 == line.y0);
     }
   }
-  assert(risesAboveBaseline && fallsBelowBaseline);
+  assert(risesAboveBaseline);
+
+  const int16_t firstBucketY = landscapeDashboardHeartbeatCurveY(
+    1UL << (19 - 9), 100, 10, layout.heartbeatCenterY
+  );
+  const int16_t nextBucketY = landscapeDashboardHeartbeatCurveY(
+    1UL << (19 - 9), 101, 10, layout.heartbeatCenterY
+  );
+  assert(firstBucketY < layout.heartbeatCenterY);
+  assert(nextBucketY == firstBucketY);
 
   const uint32_t singleActivity = 1UL << (19 - 9);
-  assert(landscapeDashboardHeartbeatCurveY(
-    singleActivity, 9, layout.heartbeatCenterY, 0
-  ) == layout.heartbeatCenterY);
-  assert(landscapeDashboardHeartbeatCurveY(
-    singleActivity, 9, layout.heartbeatCenterY, 500
-  ) > layout.heartbeatCenterY);
+  const int16_t originalY = landscapeDashboardHeartbeatCurveY(
+    singleActivity, 100, 10, layout.heartbeatCenterY
+  );
+  const int16_t shiftedY = landscapeDashboardHeartbeatCurveY(
+    singleActivity << 1, 101, 9, layout.heartbeatCenterY
+  );
+  assert(originalY != layout.heartbeatCenterY);
+  assert(shiftedY == originalY);
+
+  HeartbeatCanvas scrolledCurve;
+  landscapeDashboardDrawHeartbeatCurve(
+    scrolledCurve, adjacentActivity, 100, layout.heartbeatX,
+    layout.heartbeatCenterY, LANDSCAPE_DASHBOARD_GREEN, 2
+  );
+  assert(scrolledCurve.count == activeCurve.count);
+  for (uint8_t i = 0; i < activeCurve.count; ++i) {
+    assert(scrolledCurve.lines[i].x0 == activeCurve.lines[i].x0 - 2);
+    assert(scrolledCurve.lines[i].x1 == activeCurve.lines[i].x1 - 2);
+    assert(scrolledCurve.lines[i].y0 == activeCurve.lines[i].y0);
+    assert(scrolledCurve.lines[i].y1 == activeCurve.lines[i].y1);
+  }
   return 0;
 }

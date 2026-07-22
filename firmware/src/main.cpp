@@ -24,7 +24,9 @@
 
 TFT_eSprite spr = TFT_eSprite(&M5.Lcd);
 TFT_eSprite landscapeClockPetSprite = TFT_eSprite(&M5.Lcd);
+TFT_eSprite landscapeHeartbeatSprite = TFT_eSprite(&M5.Lcd);
 static bool landscapeClockPetSpriteReady = false;
+static bool landscapeHeartbeatSpriteReady = false;
 
 // Advertise as "Codex-XXXX" (last two BT MAC bytes) so multiple sticks
 // in one room are distinguishable in the desktop picker. Name persists in
@@ -899,13 +901,20 @@ static void drawLandscapeDashboardStatus(Canvas& canvas) {
   );
   const uint16_t color = landscapeDashboardStatusColor(status);
   canvas.fillRect(0, 0, 120, 18, LANDSCAPE_DASHBOARD_BG);
-  canvas.fillRoundRect(layout.statusX, layout.statusDotY, 12, 12, 4, color);
+  canvas.fillRoundRect(
+    layout.statusDotX,
+    layout.statusDotY,
+    layout.statusDotSize,
+    layout.statusDotSize,
+    layout.statusDotRadius,
+    color
+  );
   useDashboardStatusFont(canvas);
   canvas.setTextDatum(TL_DATUM);
   canvas.setTextColor(color, LANDSCAPE_DASHBOARD_BG);
   canvas.drawString(
     landscapeDashboardStatusLabel(status),
-    layout.statusX + 20,
+    layout.statusLabelX,
     layout.statusY
   );
 }
@@ -916,19 +925,64 @@ static void drawLandscapeDashboardHeartbeat(
   uint32_t now,
   bool force
 ) {
-  static uint32_t lastFrameAt = UINT32_MAX;
+  static uint8_t lastFrameToken = UINT8_MAX;
   static uint32_t lastActivityReceipt = UINT32_MAX;
   const bool activityChanged =
     tama.activity20ReceivedAt != lastActivityReceipt;
-  if (!landscapeDashboardHeartbeatFrameDue(
-        now, lastFrameAt, activityChanged, force
-      )) {
+  const uint8_t frameToken = tama.hasActivity20
+    ? landscapeDashboardHeartbeatFrameToken(tama.activity20ReceivedAt, now)
+    : 0;
+  if (!force && !activityChanged && frameToken == lastFrameToken) {
     return;
   }
-  lastFrameAt = now;
+  lastFrameToken = frameToken;
   lastActivityReceipt = tama.activity20ReceivedAt;
 
   const LandscapeDashboardLayout layout = landscapeDashboardLayout();
+  const uint32_t activityMask = tama.hasActivity20
+    ? landscapeDashboardActivityMaskAt(
+        tama.activity20,
+        tama.activity20ReceivedAt,
+        now
+      )
+    : 0;
+  const uint32_t latestBucket = tama.hasActivity20
+    ? landscapeDashboardHeartbeatLatestBucket(
+        tama.activity20ReceivedAt, now
+      )
+    : 0;
+  const uint8_t scrollPixels = tama.hasActivity20
+    ? landscapeDashboardHeartbeatScrollPixels(
+        tama.activity20ReceivedAt, now
+      )
+    : 0;
+
+  if (landscapeHeartbeatSpriteReady) {
+    const int16_t localCenterY =
+      layout.heartbeatCenterY - layout.heartbeatY;
+    landscapeHeartbeatSprite.fillSprite(LANDSCAPE_DASHBOARD_BG);
+    landscapeHeartbeatSprite.drawFastHLine(
+      0,
+      localCenterY,
+      layout.heartbeatWidth,
+      LANDSCAPE_DASHBOARD_DIM
+    );
+    landscapeDashboardDrawHeartbeatCurve(
+      landscapeHeartbeatSprite,
+      activityMask,
+      latestBucket,
+      0,
+      localCenterY,
+      LANDSCAPE_DASHBOARD_GREEN,
+      scrollPixels
+    );
+    landscapeHeartbeatSprite.pushSprite(
+      layout.heartbeatX,
+      layout.heartbeatY
+    );
+    return;
+  }
+
   canvas.fillRect(
     layout.heartbeatX,
     layout.heartbeatY,
@@ -942,24 +996,14 @@ static void drawLandscapeDashboardHeartbeat(
     layout.heartbeatWidth,
     LANDSCAPE_DASHBOARD_DIM
   );
-  const uint32_t activityMask = tama.hasActivity20
-    ? landscapeDashboardActivityMaskAt(
-        tama.activity20,
-        tama.activity20ReceivedAt,
-        now
-      )
-    : 0;
   landscapeDashboardDrawHeartbeatCurve(
     canvas,
     activityMask,
+    latestBucket,
     layout.heartbeatX,
     layout.heartbeatCenterY,
     LANDSCAPE_DASHBOARD_GREEN,
-    tama.hasActivity20
-      ? landscapeDashboardHeartbeatPhasePermille(
-          tama.activity20ReceivedAt, now
-        )
-      : 0
+    scrollPixels
   );
 }
 
@@ -1215,10 +1259,12 @@ static void drawSharedClockFaceTo(
         _clkTm.Seconds
       );
       canvas.setTextDatum(TL_DATUM);
+      useDashboardSecondsFont(canvas);
       canvas.setTextSize(layout.time.primaryTextSize);
       canvas.setTextColor(p.text, p.bg);
       canvas.drawString(hm, layout.time.primary.x, layout.time.primary.y);
       if (layout.time.showSeconds) {
+        useDashboardSecondsFont(canvas);
         canvas.setTextSize(layout.time.secondsTextSize);
         canvas.setTextColor(p.textDim, p.bg);
         canvas.drawString(seconds, layout.time.seconds.x, layout.time.seconds.y);
@@ -1264,6 +1310,7 @@ static void drawSharedClockFaceTo(
         _clkDt.Month,
         _clkDt.Date
       );
+      useSharedFaceAsciiFont(canvas);
       canvas.setTextDatum(MC_DATUM);
       canvas.setTextSize(layout.date.monthTextSize);
       canvas.setTextColor(p.textDim, p.bg);
@@ -2090,6 +2137,15 @@ void setup() {
   ) != nullptr;
   if (!landscapeClockPetSpriteReady) {
     Serial.println("[display] landscape pet sprite allocation failed");
+  }
+  const LandscapeDashboardLayout dashboardLayout = landscapeDashboardLayout();
+  landscapeHeartbeatSprite.setColorDepth(16);
+  landscapeHeartbeatSpriteReady = landscapeHeartbeatSprite.createSprite(
+    dashboardLayout.heartbeatWidth,
+    dashboardLayout.heartbeatHeight
+  ) != nullptr;
+  if (!landscapeHeartbeatSpriteReady) {
+    Serial.println("[display] landscape heartbeat sprite allocation failed");
   }
 
   characterInit(nullptr);  // scan /characters/ for whatever is installed

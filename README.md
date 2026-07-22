@@ -30,12 +30,13 @@
 - A StickS3 firmware build with status, approval, settings, and offline screens.
 - A daily workflow designed to stay out of the way: run `code-buddy` once, then just use `codex`.
 
-## Highlights in v0.1.32
+## Highlights in v0.1.39
 
-- The Figma-based landscape dashboard shows `RUNNING`, `WAITING`, `IDLE`, or `OFFLINE`, a full-width continuous 20-second Codex activity curve refreshed at up to 20 FPS, quarter-minute progress blocks, and tinted `RUN`, `ASK`, and `NEW` cards.
-- Native JetBrains Mono Bold labels, dim-white zero counts, 60%-white seconds, and full-white date text keep the compact hierarchy legible.
+- The Figma-based landscape dashboard shows `RUNNING`, `WAITING`, `IDLE`, or `OFFLINE`, a full-width continuous 20-second Codex activity curve whose upward pulses move steadily from right to left, quarter-minute progress blocks, and tinted `RUN`, `ASK`, and `NEW` cards.
+- The portrait home screen keeps its original 90px-high, 1x ASCII pet while restoring the built-in 6x8 font used by its centering geometry; `HH:MM:SS` is one centered native-14pt row with dim seconds, and the date uses native 8pt.
+- Native-size JetBrains Mono Regular/Bold labels and slashed-zero numerals keep the compact hierarchy crisp; zero counts remain dim white, seconds 60%-white, and date text full white.
 - The full-width 29-by-3 quota matrix retains its 6 px dots and diagonal running wave, aligned to the new 4 px footer baseline and left edge.
-- The landscape clock and dashboard use native-size JetBrains Mono Regular and Medium bitmap subsets with no fractional stretching; non-ASCII UI text stays on one proportional font, leaving ample application flash free.
+- The landscape clock and dashboard use native-size JetBrains Mono Regular/Bold bitmap subsets with no fractional stretching; non-ASCII UI text stays on one proportional font, leaving ample application flash free.
 - One short chime plays after a complete Codex turn. This includes managed CLI sessions and main Codex Desktop tasks discovered from local session logs; repeated snapshots and subagent turns are de-duplicated.
 - Secure Wi-Fi OTA supports manual Mac-push updates and an optional automatic update mode, with signed manifests, physical confirmation, rollback checks, and compact on-device progress.
 - The charging clock and active runtime share the landscape layout while keeping approval and settings interactions readable.
@@ -53,7 +54,7 @@ Preferred path:
 Fallback:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.32-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.39-full.bin
 ```
 
 Developer release build:

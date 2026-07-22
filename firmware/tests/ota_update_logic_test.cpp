@@ -963,6 +963,10 @@ static void testCancellationApplicabilityAndFailureMapping() {
 }
 
 int main() {
+  expect(
+    OTA_UPDATE_IO_IDLE_TIMEOUT_MS == 15000,
+    "OTA tolerates ordinary Wi-Fi stalls without abandoning the download"
+  );
   testSignedOfferPolicy();
   testDirectOfferStartsAtomically();
   testDirectOfferIsConsumedOnlyOnce();
