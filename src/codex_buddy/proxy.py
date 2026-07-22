@@ -35,11 +35,12 @@ _OUTPUT_SEGMENT_PREFIXES = ("echo ", "printf ")
 
 
 def _nonnegative_int(value: object) -> Optional[int]:
-    try:
-        parsed = int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError, OverflowError):
+    # Token counters come from integer-typed JSON schema fields. Coercing
+    # booleans, floats, strings, or negatives to an integer can reset a live
+    # cumulative baseline and create a false recovery spike.
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
-    return max(0, parsed)
+    return value
 
 
 def _total_tokens(

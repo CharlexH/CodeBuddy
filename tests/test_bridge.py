@@ -55,7 +55,37 @@ def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallbac
                 "method": "thread/tokenUsage/updated",
                 "params": {
                     "threadId": "thread-official",
+                    "tokenUsage": {
+                        "total": {
+                            "inputTokens": 700.5,
+                            "outputTokens": "200",
+                            "totalTokens": 1_000.5,
+                        }
+                    },
+                },
+            }
+        )
+        await source._emit_events(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": "thread-official",
                     "tokenUsage": {"total": {"totalTokens": 1_050}},
+                },
+            }
+        )
+        await source._emit_events(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": "thread-official",
+                    "tokenUsage": {
+                        "total": {
+                            "inputTokens": -1,
+                            "outputTokens": False,
+                            "totalTokens": -1,
+                        }
+                    },
                 },
             }
         )
