@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -165,6 +167,102 @@ def test_managed_events_populate_twenty_second_activity_heartbeat(tmp_path):
 
     now[0] = 101.0
     assert agent._snapshot().as_ble_payload()["activity20"] == 0b10
+
+
+def test_agent_projects_per_session_token_deltas_into_versioned_heartbeat(tmp_path):
+    now = [100.0]
+    agent = BuddyAgent(tmp_path / "state.json", watcher=None, clock=lambda: now[0])
+    record = SessionRecord(
+        session_id="readonly-1",
+        source="desktop",
+        originator="codex",
+        cwd=str(tmp_path),
+        state="running",
+        last_activity_at=now[0],
+        latest_message="Working",
+        entries=[],
+        tokens_total=1_000,
+        tokens_session=1_000,
+        control_capability="readonly",
+    )
+    agent.catalog.upsert(record)
+
+    initial = _decode_token_heartbeat(agent._snapshot().as_ble_payload()["token20v1"])
+    assert initial == bytes(64)
+
+    agent.catalog.upsert(replace(record, tokens_total=1_500))
+    increased = _decode_token_heartbeat(agent._snapshot().as_ble_payload()["token20v1"])
+    assert increased[-1] > 0
+
+    agent.catalog.upsert(replace(record, tokens_total=100))
+    rebaselined = _decode_token_heartbeat(agent._snapshot().as_ble_payload()["token20v1"])
+    assert rebaselined == increased
+
+
+def test_agent_combines_managed_and_readonly_token_deltas_without_aggregate_spikes(tmp_path):
+    now = [100.0]
+    agent = BuddyAgent(tmp_path / "state.json", watcher=None, clock=lambda: now[0])
+    readonly = SessionRecord(
+        session_id="readonly-1",
+        source="desktop",
+        originator="codex",
+        cwd=str(tmp_path),
+        state="running",
+        last_activity_at=now[0],
+        latest_message="Working",
+        entries=[],
+        tokens_total=1_000,
+        tokens_session=1_000,
+        control_capability="readonly",
+    )
+    managed = replace(
+        readonly,
+        session_id="managed-1",
+        source="managed",
+        originator="code-buddy",
+        tokens_total=2_000,
+        tokens_session=2_000,
+        control_capability="managed",
+    )
+    agent.catalog.upsert(readonly)
+    agent.catalog.upsert(managed)
+    assert _decode_token_heartbeat(agent._snapshot().token20v1) == bytes(64)
+
+    agent.catalog.upsert(replace(readonly, tokens_total=1_100))
+    agent.catalog.upsert(replace(managed, tokens_total=2_200))
+    samples = _decode_token_heartbeat(agent._snapshot().token20v1)
+
+    assert samples[-1] > 0
+
+
+def test_agent_prunes_absent_token_baselines_before_a_session_reappears(tmp_path):
+    now = [100.0]
+    agent = BuddyAgent(tmp_path / "state.json", watcher=None, clock=lambda: now[0])
+    record = SessionRecord(
+        session_id="readonly-1",
+        source="desktop",
+        originator="codex",
+        cwd=str(tmp_path),
+        state="running",
+        last_activity_at=now[0],
+        latest_message="Working",
+        entries=[],
+        tokens_total=1_000,
+        tokens_session=1_000,
+        control_capability="readonly",
+    )
+    agent.catalog.upsert(record)
+    assert _decode_token_heartbeat(agent._snapshot().token20v1) == bytes(64)
+
+    agent.catalog.remove(record.session_id)
+    agent._snapshot()
+    agent.catalog.upsert(replace(record, tokens_total=5_000))
+
+    assert _decode_token_heartbeat(agent._snapshot().token20v1) == bytes(64)
+
+
+def _decode_token_heartbeat(encoded: str) -> bytes:
+    return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
 
 
 def test_agent_persists_current_completion_sequence(tmp_path):

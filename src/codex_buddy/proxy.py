@@ -34,6 +34,25 @@ _READ_ONLY_SEGMENT_PREFIXES = (
 _OUTPUT_SEGMENT_PREFIXES = ("echo ", "printf ")
 
 
+def _nonnegative_int(value: object) -> Optional[int]:
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(0, parsed)
+
+
+def _total_tokens(usage: object) -> int:
+    if not isinstance(usage, dict):
+        return 0
+    supplied_total = _nonnegative_int(usage.get("totalTokens"))
+    if supplied_total is not None:
+        return supplied_total
+    input_tokens = _nonnegative_int(usage.get("inputTokens")) or 0
+    output_tokens = _nonnegative_int(usage.get("outputTokens")) or 0
+    return input_tokens + output_tokens
+
+
 def map_device_decision_to_codex_response(device_decision: str) -> dict[str, str]:
     if device_decision == "once":
         return {"decision": "accept"}
@@ -208,12 +227,28 @@ class CodexEventSource:
             )
             return
         if method == "thread/tokenUsage/updated":
-            usage = params.get("usage", {})
+            token_usage = params.get("tokenUsage", {})
+            official_total = token_usage.get("total", {}) if isinstance(token_usage, dict) else {}
+            legacy_usage = params.get("usage", {})
+            if not isinstance(legacy_usage, dict):
+                legacy_usage = {}
+            if isinstance(official_total, dict) and official_total:
+                total_tokens = _total_tokens(official_total)
+                session_tokens = total_tokens
+            else:
+                total_tokens = _nonnegative_int(legacy_usage.get("totalTokens"))
+                if total_tokens is None:
+                    total_tokens = _total_tokens(legacy_usage)
+                session_tokens = _nonnegative_int(legacy_usage.get("sessionTotalTokens"))
+                if session_tokens is None:
+                    session_tokens = _nonnegative_int(legacy_usage.get("sessionOutputTokens"))
+                if session_tokens is None:
+                    session_tokens = total_tokens
             await self.on_event(
                 TokenUsage(
                     thread_id=str(params.get("threadId", "")),
-                    total_tokens=int(usage.get("outputTokens", 0)),
-                    tokens_today=int(usage.get("sessionOutputTokens", usage.get("outputTokens", 0))),
+                    total_tokens=total_tokens,
+                    tokens_today=session_tokens,
                 )
             )
             return

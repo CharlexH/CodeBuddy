@@ -38,6 +38,7 @@ class BuddySnapshot:
     completion_seq: Optional[int] = None
     unread: Optional[int] = None
     activity20: Optional[int] = None
+    token20v1: Optional[str] = None
 
     def as_ble_payload(self) -> dict:
         payload = {
@@ -66,6 +67,8 @@ class BuddySnapshot:
             payload["unread"] = self.unread
         if self.activity20 is not None:
             payload["activity20"] = max(0, int(self.activity20)) & 0xFFFFF
+        if self.token20v1 is not None:
+            payload["token20v1"] = str(self.token20v1)
 
         if _ble_json_size(payload) <= _BLE_PAYLOAD_MAX_BYTES:
             return payload

@@ -1,6 +1,8 @@
 import asyncio
 
 from codex_buddy import bridge
+from codex_buddy.events import TokenUsage
+from codex_buddy.proxy import CodexEventSource
 from codex_buddy.state_store import PersistedState
 
 
@@ -17,6 +19,61 @@ class _ChangingStateStore:
 
     def save(self, state) -> None:
         self.saved = state
+
+
+def test_managed_token_usage_uses_official_total_token_schema_and_legacy_fallback():
+    async def exercise():
+        events = []
+
+        async def on_event(event):
+            events.append(event)
+
+        source = CodexEventSource(
+            upstream_url="ws://example.test",
+            listen_host="127.0.0.1",
+            listen_port=0,
+            on_event=on_event,
+        )
+        await source._emit_events(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": "thread-official",
+                    "tokenUsage": {
+                        "total": {
+                            "inputTokens": 700,
+                            "outputTokens": 200,
+                            "totalTokens": 1_000,
+                        }
+                    },
+                },
+            }
+        )
+        await source._emit_events(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": "thread-summed",
+                    "tokenUsage": {"total": {"inputTokens": 300, "outputTokens": 125}},
+                },
+            }
+        )
+        await source._emit_events(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": "thread-legacy",
+                    "usage": {"outputTokens": 90, "sessionOutputTokens": 80},
+                },
+            }
+        )
+        return events
+
+    assert asyncio.run(exercise()) == [
+        TokenUsage(thread_id="thread-official", total_tokens=1_000, tokens_today=1_000),
+        TokenUsage(thread_id="thread-summed", total_tokens=425, tokens_today=425),
+        TokenUsage(thread_id="thread-legacy", total_tokens=90, tokens_today=80),
+    ]
 
 
 def test_shared_app_server_launcher_uses_real_binary_and_carefully_merged_environment(monkeypatch):

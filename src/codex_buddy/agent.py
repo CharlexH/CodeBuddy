@@ -33,6 +33,7 @@ from .runtime import socket_path as runtime_socket_path
 from .runtime import state_path as runtime_state_path
 from .state_store import BridgeStateStore, PersistedState
 from .text_width import clip_text_by_width
+from .token_heartbeat import TokenHeartbeat
 from .usage_limits import UsageDisplay
 from .ota_coordination import OtaAgentSession, OtaCoordinator
 from .ota_protocol import valid_ota_nonce
@@ -248,6 +249,7 @@ class BuddyAgent:
         self._completed_turn_keys: set[tuple[str, str]] = set()
         self._readonly_completion_initialized = False
         self._activity_heartbeat = ActivityHeartbeat()
+        self._token_heartbeat = TokenHeartbeat()
         self._readonly_activity_seen: dict[str, float] = {}
         self._ota_session_lock: Optional[asyncio.Lock] = None
         self._ota_session_lock_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -762,6 +764,15 @@ class BuddyAgent:
 
     def _snapshot(self):
         now = self.clock()
+        sessions = self.catalog.sessions(now=now)
+        session_ids = {session.session_id for session in sessions}
+        for session in sessions:
+            self._token_heartbeat.observe(
+                session.session_id,
+                session.tokens_total,
+                now,
+            )
+        self._token_heartbeat.retain_sessions(session_ids)
         return replace(
             self.catalog.snapshot(now=now),
             usage=self._usage,
@@ -769,6 +780,7 @@ class BuddyAgent:
             completion_seq=self._completion_seq,
             unread=self._unread,
             activity20=self._activity_heartbeat.mask(now),
+            token20v1=self._token_heartbeat.encoded(now),
         )
 
     def _persist(self, snapshot: Any, *, agent_running: bool) -> None:
