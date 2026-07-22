@@ -49,6 +49,22 @@ def test_sessions_have_independent_baselines_and_concurrent_deltas_accumulate():
     assert decode(heartbeat.encoded(10.0))[-1] == intensity(3)
 
 
+def test_retain_sessions_prunes_disappeared_baselines_without_clearing_samples():
+    heartbeat = TokenHeartbeat()
+    heartbeat.observe("session-a", 0, now=10.0)
+    heartbeat.observe("session-a", 500, now=10.0)
+    heartbeat.observe("session-b", 1_000, now=10.0)
+    sample_time = 10.0 + 2 * BIN_SECONDS
+    existing_curve = heartbeat.encoded(sample_time)
+
+    heartbeat.retain_sessions({"session-b"})
+
+    assert heartbeat.encoded(sample_time) == existing_curve
+    before_new_baseline = heartbeat.encoded(11.0)
+    heartbeat.observe("session-a", 750, now=11.0)
+    assert heartbeat.encoded(11.0) == before_new_baseline
+
+
 def test_samples_age_out_after_twenty_seconds():
     heartbeat = TokenHeartbeat()
     heartbeat.observe("session-a", 0, now=10.0)

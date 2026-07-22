@@ -36,6 +36,14 @@ class TokenHeartbeat:
             _MAX_DELTA, self._source_deltas.get(source_bin, 0) + delta
         )
 
+    def retain_sessions(self, session_ids: set[str]) -> None:
+        """Discard baselines for sessions that are no longer present."""
+        self._baselines = {
+            session_id: total
+            for session_id, total in self._baselines.items()
+            if session_id in session_ids
+        }
+
     def encoded(self, now: float) -> str:
         """Return 64 fixed-scale intensities as unpadded URL-safe base64."""
         samples = bytes(self._intensity(value) for value in self._raw_values(now))
