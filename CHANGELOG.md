@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.40 - 2026-07-22
+
+- Replaced the synthetic landscape heartbeat with a fixed-scale, 64-sample trace of real input-plus-output token consumption over the latest 20 seconds.
+- Added a compact versioned BLE token window with per-session baselines, reset-safe delta tracking, logarithmic intensity mapping, strict firmware decoding, and local aging between host snapshots.
+- Kept the curve inside the existing 64-by-14 region, moving newest samples in from the right with upward-only green-to-mint peaks and falling back to the legacy activity trace for older hosts.
+- Stabilized auto-oriented home surfaces by resolving strong startup poses before the first frame, retaining the last home orientation across portrait-only pages, and suppressing speculative portrait rendering while the IMU is ambiguous.
+
 ## 0.1.39 - 2026-07-22
 
 - Rendered portrait `HH:MM:SS` as one centered, contiguous row using the same native 14pt font and baseline for every digit and colon.

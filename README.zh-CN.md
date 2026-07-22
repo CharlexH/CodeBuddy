@@ -30,9 +30,10 @@
 - 一套 StickS3 固件，包含状态页、审批页、设置页和离线页。
 - 一套尽量不打扰日常工作的流程：先跑一次 `code-buddy`，之后直接用 `codex`。
 
-## v0.1.39 亮点
+## v0.1.40 亮点
 
-- 按 Figma 重做横屏状态页：显示 `RUNNING`、`WAITING`、`IDLE` 或 `OFFLINE`；近 20 秒活动曲线的脉冲固定向上，并连续从右向左推进；同时保留分钟四等分进度块和带底色的 `RUN`、`ASK`、`NEW` 卡片。
+- 按 Figma 重做的横屏状态页继续显示 `RUNNING`、`WAITING`、`IDLE` 或 `OFFLINE`，心跳则改为最近 20 秒真实输入加输出 token 消耗曲线；新采样从右侧进入并向左推进，活动越强，颜色越从绿色靠近 mint。
+- 自动旋转首页会在第一帧前判断明确姿态，并在菜单、设置等竖屏页面之间保留最近一次稳定方向，修复设备明明已经横放却先闪一下竖屏再切回横屏的问题。
 - 竖屏首页保留原来的 90px 高、1× ASCII pet，并在居中前恢复其内置 6×8 点阵字体；`HH:MM:SS` 统一为同一基线上的原生 14pt 单行时间，秒保持弱化色，日期使用原生 8pt。
 - 英文标签恢复为原生字号的 JetBrains Mono Regular/Bold，数字保留斜杠零；0 计数显示为 40% 白，秒显示为 60% 白，月日和星期使用纯白。
 - 29×3 额度点阵保留 6px 圆点和任务运行时的对角波形，底部和左侧对齐到新的 4px 边界。
@@ -54,7 +55,7 @@
 兜底方式：
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.39-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.40-full.bin
 ```
 
 开发者本地生成 release 镜像：

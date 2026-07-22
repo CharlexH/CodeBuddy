@@ -49,6 +49,7 @@ a keepalive every 10 seconds:
   "tokens": 184502,
   "tokens_today": 31200,
   "activity20": 8193,
+  "token20v1": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   "prompt": {
     "id": "req_abc123",
     "tool": "Bash",
@@ -67,6 +68,7 @@ a keepalive every 10 seconds:
 | `tokens`       | Cumulative output tokens since the desktop app started                            |
 | `tokens_today` | Output tokens since local midnight (persisted, survives restart)                  |
 | `activity20`   | Optional 20-bit activity mask; bit 0 is the current second and bit 19 is 19 seconds ago |
+| `token20v1`    | Optional 64-byte token-intensity window encoded as exactly 86 unpadded Base64URL characters; oldest sample first, newest sample last |
 | `prompt`       | Only present when a permission decision is needed. The `id` is what you echo back |
 
 A few useful derived signals: `running > 0` means at least one session is
