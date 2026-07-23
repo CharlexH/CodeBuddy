@@ -53,16 +53,21 @@ int main() {
   expect_true(usage.hasFiveHour && !usage.hasSevenDay, "five-hour-only object should retain only that window");
 
   usageMeterApply(&usage, true, false, false, 0, false, 0);
-  expect_true(!usage.hasFiveHour && !usage.hasSevenDay, "malformed present object must clear the whole meter");
+  expect_true(usage.hasFiveHour && !usage.hasSevenDay,
+              "malformed present object must preserve the last valid meter");
 
   usageMeterApply(&usage, true, true, true, 72, true, 101);
-  expect_true(!usage.hasFiveHour && !usage.hasSevenDay, "out-of-range known value must clear the whole meter");
+  expect_true(usage.hasFiveHour && !usage.hasSevenDay,
+              "out-of-range known value must preserve the last valid meter");
 
   usageMeterApply(&usage, true, true, true, 72, true, 91);
   usageMeterClear(&usage);
-  expect_true(!usage.hasFiveHour && !usage.hasSevenDay, "disconnect should clear the meter instead of showing stale limits");
-  expect_true(usage.fiveHourRemaining == 0, "disconnect should clear stale five-hour value");
-  expect_true(usage.sevenDayRemaining == 0, "disconnect should clear stale weekly value");
+  expect_true(!usage.hasFiveHour && !usage.hasSevenDay,
+              "an explicit reset should clear the meter");
+  expect_true(usage.fiveHourRemaining == 0,
+              "an explicit reset should clear the five-hour value");
+  expect_true(usage.sevenDayRemaining == 0,
+              "an explicit reset should clear the weekly value");
 
   expect_true(usageMeterFillWidth(135, 0) == 0, "zero percent should have zero fill width");
   expect_true(usageMeterFillWidth(135, 100) == 135, "100 percent should fill the full width");
@@ -214,8 +219,8 @@ int main() {
     "visible usage should reserve the complete sixteen-pixel footprint above approval footer text"
   );
   expect_true(
-    usageMeterFooterInset(false, meterUsage) == 0,
-    "disconnected usage should not move the approval footer"
+    usageMeterFooterInset(false, meterUsage) == 16,
+    "disconnected usage should keep the last valid meter footprint"
   );
   expect_true(
     usageMeterFooterInset(true, noMeterUsage) == 0,
@@ -270,6 +275,20 @@ int main() {
               "a visible portrait meter should paint without first clearing the sprite");
   expect_true(portraitVisible.plan.count == 4,
               "a visible portrait meter should retain its full sixteen-pixel plan");
+
+  UsageMeterRenderFrame portraitDisconnected = usageMeterPrepareFrame(
+    &portraitState, false, meterUsage, 135, 240
+  );
+  expect_true(portraitDisconnected.plan.count == 4,
+              "a disconnected portrait meter should retain the last valid plan");
+
+  UsageMeterRenderState disconnectedDashboardState = {};
+  UsageMeterRenderFrame dashboardDisconnected =
+    usageMeterPrepareLandscapeSingleFrame(
+      &disconnectedDashboardState, false, meterUsage, 240, 135
+    );
+  expect_true(dashboardDisconnected.plan.count == 2,
+              "a disconnected dashboard should retain the last valid quota dots");
 
   UsageMeterRenderFrame portraitHidden = usageMeterPrepareFrame(
     &portraitState, true, noMeterUsage, 135, 240

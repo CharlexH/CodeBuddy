@@ -30,8 +30,9 @@
 - 一套 StickS3 固件，包含状态页、审批页、设置页和离线页。
 - 一套尽量不打扰日常工作的流程：先跑一次 `code-buddy`，之后直接用 `codex`。
 
-## v0.1.40 亮点
+## v0.1.41 亮点
 
+- 暂时拿不到最新账户额度、返回 `null` 或 BLE 断开时，额度进度不再消失；Mac 桥接进程重启后也会恢复最近一次有效值，而不是清空设备显示。
 - 按 Figma 重做的横屏状态页继续显示 `RUNNING`、`WAITING`、`IDLE` 或 `OFFLINE`，心跳则改为最近 20 秒真实输入加输出 token 消耗曲线；新采样从右侧进入并向左推进，活动越强，颜色越从绿色靠近 mint。
 - 自动旋转首页会在第一帧前判断明确姿态，并在菜单、设置等竖屏页面之间保留最近一次稳定方向，修复设备明明已经横放却先闪一下竖屏再切回横屏的问题。
 - 竖屏首页保留原来的 90px 高、1× ASCII pet，并在居中前恢复其内置 6×8 点阵字体；`HH:MM:SS` 统一为同一基线上的原生 14pt 单行时间，秒保持弱化色，日期使用原生 8pt。
@@ -55,7 +56,7 @@
 兜底方式：
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.40-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.41-full.bin
 ```
 
 开发者本地生成 release 镜像：

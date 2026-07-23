@@ -59,8 +59,6 @@ class BuddySnapshot:
             if self.usage.seven_day_remaining is not None:
                 usage["seven_day_remaining"] = self.usage.seven_day_remaining
             payload["usage"] = usage
-        elif self.usage_is_known:
-            payload["usage"] = None
         if self.completion_seq is not None:
             payload["completion_seq"] = self.completion_seq
         if self.unread is not None:

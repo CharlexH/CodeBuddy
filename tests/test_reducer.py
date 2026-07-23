@@ -246,7 +246,7 @@ def test_snapshot_usage_is_optional_and_keeps_the_compact_ble_shape():
     }
 
 
-def test_snapshot_emits_an_explicit_usage_clear_after_a_known_limit_expires():
+def test_snapshot_omits_usage_when_a_fresh_limit_is_unavailable():
     expired_snapshot = BuddySnapshot(
         total=1,
         running=1,
@@ -260,4 +260,4 @@ def test_snapshot_emits_an_explicit_usage_clear_after_a_known_limit_expires():
         usage_is_known=True,
     )
 
-    assert expired_snapshot.as_ble_payload()["usage"] is None
+    assert "usage" not in expired_snapshot.as_ble_payload()

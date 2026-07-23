@@ -130,7 +130,7 @@ def test_agent_recomputes_unread_when_visible_thread_ids_arrive(tmp_path):
     assert agent._snapshot().unread == 0
 
 
-def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(tmp_path):
+def test_agent_initial_snapshot_does_not_clear_a_meter_left_by_a_prior_agent(tmp_path):
     agent = BuddyAgent(
         tmp_path / "state.json",
         socket_path=tmp_path / "agent.sock",
@@ -138,7 +138,7 @@ def test_agent_initial_snapshot_explicitly_clears_a_meter_left_by_a_prior_agent(
     )
 
     payload = agent._snapshot().as_ble_payload()
-    assert payload["usage"] is None
+    assert "usage" not in payload
     assert "token20v1" not in payload
 
 
@@ -1090,14 +1090,43 @@ def test_agent_publishes_account_usage_from_the_configured_monitor(tmp_path):
     assert monitor.codex_path == "/usr/local/bin/codex"
     assert monitor.codex_launch_path == "/usr/local/bin:/usr/bin:/bin"
     assert monitor.stopped is True
-    assert ble.sent_payloads[-3]["usage"] == {"seven_day_remaining": 99}
-    assert ble.sent_payloads[-2]["usage"] == {
+    usage_payloads = [
+        payload["usage"] for payload in ble.sent_payloads if "usage" in payload
+    ]
+    assert usage_payloads[-2] == {"seven_day_remaining": 99}
+    assert usage_payloads[-1] == {
         "five_hour_remaining": 72,
         "seven_day_remaining": 91,
     }
-    assert ble.sent_payloads[-1]["usage"] is None
-    assert status["snapshot"]["usage"] is None
-    assert persisted.snapshot["usage"] is None
+    assert status["snapshot"]["usage"] == {
+        "five_hour_remaining": 72,
+        "seven_day_remaining": 91,
+    }
+    assert persisted.snapshot["usage"] == {
+        "five_hour_remaining": 72,
+        "seven_day_remaining": 91,
+    }
+
+
+def test_agent_restores_the_last_valid_usage_from_persisted_state(tmp_path):
+    state_path = tmp_path / "state.json"
+    BridgeStateStore(state_path).save(
+        PersistedState(
+            snapshot={
+                "usage": {
+                    "five_hour_remaining": 72,
+                    "seven_day_remaining": 91,
+                }
+            }
+        )
+    )
+
+    agent = BuddyAgent(state_path, watcher=None)
+
+    assert agent._snapshot().usage == UsageDisplay(
+        five_hour_remaining=72,
+        seven_day_remaining=91,
+    )
 
 
 def test_agent_retries_account_usage_monitor_after_startup_failure(tmp_path):

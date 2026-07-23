@@ -28,7 +28,11 @@ int main() {
   expect_true(parsedUsage.sevenDayRemaining == 91, "missing usage JSON member should keep weekly value");
 
   applyUsageJson("{\"usage\":null}", &parsedUsage);
-  expect_true(!parsedUsage.hasFiveHour && !parsedUsage.hasSevenDay, "null usage JSON member should clear the meter");
+  expect_true(parsedUsage.hasFiveHour && parsedUsage.hasSevenDay,
+              "null usage JSON member should preserve the last valid meter");
+  expect_true(parsedUsage.fiveHourRemaining == 72 &&
+              parsedUsage.sevenDayRemaining == 91,
+              "null usage JSON member should retain both last valid values");
 
   applyUsageJson("{\"usage\":{\"seven_day_remaining\":99}}", &parsedUsage);
   expect_true(!parsedUsage.hasFiveHour && parsedUsage.hasSevenDay,
@@ -41,24 +45,26 @@ int main() {
 
   applyUsageJson("{\"usage\":{\"five_hour_remaining\":72,\"seven_day_remaining\":91}}", &parsedUsage);
   applyUsageJson("{\"usage\":\"not-an-object\"}", &parsedUsage);
-  expect_true(!parsedUsage.hasFiveHour && !parsedUsage.hasSevenDay, "string usage JSON member should clear the meter");
+  expect_true(parsedUsage.hasFiveHour && parsedUsage.hasSevenDay,
+              "malformed usage JSON should not erase the last valid meter");
 
   applyUsageJson("{\"usage\":{\"five_hour_remaining\":72,\"seven_day_remaining\":91}}", &parsedUsage);
   applyUsageJson("{\"usage\":{\"five_hour_remaining\":72.5,\"seven_day_remaining\":91}}", &parsedUsage);
-  expect_true(!parsedUsage.hasFiveHour && !parsedUsage.hasSevenDay,
-              "an invalid known value should clear all usage instead of accepting a partial object");
+  expect_true(parsedUsage.hasFiveHour && parsedUsage.hasSevenDay,
+              "an invalid known value should preserve all last valid usage");
 
   applyUsageJson("{\"usage\":{\"seven_day_remaining\":101}}", &parsedUsage);
-  expect_true(!parsedUsage.hasFiveHour && !parsedUsage.hasSevenDay,
-              "an out-of-range known value should clear all usage");
+  expect_true(parsedUsage.hasFiveHour && parsedUsage.hasSevenDay,
+              "an out-of-range known value should preserve all last valid usage");
 
   applyUsageJson("{\"usage\":{\"future_window_remaining\":50}}", &parsedUsage);
-  expect_true(!parsedUsage.hasFiveHour && !parsedUsage.hasSevenDay,
-              "an object without a known valid member should clear the meter");
+  expect_true(parsedUsage.hasFiveHour && parsedUsage.hasSevenDay,
+              "an object without a known valid member should preserve the meter");
 
   applyUsageJson("{\"usage\":{\"five_hour_remaining\":72,\"seven_day_remaining\":91}}", &parsedUsage);
   applyUsageJson("{\"usage\":[72,91]}", &parsedUsage);
-  expect_true(!parsedUsage.hasFiveHour && !parsedUsage.hasSevenDay, "array usage JSON member should clear the meter");
+  expect_true(parsedUsage.hasFiveHour && parsedUsage.hasSevenDay,
+              "array usage JSON member should preserve the last valid meter");
 
   return 0;
 }

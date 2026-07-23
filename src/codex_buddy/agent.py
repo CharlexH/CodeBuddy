@@ -72,6 +72,23 @@ def default_log_dir(state_path: Path) -> Path:
     return state_path.parent / "logs"
 
 
+def _usage_from_snapshot(snapshot: object) -> Optional[UsageDisplay]:
+    if not isinstance(snapshot, dict):
+        return None
+    usage = snapshot.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    five_hour = usage.get("five_hour_remaining")
+    seven_day = usage.get("seven_day_remaining")
+    try:
+        return UsageDisplay(
+            five_hour_remaining=five_hour if type(five_hour) is int else None,
+            seven_day_remaining=seven_day if type(seven_day) is int else None,
+        )
+    except ValueError:
+        return None
+
+
 class AgentClientError(RuntimeError):
     pass
 
@@ -235,10 +252,8 @@ class BuddyAgent:
         self._managed_session_factory = managed_session_factory or ManagedSessionBridge
         self._account_usage_monitor_factory = account_usage_monitor_factory or AccountUsageMonitor
         self._account_usage_monitor: Optional[AccountUsageMonitor] = None
-        self._usage: Optional[UsageDisplay] = None
-        # A newly started agent must clear a meter rendered by an older
-        # process even if its first account-rate-limit read cannot complete.
-        self._usage_is_known = True
+        self._usage = _usage_from_snapshot(self.store.load().snapshot)
+        self._usage_is_known = self._usage is not None
         self._managed_sessions: dict[str, ManagedSessionBridge] = {}
         self._managed_runtime: dict[str, ManagedSessionRuntime] = {}
         self._request_to_control: dict[str, str] = {}
@@ -662,6 +677,8 @@ class BuddyAgent:
                     await monitor.stop()
 
     async def _handle_account_usage(self, usage: Optional[UsageDisplay]) -> None:
+        if usage is None:
+            return
         self._usage = usage
         self._usage_is_known = True
         await self._publish_state()

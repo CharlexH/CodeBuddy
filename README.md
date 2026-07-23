@@ -30,8 +30,9 @@
 - A StickS3 firmware build with status, approval, settings, and offline screens.
 - A daily workflow designed to stay out of the way: run `code-buddy` once, then just use `codex`.
 
-## Highlights in v0.1.40
+## Highlights in v0.1.41
 
+- The quota meter now keeps the last valid allowance when a fresh account read is unavailable or BLE disconnects, and the Mac bridge restores that value after restarting instead of clearing the device.
 - The Figma-based landscape dashboard shows `RUNNING`, `WAITING`, `IDLE`, or `OFFLINE`, plus a smooth 20-second trace of real input-plus-output token consumption. New samples enter from the right, scroll left, and rise from green toward mint as activity increases.
 - Auto-oriented home surfaces resolve a strong pose before their first frame and remember the last stable home orientation across menus and settings, preventing the portrait-layout flash when returning to an already-landscape device.
 - The portrait home screen keeps its original 90px-high, 1x ASCII pet while restoring the built-in 6x8 font used by its centering geometry; `HH:MM:SS` is one centered native-14pt row with dim seconds, and the date uses native 8pt.
@@ -55,7 +56,7 @@ Preferred path:
 Fallback:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.40-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.41-full.bin
 ```
 
 Developer release build:

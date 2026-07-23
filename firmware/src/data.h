@@ -426,17 +426,6 @@ inline void dataPoll(TamaState* out) {
     out->sessionsTotal=0; out->sessionsRunning=0; out->sessionsWaiting=0;
     out->recentlyCompleted=false; out->lastUpdated=now;
     out->hasActivity20=false; out->activity20=0; out->activity20ReceivedAt=now;
-    UsageMeterState usageState = {
-      out->hasFiveHourUsage,
-      out->hasSevenDayUsage,
-      out->fiveHourRemaining,
-      out->sevenDayRemaining,
-    };
-    usageMeterClear(&usageState);
-    out->hasFiveHourUsage = usageState.hasFiveHour;
-    out->hasSevenDayUsage = usageState.hasSevenDay;
-    out->fiveHourRemaining = usageState.fiveHourRemaining;
-    out->sevenDayRemaining = usageState.sevenDayRemaining;
     utf8CopyTruncate(out->msg, "No Codex connected");
   }
 }

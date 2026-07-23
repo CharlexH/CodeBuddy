@@ -18,7 +18,7 @@ Primary path:
 Fallback path:
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.40-full.bin
+esptool --chip esp32s3 --port /dev/cu.usbmodem101 --baud 460800 write_flash 0x0 code-buddy-sticks3-v0.1.41-full.bin
 ```
 
 After flashing, go back to the Mac and run:
@@ -39,6 +39,8 @@ left edge, to show remaining
 Codex allowance. While a task runs, its remaining dots animate with a diagonal
 wave across RUN-green, blue, and lavender rows. A short chime plays once per
 completed turn when **Settings > sound** is enabled.
+When a fresh allowance read is temporarily unavailable, the last valid meter
+remains visible across BLE disconnects instead of being cleared.
 
 The landscape clock, date, and task dashboard use native-size ASCII subsets of
 JetBrains Mono Regular and Medium without fractional bitmap scaling. Non-ASCII UI text uses the single proportional

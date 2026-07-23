@@ -110,7 +110,6 @@ inline void usageMeterApply(
   if (!usageObjectValid || (!hasFiveHour && !hasSevenDay) ||
       (hasFiveHour && !usageMeterValidPercent(fiveHourRemaining)) ||
       (hasSevenDay && !usageMeterValidPercent(sevenDayRemaining))) {
-    usageMeterClear(state);
     return;
   }
 
@@ -127,7 +126,8 @@ inline uint16_t usageMeterFillWidth(uint16_t fullWidth, int remainingPercent) {
 }
 
 inline uint8_t usageMeterFooterInset(bool connected, const UsageMeterState& state) {
-  if (!connected || !usageMeterStateValid(state)) return 0;
+  (void)connected;
+  if (!usageMeterStateValid(state)) return 0;
   return state.hasFiveHour && state.hasSevenDay
     ? USAGE_METER_FOOTPRINT
     : USAGE_METER_SINGLE_FOOTPRINT;
@@ -407,9 +407,8 @@ inline UsageMeterRenderFrame usageMeterPrepareFrame(
   uint16_t fullHeight,
   bool forceDraw = false
 ) {
-  UsageMeterRenderPlan plan = connected
-    ? usageMeterRenderPlan(usage, fullWidth, fullHeight)
-    : UsageMeterRenderPlan{};
+  (void)connected;
+  UsageMeterRenderPlan plan = usageMeterRenderPlan(usage, fullWidth, fullHeight);
   return {
     plan,
     usageMeterRenderTransition(
@@ -434,9 +433,9 @@ inline UsageMeterRenderFrame usageMeterPrepareLandscapeSingleFrame(
   bool animationActive = false,
   uint8_t animationFrame = 0
 ) {
-  UsageMeterRenderPlan plan = connected
-    ? usageMeterLandscapeSinglePlan(usage, fullWidth, fullHeight)
-    : UsageMeterRenderPlan{};
+  (void)connected;
+  UsageMeterRenderPlan plan =
+    usageMeterLandscapeSinglePlan(usage, fullWidth, fullHeight);
   const bool hasSevenDay = plan.count > 0 && usage.hasSevenDay;
   const bool hasFiveHour = plan.count > 0 && !hasSevenDay && usage.hasFiveHour;
   return {

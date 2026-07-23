@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.41 - 2026-07-23
+
+- Kept the last valid Codex allowance visible when a fresh account-rate-limit read is temporarily unavailable, malformed, or reported as `null`.
+- Restored the last valid allowance from the Mac bridge state after an agent restart and stopped emitting destructive usage clears.
+- Preserved the device's in-memory quota meter across BLE disconnects so the portrait bar and landscape dot matrix no longer disappear with task telemetry.
+
 ## 0.1.40 - 2026-07-22
 
 - Replaced the synthetic landscape heartbeat with a fixed-scale, 64-sample trace of real input-plus-output token consumption over the latest 20 seconds.
